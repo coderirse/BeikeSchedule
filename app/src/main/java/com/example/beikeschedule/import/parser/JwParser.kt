@@ -49,6 +49,15 @@ object JwParser {
         return Triple(xn, xq, name)
     }
 
+    /** 解析 /component/queryRlZcSj 返回：取 xqj=1（周一）的 rq 日期作为第 1 周周一。 */
+    fun parseFirstMonday(jsonText: String): String? {
+        val content = json.parseToJsonElement(jsonText).jsonObject["content"]?.jsonArray
+            ?: return null
+        return content.map { it.jsonObject }
+            .firstOrNull { it["xqj"]?.jsonPrimitive?.content == "1" }
+            ?.get("rq")?.jsonPrimitive?.content
+    }
+
     private fun toCourse(obj: JsonObject): CourseEntity {
         val sksj = obj["SKSJ"]?.jsonPrimitive?.content.orEmpty()
         val key = obj["KEY"]?.jsonPrimitive?.content

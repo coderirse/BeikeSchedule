@@ -23,6 +23,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenu
@@ -58,17 +59,17 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.beikeschedule.data.local.CourseEntity
 import com.example.beikeschedule.data.local.SectionTimeEntity
+import com.example.beikeschedule.model.SectionMap
 import com.example.beikeschedule.model.WeekUtils
 import com.example.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
-private const val SECTIONS_PER_DAY = 13
 private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "日")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScheduleScreen(viewModel: ScheduleViewModel = viewModel()) {
+fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -135,6 +136,9 @@ fun ScheduleScreen(viewModel: ScheduleViewModel = viewModel()) {
                             Icon(Icons.Default.DateRange, contentDescription = "回到本周")
                         }
                     }
+                    IconButton(onClick = onImportClick) {
+                        Icon(Icons.Default.CloudDownload, contentDescription = "从教务系统导入")
+                    }
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "学期设置")
                     }
@@ -154,6 +158,7 @@ fun ScheduleScreen(viewModel: ScheduleViewModel = viewModel()) {
             if (state.loaded && state.courses.isEmpty()) {
                 EmptyState(
                     onLoadSample = { viewModel.loadSampleData() },
+                    onImportClick = onImportClick,
                     onAdd = {
                         editingCourse = null
                         showEditDialog = true
@@ -228,7 +233,7 @@ fun ScheduleScreen(viewModel: ScheduleViewModel = viewModel()) {
 }
 
 @Composable
-private fun EmptyState(onLoadSample: () -> Unit, onAdd: () -> Unit) {
+private fun EmptyState(onLoadSample: () -> Unit, onImportClick: () -> Unit, onAdd: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -237,11 +242,12 @@ private fun EmptyState(onLoadSample: () -> Unit, onAdd: () -> Unit) {
         Text("还没有课程", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(8.dp))
         Text(
-            "从教务系统导入（即将上线），或先手动添加 / 载入示例课表看看效果",
+            "从教务系统一键导入，或先手动添加 / 载入示例课表看看效果",
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(24.dp))
+        TextButton(onClick = onImportClick) { Text("从教务系统导入") }
         TextButton(onClick = onLoadSample) { Text("载入示例课表") }
         TextButton(onClick = onAdd) { Text("手动添加课程") }
     }
@@ -286,6 +292,17 @@ private val SECTION_COL_WIDTH = 36.dp
 private fun sectionsOverlap(a: CourseEntity, b: CourseEntity): Boolean =
     a.startSection <= b.endSection && b.startSection <= a.endSection
 
+/** 拆分地点为 楼名 + 房间号（"【校本部】机械楼720" → "机械楼" / "720"）。 */
+private fun splitLocation(location: String): Pair<String, String> {
+    val clean = location.replace(Regex("【[^】]*】"), "").trim()
+    val m = Regex("^(.*?)([\\dA-Za-z]+[-\\d]*)$").find(clean)
+    return if (m != null && m.groupValues[1].isNotBlank()) {
+        m.groupValues[1].trim() to m.groupValues[2]
+    } else {
+        clean to ""
+    }
+}
+
 /** 一周课表网格：左节次列 + 7 天列，课程块按节次绝对定位。 */
 @Composable
 private fun WeekGrid(
@@ -297,15 +314,22 @@ private fun WeekGrid(
     val timeMap = remember(sectionTimes) { sectionTimes.associateBy { it.section } }
     Row(Modifier.fillMaxSize()) {
         // 节次列
+        // 节次列：按 6 大节显示（一~六 + 起止时间），行高按小节数加权
         Column(Modifier.width(SECTION_COL_WIDTH).fillMaxHeight()) {
-            (1..SECTIONS_PER_DAY).forEach { section ->
+            SectionMap.BIG_SECTIONS.forEachIndexed { index, range ->
                 Column(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    modifier = Modifier.weight(range.count().toFloat()).fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
                 ) {
-                    Text("$section", fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                    timeMap[section]?.let {
+                    Text(SectionMap.BIG_NAMES[index], fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    timeMap[range.first]?.let {
                         Text(it.startTime, fontSize = 8.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    // 第六大节官方为 11-12 节（19:30-21:05），13 节属特殊加课
+                    val endSection = if (range.last == 13) 12 else range.last
+                    timeMap[endSection]?.let {
+                        Text(it.endTime, fontSize = 8.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -323,12 +347,12 @@ private fun WeekGrid(
                 shown
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
-                // 节次分隔线
+                // 大节分隔线
                 Column(Modifier.fillMaxSize()) {
-                    repeat(SECTIONS_PER_DAY) {
+                    SectionMap.BIG_SECTIONS.forEach { range ->
                         Box(
                             Modifier
-                                .weight(1f)
+                                .weight(range.count().toFloat())
                                 .fillMaxWidth()
                                 .padding(vertical = 0.5.dp)
                                 .alpha(0.06f)
@@ -368,9 +392,7 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
         modifier = Modifier
             .fillMaxWidth()
             .align(androidx.compose.ui.Alignment.TopCenter)
-            .offset(y = 0.dp)
-            .fillMaxHeight(span / SECTIONS_PER_DAY.toFloat())
-            .offsetFraction(y = (course.startSection - 1) / SECTIONS_PER_DAY.toFloat())
+            .coursePosition(course.startSection, span)
             .padding(1.dp)
             .alpha(if (active) 1f else 0.3f)
             .clickable(onClick = onClick),
@@ -386,14 +408,25 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
                 overflow = TextOverflow.Ellipsis,
             )
             if (span >= 2 && course.location.isNotBlank()) {
+                val (building, room) = splitLocation(course.location)
                 Text(
-                    course.location.removePrefix("【校本部】"),
+                    building,
                     fontSize = 8.sp,
                     lineHeight = 10.sp,
                     color = fg.copy(alpha = 0.8f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (room.isNotEmpty()) {
+                    Text(
+                        room,
+                        fontSize = 8.sp,
+                        lineHeight = 10.sp,
+                        color = fg.copy(alpha = 0.8f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             if (span >= 2 && oddEven.isNotEmpty()) {
                 Text("[$oddEven]", fontSize = 8.sp, color = fg.copy(alpha = 0.7f))
@@ -402,12 +435,19 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
     }
 }
 
-/** Modifier.offsetFraction：按父高度比例偏移（需父 Box 有确定高度）。 */
-private fun Modifier.offsetFraction(y: Float): Modifier =
+/**
+ * 课程块定位：一次性测量出固定高度（span/13 父高）并放置到 (startSection-1)/13 处。
+ * 不能用 fillMaxHeight+偏移的组合——fillMaxHeight 会先压缩约束，导致偏移量被等比缩小。
+ */
+private fun Modifier.coursePosition(startSection: Int, span: Int): Modifier =
     this.layout { measurable, constraints ->
-        val placeable = measurable.measure(constraints)
+        val unit = constraints.maxHeight / SectionMap.TOTAL_SMALL_SECTIONS
+        val height = (unit * span).coerceAtLeast(unit)
+        val placeable = measurable.measure(
+            constraints.copy(minHeight = height, maxHeight = height),
+        )
         layout(placeable.width, placeable.height) {
-            placeable.place(0, (constraints.maxHeight * y).toInt())
+            placeable.place(0, unit * (startSection - 1))
         }
     }
 
