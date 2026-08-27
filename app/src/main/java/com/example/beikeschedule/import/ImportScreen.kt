@@ -44,6 +44,40 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 private const val JW_HOME = "https://byyt.ustb.edu.cn"
 private const val MAIN_PAGE_MARK = "/authentication/main"
 
+/**
+ * 教务页面渲染修正脚本，解决 WebView 白页：
+ * 1. 页面 rem 适配按 1920px 桌面设计（fontSize = clientWidth/1920*37.5），
+ *    而其 meta viewport 是 width=device-width → 手机上布局宽 360px、根字体仅 7px，
+ *    须改写为 width=1440 恢复桌面比例（useWideViewPort 会被 meta 覆盖，只能注入改写）；
+ * 2. .page{height:100vh} 在此 WebView 中 vh/百分比高度均算出 0（ICB 高度异常），
+ *    导致 #app 高度 0 且 overflow:hidden 裁掉全部内容，须用 innerHeight 像素值补上。
+ * 页面脚本监听视口变化会自动重算 rem，注入后无需刷新。脚本幂等，每次导航重复注入。
+ */
+private const val PAGE_FIX_JS = """
+(function () {
+  if (window.__bkPageFixInstalled) return;
+  window.__bkPageFixInstalled = true;
+  function fixAll() {
+    var m = document.querySelector('meta[name="viewport"]');
+    if (!m) {
+      m = document.createElement('meta');
+      m.name = 'viewport';
+      (document.head || document.documentElement).appendChild(m);
+    }
+    if (m.getAttribute('content') !== 'width=1440') m.setAttribute('content', 'width=1440');
+    var app = document.querySelector('#app');
+    if (app && app.getBoundingClientRect().height === 0) {
+      app.style.setProperty('height', window.innerHeight + 'px', 'important');
+    }
+  }
+  fixAll();
+  new MutationObserver(fixAll).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('DOMContentLoaded', fixAll);
+  setTimeout(fixAll, 500);
+  setTimeout(fixAll, 1500);
+})();
+"""
+
 /** 教务导入页：WebView 登录 → 自动注入脚本抓取 → 预览确认入库。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -147,9 +181,16 @@ private fun JwWebView(
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
+            // 仅调试包允许 DevTools 远程调试 WebView
+            if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+                WebView.setWebContentsDebuggingEnabled(true)
+            }
             WebView(context).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
+                // 配合 PAGE_FIX_JS 的 meta 改写：宽视口布局 + 总览缩放把 PC 页面缩放到一屏
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
                 CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 addJavascriptInterface(
@@ -164,9 +205,13 @@ private fun JwWebView(
                 webViewClient = object : WebViewClient() {
                     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                         onPageStarted()
+                        // 尽早注入，MutationObserver 会在 meta 标签解析出来时立即改写
+                        view.evaluateJavascript(PAGE_FIX_JS, null)
                     }
 
                     override fun onPageFinished(view: WebView, url: String) {
+                        // 兜底注入（脚本幂等），覆盖 onPageStarted 时机过晚的情况
+                        view.evaluateJavascript(PAGE_FIX_JS, null)
                         if (url.contains(MAIN_PAGE_MARK)) {
                             view.post { onMainPage() }
                         }
