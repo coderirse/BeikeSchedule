@@ -119,12 +119,12 @@ data class CourseEntity(
     val dayOfWeek: Int,        // 1..7（周一..周日），0=无固定时间课程
     val startSection: Int,     // 起始小节（对应教务 KSJC）
     val endSection: Int,       // 结束小节（对应教务 JSJC）
-    val weekBitmap: String,    // 32 位周次位图 "0111..."，index=周-1，'1'=该周有课（教务 ZC 原样存储）
+    val weekBitmap: String,    // 教务 ZC 位图原样存储：ZC[i] 对应第 i 周（index 0 恒为 '0' 占位），'1'=该周有课
     val colorIndex: Int,       // 色板下标（直接用教务 XB；99999 视为无固定时间课程）
     val source: Int,           // 0=教务导入 1=手动添加
 ) {
     fun hasClassOnWeek(week: Int): Boolean =
-        week in 1..weekBitmap.length && weekBitmap[week - 1] == '1'
+        week in 1 until weekBitmap.length && weekBitmap[week] == '1'
 }
 
 @Entity(tableName = "section_time")

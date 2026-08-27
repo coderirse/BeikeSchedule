@@ -1,0 +1,116 @@
+package com.example.beikeschedule.import.parser
+
+import com.example.beikeschedule.data.local.CourseEntity
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * 解析器单测。fixture 为 2026-08-27 用真实登录会话抓取的接口返回，
+ * 原始文件见 docs/samples/。
+ */
+class JwParserTest {
+
+    private fun loadFixture(name: String): String =
+        requireNotNull(javaClass.classLoader?.getResource(name)) { "缺少 fixture: $name" }
+            .readText(Charsets.UTF_8)
+
+    @Test
+    fun `解析学期总课表 fixture - 条目数与字段正确`() {
+        val courses = JwParser.parseCourses(loadFixture("queryxszykbzong-2026-2027-1.json"))
+
+        assertEquals(32, courses.size)
+
+        // 有固定时间的课程块：路基路面工程 星期二 第1-2节
+        val first = courses.first { it.name == "路基路面工程" }
+        assertEquals("2026-2027-1-72703061-001", first.taskId)
+        assertEquals(2, first.dayOfWeek)
+        assertEquals(1, first.startSection)
+        assertEquals(2, first.endSection)
+        assertEquals("苗英豪", first.teacher)
+        assertEquals("【校本部】土木楼1018", first.location)
+        assertEquals(CourseEntity.SOURCE_IMPORT, first.source)
+        assertTrue(first.hasClassOnWeek(1))
+        assertTrue(first.hasClassOnWeek(16))
+    }
+
+    @Test
+    fun `解析学期总课表 fixture - 周次位图边界正确`() {
+        val courses = JwParser.parseCourses(loadFixture("queryxszykbzong-2026-2027-1.json"))
+
+        // 机械设计：1-8 周有课，第 9 周起无课
+        val mech = courses.first { it.name == "机械设计" && it.dayOfWeek == 1 }
+        assertTrue(mech.hasClassOnWeek(1))
+        assertTrue(mech.hasClassOnWeek(8))
+        assertTrue(!mech.hasClassOnWeek(9))
+        assertTrue(!mech.hasClassOnWeek(20))
+    }
+
+    @Test
+    fun `解析学期总课表 fixture - 无固定时间课程单独归类`() {
+        val courses = JwParser.parseCourses(loadFixture("queryxszykbzong-2026-2027-1.json"))
+
+        val unscheduled = courses.filter { it.isUnscheduled }
+        assertTrue(unscheduled.isNotEmpty())
+        unscheduled.forEach {
+            assertEquals(0, it.dayOfWeek)
+            assertEquals(CourseEntity.COLOR_UNSCHEDULED, it.colorIndex)
+        }
+        // 单行文本格式：电子技术实验 [1-16周] 木春梅 备注:无
+        val exp = unscheduled.first { it.name == "电子技术实验" }
+        assertEquals("木春梅", exp.teacher)
+    }
+
+    @Test
+    fun `解析节次时间 fixture - 北科每天 13 小节`() {
+        val sections = JwParser.parseSectionTimes(loadFixture("queryKbjg-section-times.json"))
+
+        assertEquals(13, sections.size)
+        assertEquals(1, sections.first().section)
+        assertEquals("08:00", sections.first().startTime)
+        assertEquals("08:45", sections.first().endTime)
+        assertEquals(13, sections.last().section)
+    }
+
+    @Test
+    fun `KEY 解析 - 星期提取`() {
+        assertEquals(1, JwParser.parseDayOfWeek("xq1_jc3"))
+        assertEquals(2, JwParser.parseDayOfWeek("xq2_jc1"))
+        assertEquals(7, JwParser.parseDayOfWeek("xq7_jc5"))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `KEY 解析 - 非法格式抛异常`() {
+        JwParser.parseDayOfWeek("bad_key")
+    }
+
+    @Test
+    fun `SKSJ 拆分 - 多行格式`() {
+        val (name, teacher, location) = JwParser.splitSksj(
+            "机械设计\n张杰\n1-8周\n【校本部】机械楼720\n第5-6节", unscheduled = false,
+        )
+        assertEquals("机械设计", name)
+        assertEquals("张杰", teacher)
+        assertEquals("【校本部】机械楼720", location)
+    }
+
+    @Test
+    fun `SKSJ 拆分 - 空文本兜底`() {
+        val (name, _, _) = JwParser.splitSksj("", unscheduled = false)
+        assertEquals("未命名课程", name)
+    }
+
+    @Test
+    fun `位图判定 - 越界周返回 false`() {
+        // ZC[i] 对应第 i 周，index 0 为占位
+        val c = CourseEntity(
+            taskId = "", name = "x", teacher = "", location = "",
+            dayOfWeek = 1, startSection = 1, endSection = 2,
+            weekBitmap = "001", colorIndex = 1, source = CourseEntity.SOURCE_MANUAL,
+        )
+        assertTrue(!c.hasClassOnWeek(1))
+        assertTrue(c.hasClassOnWeek(2))
+        assertTrue(!c.hasClassOnWeek(0))
+        assertTrue(!c.hasClassOnWeek(33))
+    }
+}
