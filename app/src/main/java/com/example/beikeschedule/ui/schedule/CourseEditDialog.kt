@@ -178,6 +178,8 @@ internal fun DropdownField(
             value = options.firstOrNull { it.first == selected }?.second ?: "",
             onValueChange = {},
             readOnly = true,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium,
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier.menuAnchor(androidx.compose.material3.ExposedDropdownMenuAnchorType.PrimaryNotEditable).fillMaxWidth(),

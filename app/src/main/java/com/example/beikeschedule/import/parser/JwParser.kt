@@ -53,13 +53,20 @@ object JwParser {
         val sksj = obj["SKSJ"]?.jsonPrimitive?.content.orEmpty()
         val key = obj["KEY"]?.jsonPrimitive?.content
         val colorIndex = obj["XB"]?.jsonPrimitive?.intOrNull ?: 0
-        val unscheduled = key.isNullOrBlank() || colorIndex == CourseEntity.COLOR_UNSCHEDULED
+        // KEY="bz" 为教务备注行（实验/上机安排等），也归入无固定时间课程
+        val unscheduled = key == "bz" || key.isNullOrBlank() || colorIndex == CourseEntity.COLOR_UNSCHEDULED
 
         val dayOfWeek = if (unscheduled) 0 else parseDayOfWeek(key!!)
         val startSection = if (unscheduled) 0 else obj["KSJC"]?.jsonPrimitive?.intOrNull ?: 0
         val endSection = if (unscheduled) 0 else obj["JSJC"]?.jsonPrimitive?.intOrNull ?: startSection
 
         val (name, teacher, location) = splitSksj(sksj, unscheduled)
+
+        var weekBitmap = obj["ZC"]?.jsonPrimitive?.content.orEmpty()
+        // 备注行没有 ZC 字段，从文本中的周数描述（如 "5-7周"、"15,16周"）构造位图
+        if (unscheduled && weekBitmap.isEmpty()) {
+            weekBitmap = parseNoteWeeks(sksj)
+        }
 
         return CourseEntity(
             taskId = obj["RWH"]?.jsonPrimitive?.content.orEmpty(),
@@ -69,10 +76,26 @@ object JwParser {
             dayOfWeek = dayOfWeek,
             startSection = startSection,
             endSection = endSection,
-            weekBitmap = obj["ZC"]?.jsonPrimitive?.content.orEmpty(),
+            weekBitmap = weekBitmap,
             colorIndex = if (unscheduled) CourseEntity.COLOR_UNSCHEDULED else colorIndex,
             source = CourseEntity.SOURCE_IMPORT,
         )
+    }
+
+    /** 从备注文本解析周数（"机械设计 5-7周"、"微机原理与应用B 15,16周"），生成长度 34 的位图。 */
+    internal fun parseNoteWeeks(sksj: String): String {
+        val m = Regex("([\\d,\\-]+)周").find(sksj) ?: return ""
+        val weeks = mutableSetOf<Int>()
+        m.groupValues[1].split(",").forEach { part ->
+            val range = part.split("-")
+            val a = range.getOrNull(0)?.toIntOrNull() ?: return@forEach
+            val b = range.getOrNull(1)?.toIntOrNull() ?: a
+            weeks += a..b
+        }
+        if (weeks.isEmpty()) return ""
+        val sb = StringBuilder("0")
+        for (w in 1..33) sb.append(if (w in weeks) '1' else '0')
+        return sb.toString()
     }
 
     /** KEY 形如 "xq2_jc1"，提取星期 N（1..7）。 */
@@ -90,7 +113,12 @@ object JwParser {
     internal fun splitSksj(sksj: String, unscheduled: Boolean): Triple<String, String, String> {
         if (sksj.isBlank()) return Triple("未命名课程", "", "")
         if (unscheduled) {
-            // 形如：电子技术实验 [1-16周] 木春梅 备注:无
+            // 备注行格式：机械设计 5-7周 【实验】
+            Regex("^(.*?)\\s+[\\d,\\-]+周\\s*(【[^】]*】)?\\s*$").find(sksj)?.let { m ->
+                val type = m.groupValues.getOrElse(2) { "" }
+                return Triple(m.groupValues[1].trim() + type, "", "")
+            }
+            // 单行格式：电子技术实验 [1-16周] 木春梅 备注:无
             val m = Regex("^(.*?)\\s*\\[.*?]\\s*(.*?)\\s*备注.*$").find(sksj)
             return if (m != null) {
                 Triple(m.groupValues[1].trim(), m.groupValues[2].trim(), "")

@@ -101,6 +101,29 @@ class JwParserTest {
     }
 
     @Test
+    fun `解析学期总课表 fixture - 备注行解析周数与类型`() {
+        val courses = JwParser.parseCourses(loadFixture("queryxszykbzong-2026-2027-1.json"))
+
+        // KEY="bz" 的备注行：机械设计 5-7周 【实验】
+        val note = courses.first { it.name == "机械设计【实验】" }
+        assertTrue(note.isUnscheduled)
+        assertTrue(note.hasClassOnWeek(5))
+        assertTrue(note.hasClassOnWeek(7))
+        assertTrue(!note.hasClassOnWeek(8))
+
+        // 所有条目都应有周次信息（不再有"无周次"）
+        assertTrue(courses.none { it.weekBitmap.isEmpty() })
+    }
+
+    @Test
+    fun `备注行周数解析 - 多种格式`() {
+        assertEquals(listOf(1, 2, 3), com.example.beikeschedule.model.WeekUtils.weeksOf(JwParser.parseNoteWeeks("某课 1-3周 【理论】")))
+        assertEquals(listOf(15, 16), com.example.beikeschedule.model.WeekUtils.weeksOf(JwParser.parseNoteWeeks("微机原理与应用B 15,16周 【实验】")))
+        assertEquals(listOf(8), com.example.beikeschedule.model.WeekUtils.weeksOf(JwParser.parseNoteWeeks("工程数值计算 8周 【上机】")))
+        assertEquals("", JwParser.parseNoteWeeks("没有时间信息"))
+    }
+
+    @Test
     fun `位图判定 - 越界周返回 false`() {
         // ZC[i] 对应第 i 周，index 0 为占位
         val c = CourseEntity(

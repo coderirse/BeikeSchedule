@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -281,6 +282,10 @@ private fun DateRow(week: Int, firstMonday: String, today: LocalDate) {
 
 private val SECTION_COL_WIDTH = 36.dp
 
+/** 判断两门课的节次区间是否重叠。 */
+private fun sectionsOverlap(a: CourseEntity, b: CourseEntity): Boolean =
+    a.startSection <= b.endSection && b.startSection <= a.endSection
+
 /** 一周课表网格：左节次列 + 7 天列，课程块按节次绝对定位。 */
 @Composable
 private fun WeekGrid(
@@ -307,7 +312,16 @@ private fun WeekGrid(
         }
         // 7 天列
         (1..7).forEach { day ->
-            val dayCourses = remember(courses, day) { courses.filter { it.dayOfWeek == day } }
+            // 同一格可能有多门不同周次的课：本周课程优先占位，非本周课程只在空位淡化显示，避免重叠
+            val dayCourses = remember(courses, day, week) {
+                val sorted = courses.filter { it.dayOfWeek == day }
+                    .sortedByDescending { it.hasClassOnWeek(week) }
+                val shown = mutableListOf<CourseEntity>()
+                sorted.forEach { c ->
+                    if (shown.none { sectionsOverlap(it, c) }) shown += c
+                }
+                shown
+            }
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 // 节次分隔线
                 Column(Modifier.fillMaxSize()) {
@@ -343,6 +357,11 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
     val (bg, fg) = CourseColors.of(course.colorIndex)
     val span = (course.endSection - course.startSection + 1).coerceAtLeast(1)
     val oddEven = WeekUtils.oddEvenLabel(course.weekBitmap)
+    val nameMaxLines = when {
+        span <= 1 -> 1
+        span == 2 -> 3
+        else -> 4
+    }
     Surface(
         color = bg,
         shape = RoundedCornerShape(6.dp),
@@ -359,24 +378,24 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
         Column(Modifier.padding(3.dp)) {
             Text(
                 course.name,
-                fontSize = 11.sp,
-                lineHeight = 13.sp,
+                fontSize = 10.sp,
+                lineHeight = 12.sp,
                 fontWeight = FontWeight.Medium,
                 color = fg,
-                maxLines = 4,
+                maxLines = nameMaxLines,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (course.location.isNotBlank()) {
+            if (span >= 2 && course.location.isNotBlank()) {
                 Text(
                     course.location.removePrefix("【校本部】"),
-                    fontSize = 9.sp,
-                    lineHeight = 11.sp,
+                    fontSize = 8.sp,
+                    lineHeight = 10.sp,
                     color = fg.copy(alpha = 0.8f),
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (oddEven.isNotEmpty()) {
+            if (span >= 2 && oddEven.isNotEmpty()) {
                 Text("[$oddEven]", fontSize = 8.sp, color = fg.copy(alpha = 0.7f))
             }
         }
@@ -401,7 +420,10 @@ private fun UnscheduledStrip(courses: List<CourseEntity>, onCourseClick: (Course
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(end = 88.dp, bottom = 8.dp), // 避开 FAB
+        ) {
             items(courses, key = { it.id }) { course ->
                 val (bg, fg) = CourseColors.of(course.name.hashCode())
                 Surface(
