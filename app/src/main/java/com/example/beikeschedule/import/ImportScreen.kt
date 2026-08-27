@@ -51,6 +51,8 @@ fun ImportScreen(onDone: () -> Unit, viewModel: ImportViewModel = viewModel()) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     var webView by remember { mutableStateOf<WebView?>(null) }
+    var pageError by remember { mutableStateOf<String?>(null) }
+    var pageLoading by remember { mutableStateOf(true) }
 
     val runScript: () -> Unit = {
         val wv = webView
@@ -83,14 +85,16 @@ fun ImportScreen(onDone: () -> Unit, viewModel: ImportViewModel = viewModel()) {
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    "登录教务系统后将自动获取课表",
+                                    pageError ?: "登录教务系统后将自动获取课表",
                                     style = MaterialTheme.typography.bodySmall,
+                                    color = if (pageError != null) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSecondaryContainer,
                                     modifier = Modifier.weight(1f),
                                 )
                                 OutlinedButton(onClick = runScript) { Text("手动抓取") }
                             }
                         }
-                        if (state is ImportUiState.Fetching) {
+                        if (state is ImportUiState.Fetching || pageLoading) {
                             LinearProgressIndicator(Modifier.fillMaxWidth())
                         }
                         JwWebView(
@@ -100,6 +104,9 @@ fun ImportScreen(onDone: () -> Unit, viewModel: ImportViewModel = viewModel()) {
                                 viewModel.onFetchResult(sem, pub, zong, kb, rl)
                             },
                             onError = { viewModel.onFetchError(it) },
+                            onPageError = { pageError = it },
+                            onPageProgress = { pageLoading = it < 100 },
+                            onPageStarted = { pageError = null },
                         )
                     }
                 }
@@ -133,6 +140,9 @@ private fun JwWebView(
     onMainPage: () -> Unit,
     onResult: (String, String, String, String, String) -> Unit,
     onError: (String) -> Unit,
+    onPageError: (String) -> Unit,
+    onPageProgress: (Int) -> Unit,
+    onPageStarted: () -> Unit,
 ) {
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -152,10 +162,48 @@ private fun JwWebView(
                     "BeikeImport",
                 )
                 webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                        onPageStarted()
+                    }
+
                     override fun onPageFinished(view: WebView, url: String) {
                         if (url.contains(MAIN_PAGE_MARK)) {
                             view.post { onMainPage() }
                         }
+                    }
+
+                    override fun onReceivedError(
+                        view: WebView,
+                        request: android.webkit.WebResourceRequest,
+                        error: android.webkit.WebResourceError,
+                    ) {
+                        if (request.isForMainFrame) {
+                            onPageError("页面加载失败：${error.description}（请检查网络/VPN后重进本页）")
+                        }
+                    }
+
+                    override fun onReceivedHttpError(
+                        view: WebView,
+                        request: android.webkit.WebResourceRequest,
+                        errorResponse: android.webkit.WebResourceResponse,
+                    ) {
+                        if (request.isForMainFrame) {
+                            onPageError("页面返回错误：HTTP ${errorResponse.statusCode}")
+                        }
+                    }
+
+                    override fun onReceivedSslError(
+                        view: WebView,
+                        handler: android.webkit.SslErrorHandler,
+                        error: android.net.http.SslError,
+                    ) {
+                        handler.cancel()
+                        onPageError("SSL 证书校验失败（${error.primaryError}），请检查网络/VPN")
+                    }
+                }
+                webChromeClient = object : android.webkit.WebChromeClient() {
+                    override fun onProgressChanged(view: WebView, newProgress: Int) {
+                        onPageProgress(newProgress)
                     }
                 }
                 loadUrl(JW_HOME)

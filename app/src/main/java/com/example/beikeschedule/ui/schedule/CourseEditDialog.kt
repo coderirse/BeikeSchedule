@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.beikeschedule.data.local.CourseEntity
+import com.example.beikeschedule.model.SectionMap
 import com.example.beikeschedule.model.WeekUtils
 
 /** 手动添加 / 编辑课程对话框。周次通过 起止周 + 每周/单周/双周 转换为位图存储。 */
@@ -48,8 +49,13 @@ fun CourseEditDialog(
     var teacher by remember { mutableStateOf(initial?.teacher ?: "") }
     var location by remember { mutableStateOf(initial?.location ?: "") }
     var dayOfWeek by remember { mutableIntStateOf(initial?.dayOfWeek?.takeIf { it in 1..7 } ?: 1) }
-    var startSection by remember { mutableIntStateOf(initial?.startSection?.takeIf { it > 0 } ?: 1) }
-    var endSection by remember { mutableIntStateOf(initial?.endSection?.takeIf { it > 0 } ?: 2) }
+    // 手动添加按大节选择（1..6），保存时映射为小节区间
+    var startBig by remember {
+        mutableIntStateOf(initial?.let { SectionMap.bigIndexOf(it.startSection) + 1 } ?: 1)
+    }
+    var endBig by remember {
+        mutableIntStateOf(initial?.let { SectionMap.bigIndexOf(it.endSection) + 1 } ?: 1)
+    }
     var startWeek by remember { mutableIntStateOf(existingWeeks.minOrNull() ?: 1) }
     var endWeek by remember { mutableIntStateOf(existingWeeks.maxOrNull() ?: totalWeeks) }
     var weekType by remember {
@@ -62,7 +68,7 @@ fun CourseEditDialog(
         )
     }
 
-    val valid = name.isNotBlank() && startSection <= endSection && startWeek <= endWeek
+    val valid = name.isNotBlank() && startBig <= endBig && startWeek <= endWeek
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -93,14 +99,14 @@ fun CourseEditDialog(
                     )
                     DropdownField(
                         label = "开始节",
-                        options = (1..13).map { it to "第${it}节" },
-                        selected = startSection, onSelect = { startSection = it },
+                        options = (1..6).map { it to "第${SectionMap.BIG_NAMES[it - 1]}大节" },
+                        selected = startBig, onSelect = { startBig = it },
                         modifier = Modifier.weight(1f),
                     )
                     DropdownField(
                         label = "结束节",
-                        options = (1..13).map { it to "第${it}节" },
-                        selected = endSection, onSelect = { endSection = it },
+                        options = (1..6).map { it to "第${SectionMap.BIG_NAMES[it - 1]}大节" },
+                        selected = endBig, onSelect = { endBig = it },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -149,8 +155,8 @@ fun CourseEditDialog(
                             teacher = teacher.trim(),
                             location = location.trim(),
                             dayOfWeek = dayOfWeek,
-                            startSection = startSection,
-                            endSection = endSection,
+                            startSection = SectionMap.BIG_SECTIONS[startBig - 1].first,
+                            endSection = SectionMap.BIG_SECTIONS[endBig - 1].last,
                             weekBitmap = WeekUtils.buildWeekBitmap(startWeek, endWeek, weekType, totalWeeks),
                             colorIndex = initial?.colorIndex ?: name.trim().hashCode(),
                             source = initial?.source ?: CourseEntity.SOURCE_MANUAL,

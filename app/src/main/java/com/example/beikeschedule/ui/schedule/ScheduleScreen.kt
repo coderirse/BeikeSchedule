@@ -326,9 +326,7 @@ private fun WeekGrid(
                     timeMap[range.first]?.let {
                         Text(it.startTime, fontSize = 8.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    // 第六大节官方为 11-12 节（19:30-21:05），13 节属特殊加课
-                    val endSection = if (range.last == 13) 12 else range.last
-                    timeMap[endSection]?.let {
+                    timeMap[range.last]?.let {
                         Text(it.endTime, fontSize = 8.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -379,7 +377,10 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
     onClick: () -> Unit,
 ) {
     val (bg, fg) = CourseColors.of(course.colorIndex)
-    val span = (course.endSection - course.startSection + 1).coerceAtLeast(1)
+    // 13 节特殊加课钳制到第 12 节区间显示（网格按 12 小节排版）
+    val clampedStart = course.startSection.coerceAtMost(SectionMap.TOTAL_SMALL_SECTIONS)
+    val clampedEnd = course.endSection.coerceAtMost(SectionMap.TOTAL_SMALL_SECTIONS)
+    val span = (clampedEnd - clampedStart + 1).coerceAtLeast(1)
     val oddEven = WeekUtils.oddEvenLabel(course.weekBitmap)
     val nameMaxLines = when {
         span <= 1 -> 1
@@ -392,7 +393,7 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
         modifier = Modifier
             .fillMaxWidth()
             .align(androidx.compose.ui.Alignment.TopCenter)
-            .coursePosition(course.startSection, span)
+            .coursePosition(clampedStart, span)
             .padding(1.dp)
             .alpha(if (active) 1f else 0.3f)
             .clickable(onClick = onClick),

@@ -52,7 +52,9 @@ fun CourseDetailSheet(
                 val start = sectionTimes.firstOrNull { it.section == course.startSection }?.startTime
                 val end = sectionTimes.firstOrNull { it.section == course.endSection }?.endTime
                 val time = if (start != null && end != null) "（$start - $end）" else ""
-                InfoText("周${"一二三四五六日"[course.dayOfWeek - 1]} 第${course.startSection}-${course.endSection}节 $time")
+                val bigSection = com.example.beikeschedule.model.SectionMap
+                    .describeBigSections(course.startSection, course.endSection)
+                InfoText("周${"一二三四五六日"[course.dayOfWeek - 1]} $bigSection $time")
             }
             InfoText("周数：${WeekUtils.describe(course.weekBitmap)}")
 
