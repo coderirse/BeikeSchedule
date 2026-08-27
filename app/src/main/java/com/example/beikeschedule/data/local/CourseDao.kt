@@ -21,6 +21,9 @@ interface CourseDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(course: CourseEntity): Long
 
+    @androidx.room.Update
+    suspend fun update(course: CourseEntity)
+
     @Query("DELETE FROM course WHERE id = :id")
     suspend fun deleteById(id: Long)
 

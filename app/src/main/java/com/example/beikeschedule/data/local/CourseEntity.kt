@@ -29,6 +29,7 @@ data class CourseEntity(
     companion object {
         const val SOURCE_IMPORT = 0
         const val SOURCE_MANUAL = 1
+        const val SOURCE_SAMPLE = 2   // 示例数据，可一键清除
         const val COLOR_UNSCHEDULED = 99999
     }
 }

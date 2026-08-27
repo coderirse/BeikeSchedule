@@ -36,7 +36,20 @@ class ScheduleRepository(context: Context) {
     suspend fun addManualCourse(course: CourseEntity) =
         courseDao.insert(course.copy(source = CourseEntity.SOURCE_MANUAL, taskId = ""))
 
+    suspend fun updateCourse(course: CourseEntity) = courseDao.update(course)
+
     suspend fun deleteCourse(id: Long) = courseDao.deleteById(id)
+
+    /** 载入示例课表（assets 内置的真实教务样本），source=SOURCE_SAMPLE 便于一键清除。 */
+    suspend fun loadSampleData(courses: List<CourseEntity>, sectionTimes: List<SectionTimeEntity>) {
+        courseDao.deleteBySource(CourseEntity.SOURCE_SAMPLE)
+        courseDao.insertAll(courses.map { it.copy(source = CourseEntity.SOURCE_SAMPLE, id = 0) })
+        if (sectionTimeDao.getAll().isEmpty()) {
+            sectionTimeDao.insertAll(sectionTimes)
+        }
+    }
+
+    suspend fun clearSampleData() = courseDao.deleteBySource(CourseEntity.SOURCE_SAMPLE)
 
     companion object {
         /**
