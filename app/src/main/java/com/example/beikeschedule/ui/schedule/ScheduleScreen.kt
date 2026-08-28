@@ -1,7 +1,9 @@
 package com.example.beikeschedule.ui.schedule
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +63,7 @@ import com.example.beikeschedule.data.local.CourseEntity
 import com.example.beikeschedule.data.local.SectionTimeEntity
 import com.example.beikeschedule.data.pref.SettingsStore
 import com.example.beikeschedule.model.SectionMap
+import com.example.beikeschedule.model.SessionExpander
 import com.example.beikeschedule.model.WeekUtils
 import com.example.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.launch
@@ -97,8 +100,11 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
     var weekMenuExpanded by remember { mutableStateOf(false) }
     var detailCourse by remember { mutableStateOf<CourseEntity?>(null) }
     var editingCourse by remember { mutableStateOf<CourseEntity?>(null) }
+    var prefillSession by remember { mutableStateOf<SessionExpander.Session?>(null) }
     var showEditDialog by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    // 长按空白格后待激活的"添加课程"格子（周几, 大节下标）
+    var pendingSlot by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     val totalWeeks = state.semester.totalWeeks
     val pagerState = rememberPagerState(
@@ -173,6 +179,7 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
         floatingActionButton = {
             FloatingActionButton(onClick = {
                 editingCourse = null
+                prefillSession = null
                 showEditDialog = true
             }) {
                 Icon(Icons.Default.Add, contentDescription = "添加课程")
@@ -213,6 +220,16 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
                         week = page + 1,
                         courses = state.scheduledCourses,
                         sectionTimes = state.sectionTimes,
+                        pendingSlot = pendingSlot,
+                        onSlotLongPress = { day, big -> pendingSlot = day to big },
+                        onSlotClick = { day, big ->
+                            if (pendingSlot == day to big) {
+                                editingCourse = null
+                                prefillSession = SessionExpander.Session(day, setOf(big))
+                                showEditDialog = true
+                            }
+                            pendingSlot = null
+                        },
                         onCourseClick = { detailCourse = it },
                     )
                 }
@@ -248,10 +265,15 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
         CourseEditDialog(
             initial = editingCourse,
             totalWeeks = totalWeeks,
-            onDismiss = { showEditDialog = false },
-            onSave = {
-                viewModel.saveCourse(it)
+            prefill = prefillSession,
+            onDismiss = {
                 showEditDialog = false
+                prefillSession = null
+            },
+            onSave = { rows ->
+                viewModel.saveCourses(rows, replaceId = editingCourse?.id)
+                showEditDialog = false
+                prefillSession = null
             },
         )
     }
@@ -355,12 +377,16 @@ private fun splitLocation(location: String): Pair<String, String> {
     }
 }
 
-/** 一周课表网格：左节次列 + 7 天列，课程块按节次绝对定位。 */
+/** 一周课表网格：左节次列 + 7 天列，课程块按节次绝对定位；空白格长按可添加课程。 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WeekGrid(
     week: Int,
     courses: List<CourseEntity>,
     sectionTimes: List<SectionTimeEntity>,
+    pendingSlot: Pair<Int, Int>?,
+    onSlotLongPress: (day: Int, big: Int) -> Unit,
+    onSlotClick: (day: Int, big: Int) -> Unit,
     onCourseClick: (CourseEntity) -> Unit,
 ) {
     val timeMap = remember(sectionTimes) { sectionTimes.associateBy { it.section } }
@@ -397,6 +423,36 @@ private fun WeekGrid(
                 shown
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
+                // 空白格交互层（最底层）：长按出 +，点击 + 打开预填的添加课程框，点其他格取消
+                Column(Modifier.fillMaxSize()) {
+                    SectionMap.BIG_SECTIONS.forEachIndexed { big, range ->
+                        Box(
+                            modifier = Modifier
+                                .weight(range.count().toFloat())
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = { onSlotClick(day, big) },
+                                    onLongClick = { onSlotLongPress(day, big) },
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (pendingSlot == day to big) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(20.dp),
+                                    shadowElevation = 2.dp,
+                                ) {
+                                    Icon(
+                                        Icons.Default.Add,
+                                        contentDescription = "添加课程",
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(6.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 // 大节分隔线
                 Column(Modifier.fillMaxSize()) {
                     SectionMap.BIG_SECTIONS.forEach { range ->

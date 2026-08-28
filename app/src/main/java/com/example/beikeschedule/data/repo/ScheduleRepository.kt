@@ -36,6 +36,9 @@ class ScheduleRepository(context: Context) {
     suspend fun addManualCourse(course: CourseEntity) =
         courseDao.insert(course.copy(source = CourseEntity.SOURCE_MANUAL, taskId = ""))
 
+    /** 原样插入课程行（保留 source，用于编辑展开后的多行写回）。 */
+    suspend fun insertCourses(courses: List<CourseEntity>) = courseDao.insertAll(courses)
+
     suspend fun updateCourse(course: CourseEntity) = courseDao.update(course)
 
     suspend fun deleteCourse(id: Long) = courseDao.deleteById(id)
