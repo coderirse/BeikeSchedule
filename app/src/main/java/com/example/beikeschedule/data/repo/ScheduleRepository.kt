@@ -100,5 +100,18 @@ class ScheduleRepository(context: Context) {
             }
             return WeekLocation(null, false, null)
         }
+
+        /**
+         * 严格判定日期属于第几教学周：开学前、假期跳周、学期结束后都返回 null。
+         * 用于上课提醒排期（显示场景的"未开学视为第1周"语义在这里不适用）。
+         */
+        fun teachingWeekOf(weekMondays: List<String>, date: LocalDate): Int? {
+            val mondays = weekMondays.mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
+            if (mondays.isEmpty() || date.isBefore(mondays.first())) return null
+            mondays.forEachIndexed { i, monday ->
+                if (!date.isBefore(monday) && !date.isAfter(monday.plusDays(6))) return i + 1
+            }
+            return null
+        }
     }
 }

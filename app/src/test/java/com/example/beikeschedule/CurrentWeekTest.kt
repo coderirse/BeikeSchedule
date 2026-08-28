@@ -98,4 +98,28 @@ class CurrentWeekTest {
         val loc = ScheduleRepository.locateWeek(emptyList(), LocalDate.of(2026, 9, 21))
         assertNull(loc.week)
     }
+
+    // —— 严格教学周判定 teachingWeekOf（提醒排期用）——
+
+    @Test
+    fun `严格判定 开学前返回 null 不排提醒`() {
+        // 2026-08-31 在开学（9/7）之前，显示语义算第1周，但严格判定无课
+        assertNull(ScheduleRepository.teachingWeekOf(realCalendar, LocalDate.of(2026, 8, 31)))
+    }
+
+    @Test
+    fun `严格判定 假期跳周返回 null`() {
+        assertNull(ScheduleRepository.teachingWeekOf(realCalendar, LocalDate.of(2026, 10, 1)))
+    }
+
+    @Test
+    fun `严格判定 教学周内返回周号`() {
+        assertEquals(4, ScheduleRepository.teachingWeekOf(realCalendar, LocalDate.of(2026, 10, 8)))
+        assertEquals(1, ScheduleRepository.teachingWeekOf(realCalendar, LocalDate.of(2026, 9, 7)))
+    }
+
+    @Test
+    fun `严格判定 学期结束后返回 null`() {
+        assertNull(ScheduleRepository.teachingWeekOf(realCalendar, LocalDate.of(2026, 11, 5)))
+    }
 }

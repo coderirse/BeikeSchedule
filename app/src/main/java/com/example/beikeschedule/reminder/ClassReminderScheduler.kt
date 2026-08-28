@@ -75,11 +75,10 @@ object ClassReminderScheduler {
         scheduleDailyPulse(context)
     }
 
-    /** 日期落在第几教学周；假期跳周返回 null（假期无课）。 */
+    /** 日期落在第几教学周；开学前/假期跳周/学期外都返回 null（那些天本来就没课）。 */
     private fun teachingWeekOf(semester: SettingsStore.SemesterConfig, date: LocalDate): Int? =
         if (semester.weekMondays.isNotEmpty()) {
-            ScheduleRepository.locateWeek(semester.weekMondays, date)
-                .takeIf { !it.isHoliday }?.week
+            ScheduleRepository.teachingWeekOf(semester.weekMondays, date)
         } else {
             ScheduleRepository.currentWeek(semester.firstMonday, semester.totalWeeks, date)
         }
