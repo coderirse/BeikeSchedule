@@ -126,6 +126,17 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 批量保存一门课：编辑场景先删除被替换的旧行，再插入展开后的全部时段行。
+     * 行内 source 由对话框按来源保留（导入课程编辑后仍是导入源，下次导入会被正常覆盖）。
+     */
+    fun saveCourses(courses: List<CourseEntity>, replaceId: Long?) {
+        viewModelScope.launch {
+            if (replaceId != null && replaceId != 0L) repo.deleteCourse(replaceId)
+            repo.insertCourses(courses)
+        }
+    }
+
     fun deleteCourse(id: Long) {
         viewModelScope.launch { repo.deleteCourse(id) }
     }
