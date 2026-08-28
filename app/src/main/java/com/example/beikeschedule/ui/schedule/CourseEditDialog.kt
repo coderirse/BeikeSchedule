@@ -171,11 +171,11 @@ fun CourseEditDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun DropdownField(
+internal fun <T> DropdownField(
     label: String,
-    options: List<Pair<Int, String>>,
-    selected: Int,
-    onSelect: (Int) -> Unit,
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }

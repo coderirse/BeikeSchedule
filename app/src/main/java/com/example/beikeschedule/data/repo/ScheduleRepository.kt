@@ -67,5 +67,38 @@ class ScheduleRepository(context: Context) {
             val week = (ChronoUnit.DAYS.between(monday, today) / 7 + 1).toInt()
             return if (week in 1..totalWeeks) week else null
         }
+
+        /**
+         * 今天在学期中的位置。
+         * @param week 当前教学周；假期中为下一教学周；学期结束后为 null
+         * @param isHoliday 今天是否处于被跳过的假期周（如国庆）
+         * @param nextWeekMonday 假期时下一教学周的周一日期（用于提示）
+         */
+        data class WeekLocation(
+            val week: Int?,
+            val isHoliday: Boolean,
+            val nextWeekMonday: String?,
+        )
+
+        /**
+         * 用官方教学周日历定位今天：周→周一映射精确反映长假跳周（如国庆周不占序号）。
+         * weekMondays 下标+1 = 教学周。未开学视为第 1 周；学期结束返回 week=null。
+         */
+        fun locateWeek(weekMondays: List<String>, today: LocalDate = LocalDate.now()): WeekLocation {
+            val mondays = weekMondays.mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
+            if (mondays.isEmpty()) return WeekLocation(null, false, null)
+            if (today.isBefore(mondays.first())) return WeekLocation(1, false, null)
+            mondays.forEachIndexed { i, monday ->
+                val sunday = monday.plusDays(6)
+                if (!today.isBefore(monday) && !today.isAfter(sunday)) {
+                    return WeekLocation(i + 1, false, null)
+                }
+                // 本周日与下周一之间的空隙 = 被跳过的假期周
+                if (i + 1 < mondays.size && today.isAfter(sunday) && today.isBefore(mondays[i + 1])) {
+                    return WeekLocation(i + 2, true, mondays[i + 1].toString())
+                }
+            }
+            return WeekLocation(null, false, null)
+        }
     }
 }

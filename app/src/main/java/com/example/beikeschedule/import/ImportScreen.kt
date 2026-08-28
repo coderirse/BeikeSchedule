@@ -134,8 +134,8 @@ fun ImportScreen(onDone: () -> Unit, viewModel: ImportViewModel = viewModel()) {
                         JwWebView(
                             onCreated = { webView = it },
                             onMainPage = runScript,
-                            onResult = { sem, pub, zong, kb, rl ->
-                                viewModel.onFetchResult(sem, pub, zong, kb, rl)
+                            onResult = { sem, pub, zong, kb, rl, cal ->
+                                viewModel.onFetchResult(sem, pub, zong, kb, rl, cal)
                             },
                             onError = { viewModel.onFetchError(it) },
                             onPageError = { pageError = it },
@@ -172,7 +172,7 @@ fun ImportScreen(onDone: () -> Unit, viewModel: ImportViewModel = viewModel()) {
 private fun JwWebView(
     onCreated: (WebView) -> Unit,
     onMainPage: () -> Unit,
-    onResult: (String, String, String, String, String) -> Unit,
+    onResult: (String, String, String, String, String, String) -> Unit,
     onError: (String) -> Unit,
     onPageError: (String) -> Unit,
     onPageProgress: (Int) -> Unit,
@@ -195,8 +195,8 @@ private fun JwWebView(
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 addJavascriptInterface(
                     JwImportBridge(
-                        onSuccess = { sem, pub, zong, kb, rl ->
-                            post { onResult(sem, pub, zong, kb, rl) }
+                        onSuccess = { sem, pub, zong, kb, rl, cal ->
+                            post { onResult(sem, pub, zong, kb, rl, cal) }
                         },
                         onFailure = { msg -> post { onError(msg) } },
                     ),
@@ -278,6 +278,14 @@ private fun ImportPreview(
         )
         Text(
             "开学日期：${preview.firstMonday.ifBlank { "未识别，请导入后在设置中填写" }}",
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        Text(
+            if (preview.weekMondays.isNotEmpty()) {
+                "教学周日历：已获取（共 ${preview.weekMondays.size} 周，含官方放假跳周）"
+            } else {
+                "教学周日历：未获取，将按开学日期逐周推算"
+            },
             style = MaterialTheme.typography.bodyLarge,
         )
         Spacer(Modifier.height(8.dp))

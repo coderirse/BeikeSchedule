@@ -47,4 +47,55 @@ class CurrentWeekTest {
         val week = ScheduleRepository.currentWeek("2026-09-09", 20, LocalDate.of(2026, 9, 14))
         assertEquals(2, week)
     }
+
+    // —— 官方教学周日历 locateWeek ——
+
+    /** 2026-2027-1 真实校历：第 3 周 9/21，国庆周跳过，第 4 周 10/5。 */
+    private val realCalendar = listOf(
+        "2026-09-07", "2026-09-14", "2026-09-21", "2026-10-05",
+        "2026-10-12", "2026-10-19", "2026-10-26",
+    )
+
+    @Test
+    fun `官方日历 普通教学周定位`() {
+        val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 9, 23))
+        assertEquals(3, loc.week)
+        assertEquals(false, loc.isHoliday)
+    }
+
+    @Test
+    fun `官方日历 第4周从10月5日开始而非9月28日`() {
+        val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 10, 5))
+        assertEquals(4, loc.week)
+        assertEquals(false, loc.isHoliday)
+    }
+
+    @Test
+    fun `官方日历 国庆周识别为假期并指向下一教学周`() {
+        // 2026-10-01 在被跳过的国庆周里
+        val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 10, 1))
+        assertEquals(4, loc.week)
+        assertEquals(true, loc.isHoliday)
+        assertEquals("2026-10-05", loc.nextWeekMonday)
+    }
+
+    @Test
+    fun `官方日历 未开学视为第1周`() {
+        val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 8, 28))
+        assertEquals(1, loc.week)
+        assertEquals(false, loc.isHoliday)
+    }
+
+    @Test
+    fun `官方日历 学期结束后 week 为 null`() {
+        val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 11, 5))
+        assertNull(loc.week)
+        assertEquals(false, loc.isHoliday)
+    }
+
+    @Test
+    fun `官方日历 空日历回退 week 为 null`() {
+        val loc = ScheduleRepository.locateWeek(emptyList(), LocalDate.of(2026, 9, 21))
+        assertNull(loc.week)
+    }
 }

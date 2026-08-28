@@ -136,4 +136,35 @@ class JwParserTest {
         assertTrue(!c.hasClassOnWeek(0))
         assertTrue(!c.hasClassOnWeek(33))
     }
+
+    @Test
+    fun `解析教学周日历 - 周次与周一映射正确`() {
+        val calendar = JwParser.parseWeekCalendar(
+            """{"totalWeeks":18,"weeks":[
+                {"zc":1,"monday":"2026-09-07"},
+                {"zc":2,"monday":"2026-09-14"},
+                {"zc":3,"monday":"2026-09-21"},
+                {"zc":4,"monday":"2026-10-05"}
+            ]}""",
+        )
+        assertEquals(18, calendar.totalWeeks)
+        assertEquals(4, calendar.weekMondays.size)
+        assertEquals("2026-09-07", calendar.weekMondays[0])
+        assertEquals("2026-10-05", calendar.weekMondays[3]) // 国庆跳周保留官方映射
+    }
+
+    @Test
+    fun `解析教学周日历 - 中间缺周按前一周加7天补齐`() {
+        val calendar = JwParser.parseWeekCalendar(
+            """{"totalWeeks":3,"weeks":[{"zc":1,"monday":"2026-09-07"},{"zc":3,"monday":"2026-09-21"}]}""",
+        )
+        assertEquals(listOf("2026-09-07", "2026-09-14", "2026-09-21"), calendar.weekMondays)
+    }
+
+    @Test
+    fun `解析教学周日历 - 空数据与非法输入回退空列表`() {
+        assertEquals(0, JwParser.parseWeekCalendar("""{"totalWeeks":18,"weeks":[]}""").weekMondays.size)
+        assertEquals(18, JwParser.parseWeekCalendar("""{"totalWeeks":18,"weeks":[]}""").totalWeeks)
+        assertEquals(0, JwParser.parseWeekCalendar("not json").weekMondays.size)
+    }
 }

@@ -20,7 +20,15 @@ class SettingsStore(private val context: Context) {
         val name: String = "",        // 展示名，如 "2026-2027-1"
         val firstMonday: String = "", // 第 1 周周一，yyyy-MM-dd
         val totalWeeks: Int = 20,
+        /**
+         * 官方教学周日历：下标+1 = 教学周，值 = 该周周一（yyyy-MM-dd）。
+         * 来自教务校历接口，长假周不占序号；为空时回退 firstMonday + totalWeeks 推算。
+         */
+        val weekMondays: List<String> = emptyList(),
     )
+
+    /** 主题模式：跟随系统 / 浅色 / 深色。 */
+    enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
     private object Keys {
         val XN = stringPreferencesKey("semester_xn")
@@ -28,8 +36,11 @@ class SettingsStore(private val context: Context) {
         val NAME = stringPreferencesKey("semester_name")
         val FIRST_MONDAY = stringPreferencesKey("first_monday")
         val TOTAL_WEEKS = intPreferencesKey("total_weeks")
+        val WEEK_MONDAYS = stringPreferencesKey("week_mondays")
         val REMINDER_ENABLED = booleanPreferencesKey("reminder_enabled")
         val REMINDER_MINUTES = intPreferencesKey("reminder_minutes")
+        val REMINDER_CODES = stringPreferencesKey("reminder_codes")
+        val THEME_MODE = stringPreferencesKey("theme_mode")
     }
 
     val semester: Flow<SemesterConfig> = context.dataStore.data.map { p ->
@@ -39,6 +50,7 @@ class SettingsStore(private val context: Context) {
             name = p[Keys.NAME] ?: "",
             firstMonday = p[Keys.FIRST_MONDAY] ?: "",
             totalWeeks = p[Keys.TOTAL_WEEKS] ?: 20,
+            weekMondays = p[Keys.WEEK_MONDAYS].toWeekMondays(),
         )
     }
 
@@ -49,6 +61,7 @@ class SettingsStore(private val context: Context) {
             p[Keys.NAME] = config.name
             p[Keys.FIRST_MONDAY] = config.firstMonday
             p[Keys.TOTAL_WEEKS] = config.totalWeeks
+            p[Keys.WEEK_MONDAYS] = config.weekMondays.joinToString(",")
         }
     }
 
@@ -63,5 +76,32 @@ class SettingsStore(private val context: Context) {
             p[Keys.REMINDER_ENABLED] = enabled
             p[Keys.REMINDER_MINUTES] = minutesBefore
         }
+    }
+
+    /** 已排课程提醒闹钟的 requestCode 集合（逗号分隔），用于精确取消。 */
+    val reminderScheduledCodes: Flow<Set<Int>> = context.dataStore.data.map { p ->
+        p[Keys.REMINDER_CODES]?.takeIf { it.isNotBlank() }
+            ?.split(",")?.mapNotNull { it.toIntOrNull() }?.toSet()
+            ?: emptySet()
+    }
+
+    suspend fun saveReminderScheduledCodes(codes: Set<Int>) {
+        context.dataStore.edit { p ->
+            p[Keys.REMINDER_CODES] = codes.joinToString(",")
+        }
+    }
+
+    val themeMode: Flow<ThemeMode> = context.dataStore.data.map { p ->
+        runCatching { ThemeMode.valueOf(p[Keys.THEME_MODE] ?: "") }.getOrDefault(ThemeMode.SYSTEM)
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        context.dataStore.edit { p -> p[Keys.THEME_MODE] = mode.name }
+    }
+
+    private companion object {
+        fun String?.toWeekMondays(): List<String> =
+            this?.takeIf { it.isNotBlank() }?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+                ?: emptyList()
     }
 }

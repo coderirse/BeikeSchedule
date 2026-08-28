@@ -59,11 +59,19 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.beikeschedule.data.local.CourseEntity
 import com.example.beikeschedule.data.local.SectionTimeEntity
+import com.example.beikeschedule.data.pref.SettingsStore
 import com.example.beikeschedule.model.SectionMap
 import com.example.beikeschedule.model.WeekUtils
 import com.example.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalContext
 
 private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "日")
 
@@ -71,7 +79,20 @@ private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "�
 @Composable
 fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsState()
+    val reminderEnabled by viewModel.reminderEnabled.collectAsState()
+    val reminderMinutes by viewModel.reminderMinutes.collectAsState()
+    val themeMode by viewModel.themeMode.collectAsState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // 开启上课提醒前需要先拿到通知权限（Android 13+）
+    var pendingEnableReminder by remember { mutableStateOf(false) }
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted && pendingEnableReminder) viewModel.setReminder(true, reminderMinutes)
+        pendingEnableReminder = false
+    }
 
     var weekMenuExpanded by remember { mutableStateOf(false) }
     var detailCourse by remember { mutableStateOf<CourseEntity?>(null) }
@@ -115,7 +136,11 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            "第${w}周" + if (w == state.currentWeek) "（本周）" else "",
+                                            "第${w}周" + when {
+                                                w != state.currentWeek -> ""
+                                                state.inHoliday -> "（假期后）"
+                                                else -> "（本周）"
+                                            },
                                             fontWeight = if (w == state.currentWeek) FontWeight.Bold else FontWeight.Normal,
                                         )
                                     },
@@ -167,9 +192,19 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
             } else {
                 DateRow(
                     week = state.selectedWeek,
-                    firstMonday = state.semester.firstMonday,
+                    semester = state.semester,
                     today = LocalDate.now(),
                 )
+                if (state.inHoliday && state.nextWeekMonday != null) {
+                    Surface(color = MaterialTheme.colorScheme.tertiaryContainer) {
+                        Text(
+                            "假期中 · ${state.nextWeekMonday} 进入第${state.currentWeek}周",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        )
+                    }
+                }
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier.weight(1f),
@@ -225,9 +260,25 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
         SemesterSettingsDialog(
             current = state.semester,
             hasSample = state.hasSample,
+            reminderEnabled = reminderEnabled,
+            reminderMinutes = reminderMinutes,
+            themeMode = themeMode,
             onDismiss = { showSettings = false },
             onSave = { viewModel.saveSemester(it) },
+            onReminderChange = { enabled, minutes -> viewModel.setReminder(enabled, minutes) },
+            onThemeModeChange = { viewModel.setThemeMode(it) },
             onClearSample = { viewModel.clearSampleData() },
+            onRequestNotificationPermission = { onGranted ->
+                if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.POST_NOTIFICATIONS,
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    onGranted()
+                } else {
+                    pendingEnableReminder = true
+                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            },
         )
     }
 }
@@ -253,11 +304,12 @@ private fun EmptyState(onLoadSample: () -> Unit, onImportClick: () -> Unit, onAd
     }
 }
 
-/** 顶部日期行：左格对齐节次列，7 天列；有开学日期时显示 M/d，今天高亮。 */
+/** 顶部日期行：左格对齐节次列，7 天列；优先用官方教学周日历取周一日期，今天高亮。 */
 @Composable
-private fun DateRow(week: Int, firstMonday: String, today: LocalDate) {
-    val monday = remember(firstMonday, week) {
-        runCatching { LocalDate.parse(firstMonday) }.getOrNull()?.plusWeeks((week - 1).toLong())
+private fun DateRow(week: Int, semester: SettingsStore.SemesterConfig, today: LocalDate) {
+    val monday = remember(semester, week) {
+        semester.weekMondays.getOrNull(week - 1)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            ?: runCatching { LocalDate.parse(semester.firstMonday) }.getOrNull()?.plusWeeks((week - 1).toLong())
     }
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Spacer(Modifier.width(SECTION_COL_WIDTH))
