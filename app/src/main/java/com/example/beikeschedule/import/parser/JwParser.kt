@@ -58,6 +58,46 @@ object JwParser {
             ?.get("rq")?.jsonPrimitive?.content
     }
 
+    /**
+     * 教学周日历解析结果。
+     * @param weekMondays 下标+1 = 教学周，值 = 该周周一（yyyy-MM-dd）
+     * @param totalWeeks 学期总教学周数
+     */
+    data class WeekCalendar(val weekMondays: List<String>, val totalWeeks: Int)
+
+    /**
+     * 解析导入脚本产出的统一周历 JSON：{"totalWeeks":18, "weeks":[{"zc":1,"monday":"2026-09-07"},...]}。
+     * weeks 为空或解析失败时 totalWeeks 回退 0，由上层决定是否保留手工配置。
+     */
+    fun parseWeekCalendar(jsonText: String): WeekCalendar {
+        val root = runCatching { json.parseToJsonElement(jsonText).jsonObject }.getOrNull()
+            ?: return WeekCalendar(emptyList(), 0)
+        val totalWeeks = root["totalWeeks"]?.jsonPrimitive?.intOrNull ?: 0
+        val weeks = root["weeks"]?.jsonArray?.mapNotNull { elem ->
+            val obj = elem.jsonObject
+            val zc = obj["zc"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            val monday = obj["monday"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            zc to monday
+        }?.sortedBy { it.first } ?: emptyList()
+        // 按 zc 顺序展开为下标列表，zc 必须从 1 开始；中间缺失的周用前一周 +7 天补齐（防御性）
+        if (weeks.isEmpty() || weeks.first().first != 1) return WeekCalendar(emptyList(), totalWeeks)
+        val mondays = arrayListOf<String>()
+        var lastMonday = ""
+        for (i in 1..weeks.last().first) {
+            val found = weeks.firstOrNull { it.first == i }?.second
+            lastMonday = when {
+                found != null -> found
+                lastMonday.isNotEmpty() -> runCatching {
+                    java.time.LocalDate.parse(lastMonday).plusWeeks(1).toString()
+                }.getOrDefault("")
+                else -> ""
+            }
+            if (lastMonday.isEmpty()) return WeekCalendar(emptyList(), totalWeeks)
+            mondays += lastMonday
+        }
+        return WeekCalendar(mondays, totalWeeks)
+    }
+
     private fun toCourse(obj: JsonObject): CourseEntity {
         val sksj = obj["SKSJ"]?.jsonPrimitive?.content.orEmpty()
         val key = obj["KEY"]?.jsonPrimitive?.content
