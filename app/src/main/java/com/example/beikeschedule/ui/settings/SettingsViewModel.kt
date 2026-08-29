@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.beikeschedule.data.pref.SettingsStore
+import com.example.beikeschedule.data.repo.ScheduleRepository
 import com.example.beikeschedule.import.parser.GradesParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +36,14 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val themeMode: StateFlow<SettingsStore.ThemeMode> = settings.themeMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsStore.ThemeMode.SYSTEM)
     val update: StateFlow<UpdateState> = updateState
+    val studentProfile: StateFlow<SettingsStore.StudentProfile> = settings.studentProfile
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsStore.StudentProfile())
+    val appVersion: StateFlow<String> = MutableStateFlow(
+        runCatching {
+            getApplication<Application>().packageManager
+                .getPackageInfo(getApplication<Application>().packageName, 0).versionName ?: ""
+        }.getOrDefault(""),
+    )
 
     init {
         checkUpdate()
@@ -42,6 +51,14 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setThemeMode(mode: SettingsStore.ThemeMode) {
         viewModelScope.launch { settings.setThemeMode(mode) }
+    }
+
+    /** 清除成绩本地缓存（下次进教务 Tab 重新抓取）。 */
+    fun clearGradesCache() {
+        viewModelScope.launch {
+            settings.saveGradesMeta("", 0L)
+            ScheduleRepository(getApplication()).replaceGrades(emptyList())
+        }
     }
 
     /** 检查 GitHub 最新 release 与已装版本比对（进入设置页自动触发，可手动重查）。 */

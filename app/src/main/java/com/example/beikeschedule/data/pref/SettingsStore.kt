@@ -28,6 +28,20 @@ class SettingsStore(private val context: Context) {
         val weekMondays: List<String> = emptyList(),
     )
 
+    /** 学籍快照（教务抓取时顺手存，"我的"页离线展示）。 */
+    data class StudentProfile(
+        val xm: String = "",       // 姓名
+        val xh: String = "",       // 学号
+        val yxmc: String = "",     // 学院
+        val zymc: String = "",     // 专业
+        val bjmc: String = "",     // 班级
+        val njmc: String = "",     // 年级
+        val xjsfzx: String = "",   // 是否在校（"1"=在校）
+        val xjsfzc: String = "",   // 是否注册（"1"=已注册）
+    ) {
+        val isLoggedIn: Boolean get() = xh.isNotBlank()
+    }
+
     /** 主题模式：跟随系统 / 浅色 / 深色。 */
     enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
@@ -44,6 +58,16 @@ class SettingsStore(private val context: Context) {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val GPA_CACHE = stringPreferencesKey("gpa_cache")
         val GRADES_FETCHED_AT = longPreferencesKey("grades_fetched_at")
+        val SP_XM = stringPreferencesKey("sp_xm")
+        val SP_XH = stringPreferencesKey("sp_xh")
+        val SP_YXMC = stringPreferencesKey("sp_yxmc")
+        val SP_ZYMC = stringPreferencesKey("sp_zymc")
+        val SP_BJMC = stringPreferencesKey("sp_bjmc")
+        val SP_NJMC = stringPreferencesKey("sp_njmc")
+        val SP_XJSFZX = stringPreferencesKey("sp_xjsfzx")
+        val SP_XJSFZC = stringPreferencesKey("sp_xjsfzc")
+        val WEIGHT_SEMESTER = stringPreferencesKey("weight_semester")
+        val WEIGHT_EXCLUDED = stringPreferencesKey("weight_excluded")
     }
 
     val semester: Flow<SemesterConfig> = context.dataStore.data.map { p ->
@@ -110,6 +134,49 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { p ->
             p[Keys.GPA_CACHE] = gpaJson
             p[Keys.GRADES_FETCHED_AT] = fetchedAt
+        }
+    }
+
+    /** 学籍快照缓存（教务 Tab 抓成绩时顺手抓的 user/me 关键字段）。 */
+    val studentProfile: Flow<StudentProfile> = context.dataStore.data.map { p ->
+        StudentProfile(
+            xm = p[Keys.SP_XM] ?: "",
+            xh = p[Keys.SP_XH] ?: "",
+            yxmc = p[Keys.SP_YXMC] ?: "",
+            zymc = p[Keys.SP_ZYMC] ?: "",
+            bjmc = p[Keys.SP_BJMC] ?: "",
+            njmc = p[Keys.SP_NJMC] ?: "",
+            xjsfzx = p[Keys.SP_XJSFZX] ?: "",
+            xjsfzc = p[Keys.SP_XJSFZC] ?: "",
+        )
+    }
+
+    suspend fun saveStudentProfile(profile: StudentProfile) {
+        context.dataStore.edit { p ->
+            p[Keys.SP_XM] = profile.xm
+            p[Keys.SP_XH] = profile.xh
+            p[Keys.SP_YXMC] = profile.yxmc
+            p[Keys.SP_ZYMC] = profile.zymc
+            p[Keys.SP_BJMC] = profile.bjmc
+            p[Keys.SP_NJMC] = profile.njmc
+            p[Keys.SP_XJSFZX] = profile.xjsfzx
+            p[Keys.SP_XJSFZC] = profile.xjsfzc
+        }
+    }
+
+    /** 加权成绩用户自定义：学期筛选（空=全部学期）与手动排除的课程 kcdm 集合。 */
+    val weightedSemesterFilter: Flow<String> =
+        context.dataStore.data.map { it[Keys.WEIGHT_SEMESTER] ?: "" }
+    val weightedExcludedKcdm: Flow<Set<String>> =
+        context.dataStore.data.map { p ->
+            p[Keys.WEIGHT_EXCLUDED]?.takeIf { it.isNotBlank() }
+                ?.split(",")?.toSet() ?: emptySet()
+        }
+
+    suspend fun saveWeightedFilter(semester: String, excluded: Set<String>) {
+        context.dataStore.edit { p ->
+            p[Keys.WEIGHT_SEMESTER] = semester
+            p[Keys.WEIGHT_EXCLUDED] = excluded.joinToString(",")
         }
     }
 

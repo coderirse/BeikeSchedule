@@ -44,7 +44,7 @@
             })
         ]).then(function (results) {
             window.__beikeGradesRunning = false;
-            window.BeikeGrades.onGradesResult(results[0], results[1]);
+            window.BeikeGrades.onGradesResult(results[0], results[1], rs[1]);
         });
     }).catch(function (e) {
         window.__beikeGradesRunning = false;

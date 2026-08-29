@@ -1,6 +1,7 @@
 package com.example.beikeschedule.import.parser
 
 import com.example.beikeschedule.data.local.GradeEntity
+import com.example.beikeschedule.data.pref.SettingsStore.StudentProfile
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -61,6 +62,24 @@ object GradesParser {
         val rank = num("PM")?.toInt() ?: return null
         val total = num("ZRS")?.toInt() ?: return null
         return GpaInfo(gpa, earned, passed, rank, total)
+    }
+
+    /** 解析 user/me 返回 → 学籍快照；关键字段缺失返回 null。 */
+    fun parseStudentProfile(jsonText: String): StudentProfile? {
+        val o = runCatching { json.parseToJsonElement(jsonText).jsonObject }.getOrNull() ?: return null
+        fun str(key: String) = o[key]?.jsonPrimitive?.content ?: ""
+        val xh = str("yhdm").ifBlank { str("xh") }
+        return if (xh.isBlank()) null else StudentProfile(
+            xm = str("xm"),
+            xh = xh,
+            yxmc = str("bmmc"),
+            zymc = o["xkxg_xs"]?.jsonObject?.get("bjzydm")?.jsonPrimitive?.content
+                ?: str("zymc"),
+            bjmc = str("bjmc"),
+            njmc = o["xkxg_xs"]?.jsonObject?.get("bjnj")?.jsonPrimitive?.content ?: str("njmc"),
+            xjsfzx = str("sfzx"),
+            xjsfzc = str("sfzc"),
+        )
     }
 
     /** 版本号比较：a > b 返回正数（逐段数字比较，段数不齐按 0 补）。 */

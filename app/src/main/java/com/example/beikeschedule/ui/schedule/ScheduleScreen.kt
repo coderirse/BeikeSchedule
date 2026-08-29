@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -39,7 +40,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -122,52 +122,57 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 学期名可点击 → 学期设置（原右上角齿轮的入口移到这里）
-                        TextButton(onClick = { showSettings = true }) {
-                            Text(
-                                text = state.semester.name.ifBlank { "贝壳课表" },
-                                style = MaterialTheme.typography.titleMedium,
+            // 自定义矮顶栏（替代 TopAppBar 64dp 大留白），内容单行紧凑排列
+            Surface(color = MaterialTheme.colorScheme.surface) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .height(48.dp)
+                        .padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 学期名可点击 → 学期设置
+                    TextButton(onClick = { showSettings = true }) {
+                        Text(
+                            text = state.semester.name.ifBlank { "贝壳课表" },
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Icon(
+                            Icons.Default.ExpandMore,
+                            contentDescription = "学期设置",
+                            modifier = Modifier.width(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(2.dp))
+                    TextButton(onClick = { weekMenuExpanded = true }) {
+                        Text("第${state.selectedWeek}周 ▾")
+                    }
+                    DropdownMenu(
+                        expanded = weekMenuExpanded,
+                        onDismissRequest = { weekMenuExpanded = false },
+                    ) {
+                        (1..totalWeeks).forEach { w ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "第${w}周" + when {
+                                            w != state.currentWeek -> ""
+                                            state.inHoliday -> "（假期后）"
+                                            else -> "（本周）"
+                                        },
+                                        fontWeight = if (w == state.currentWeek) FontWeight.Bold else FontWeight.Normal,
+                                    )
+                                },
+                                onClick = {
+                                    weekMenuExpanded = false
+                                    scope.launch { pagerState.animateScrollToPage(w - 1) }
+                                },
                             )
-                            Icon(
-                                Icons.Default.ExpandMore,
-                                contentDescription = "学期设置",
-                                modifier = Modifier.width(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Spacer(Modifier.width(4.dp))
-                        TextButton(onClick = { weekMenuExpanded = true }) {
-                            Text("第${state.selectedWeek}周 ▾")
-                        }
-                        DropdownMenu(
-                            expanded = weekMenuExpanded,
-                            onDismissRequest = { weekMenuExpanded = false },
-                        ) {
-                            (1..totalWeeks).forEach { w ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            "第${w}周" + when {
-                                                w != state.currentWeek -> ""
-                                                state.inHoliday -> "（假期后）"
-                                                else -> "（本周）"
-                                            },
-                                            fontWeight = if (w == state.currentWeek) FontWeight.Bold else FontWeight.Normal,
-                                        )
-                                    },
-                                    onClick = {
-                                        weekMenuExpanded = false
-                                        scope.launch { pagerState.animateScrollToPage(w - 1) }
-                                    },
-                                )
-                            }
                         }
                     }
-                },
-                actions = {
+                    Spacer(Modifier.weight(1f))
                     if (state.currentWeek != null && state.selectedWeek != state.currentWeek) {
                         IconButton(onClick = {
                             scope.launch { pagerState.animateScrollToPage(state.currentWeek!! - 1) }
@@ -178,8 +183,8 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
                     IconButton(onClick = onImportClick) {
                         Icon(Icons.Default.CloudDownload, contentDescription = "从教务系统导入")
                     }
-                },
-            )
+                }
+            }
         },
         floatingActionButton = {
             FloatingActionButton(onClick = {
