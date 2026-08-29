@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.local.GradeEntity
+import com.caeamer.beikeschedule.data.repo.GpaCalculator
 import com.caeamer.beikeschedule.import.GradesBridge
 import com.caeamer.beikeschedule.import.JwWebView
 import com.caeamer.beikeschedule.import.loadAssetScript
@@ -658,7 +659,7 @@ private fun ScoreCard(
             Row(verticalAlignment = Alignment.Bottom) {
                 val value = when (state.scoreMode) {
                     ScoreMode.WEIGHTED -> state.weightedResult?.let { fmt2(it.score) } ?: "—"
-                    ScoreMode.GPA -> state.gpa?.let { fmt2(it.gpa) } ?: "—"
+                    ScoreMode.GPA -> state.localGpa?.let { fmt2(it.gpa) } ?: "—"
                 }
                 Text(
                     value,
@@ -684,9 +685,12 @@ private fun ScoreCard(
                         if (state.excludedKcdm.isNotEmpty()) "（已排除 ${state.excludedKcdm.size} 门）" else ""
                 } else "没有可计算的必修课数字成绩"
             } else {
-                state.gpa?.let {
-                    "专业排名 ${it.rank}/${it.totalStudents} · 已获学分 ${it.earnedCredits} · 通过 ${it.passedCourses} 门"
-                } ?: "GPA 信息待刷新获取"
+                // GPA 为本地 4.0 制计算；教务网排名口径是平均学分绩，仍展示作参考
+                val g = state.localGpa
+                val rankText = state.gpa?.let { "专业排名 ${it.rank}/${it.totalStudents}（平均学分绩口径） · " } ?: ""
+                if (g != null) {
+                    "${rankText}满绩 4.0 · 纳入 ${g.courseCount} 门 · 共 ${fmt2(g.credits)} 学分"
+                } else "没有可计算的数字成绩"
             }
             Text(
                 subtitleText,

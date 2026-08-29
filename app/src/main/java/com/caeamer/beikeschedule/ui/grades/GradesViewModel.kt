@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.local.GradeEntity
 import com.caeamer.beikeschedule.data.repo.CreditAggregator
+import com.caeamer.beikeschedule.data.repo.GpaCalculator
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.data.repo.WeightedScoreCalculator
 import com.caeamer.beikeschedule.import.parser.CreditProgressParser
@@ -54,6 +55,8 @@ data class GradesUiState(
     /** 毕业总进度（queryBxkqk）。 */
     val gradProgress: GraduationProgress? = null,
 ) {
+    /** 本地 4.0 制 GPA：全部有数字成绩的课程，补考/重修覆盖正考（教务网 BL 是平均学分绩/20 口径，不可用）。 */
+    val localGpa: GpaCalculator.GpaResult? get() = GpaCalculator.calculate(grades)
     /** 按学期分组（学期名倒序，学期内按原始顺序）。 */
     val grouped: List<Pair<String, List<GradeEntity>>>
         get() = grades.groupBy { it.xnxqmc }.toSortedMap(compareByDescending { it }).map { (k, v) -> k to v }

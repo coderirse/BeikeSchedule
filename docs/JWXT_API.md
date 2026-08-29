@@ -58,6 +58,9 @@ list 字段（实测，`docs/samples/grcjcx-all.json`）：`kcdm` `kcmc` `xnxq` 
 
 `/cjgl/grcjcx/getgpa` — POST form 空体 → 裸 `{BL:GPA值, HDXF:已获学分, TGKC:通过门数, PM:专业排名, ZRS:专业总人数, PJXFJ_PM:平均学分绩排名, PJXFJ_PM_FW}` ✅
 
+⚠️ **BL 不是 4.0 制 GPA**：实测 BL=4.22 > 满绩 4.0，应为"平均学分绩/20"口径。`queryBxkqk` 带 `sfcxxfj:"1"` 只多返回 `XFJ`（学分绩排名标识）与 `PM`/`ZYRS`，**教务网无 4.0 制绩点接口**。
+App 的 4.0 制 GPA 由 `GpaCalculator` 本地计算：换算表 90-100=4.0 / 85-89=3.7 / 80-84=3.4 / 75-79=3.0 / 70-74=2.4 / 65-69=2.0 / 60-64=1.0 / <60=0；纳入全部有数字成绩课程（等级制排除）；同 kcdm 有补考/重修行只取补考/重修（多行取最高）；挂科计 0 绩点、学分进分母。
+
 ### 3.3 学业完成情况（修读进度链）🔬
 
 调用链：先 `getXss` 拿标识，再 JSON POST 查询。
