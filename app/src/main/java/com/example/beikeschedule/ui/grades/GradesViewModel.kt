@@ -121,7 +121,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** GradesBridge 回调（含学籍快照）。 */
-    fun onFetchResult(gpaJson: String, gradesJson: String, userJson: String) {
+    fun onFetchResult(gpaJson: String, gradesJson: String, userJson: String, xsxxJson: String) {
         viewModelScope.launch {
             try {
                 val grades = GradesParser.parseGrades(gradesJson)
@@ -132,7 +132,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
                     repo.settings.saveGradesMeta(gpaJson, System.currentTimeMillis())
                     gpaFromCache.value = GradesParser.parseGpa(gpaJson)
                     // 学籍快照顺手存（"我的"页离线展示）
-                    GradesParser.parseStudentProfile(userJson)?.let {
+                    GradesParser.parseStudentProfile(userJson, xsxxJson)?.let {
                         repo.settings.saveStudentProfile(it)
                     }
                     error.value = null

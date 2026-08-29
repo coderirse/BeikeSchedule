@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -26,16 +27,18 @@ import com.example.beikeschedule.data.local.CourseEntity
 import com.example.beikeschedule.data.local.SectionTimeEntity
 import com.example.beikeschedule.model.WeekUtils
 
-/** 课程详情底部弹层：信息展示 + 编辑/删除入口。 */
+/** 课程详情底部弹层：信息展示 + 编辑/删除（手动或示例）/隐藏（教务导入）入口。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CourseDetailSheet(
     course: CourseEntity,
     sectionTimes: List<SectionTimeEntity>,
     isSample: Boolean,
+    isImported: Boolean,
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onHide: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
@@ -66,13 +69,22 @@ fun CourseDetailSheet(
                     Text("编辑")
                 }
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        if (isSample) "删除（示例）" else "删除",
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                if (isImported) {
+                    // 教务导入课程：只能隐藏，不能删除
+                    TextButton(onClick = onHide) {
+                        Icon(Icons.Default.VisibilityOff, null, tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(4.dp))
+                        Text("隐藏", color = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    TextButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            if (isSample) "删除（示例）" else "删除",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
         }

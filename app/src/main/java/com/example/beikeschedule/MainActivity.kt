@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -93,8 +94,12 @@ class MainActivity : ComponentActivity() {
                     ImportScreen(onDone = { showImport = false })
                 } else {
                     Scaffold(
+                        // 内容区不消费系统栏 insets：各页顶栏自行处理状态栏，
+                        // 否则教务/我的页的 TopAppBar 会与这里双重叠加状态栏高度 → 顶部大片空白
+                        contentWindowInsets = WindowInsets(0, 0, 0, 0),
                         bottomBar = {
-                            // 自定义矮导航栏（Material NavigationBar 默认过高，按 WakeUp 比例压缩）
+                            // 底部栏自己处理手势条高度（navigationBarsPadding），
+                            // 高度不再由外层 inset 决定，避免内容区被额外撑高
                             Surface(
                                 color = MaterialTheme.colorScheme.surface,
                                 tonalElevation = 3.dp,

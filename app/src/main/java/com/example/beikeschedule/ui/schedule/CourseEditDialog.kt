@@ -54,29 +54,33 @@ private class SessionState(dayOfWeek: Int, bigSections: Set<Int>) {
  * 手动添加 / 编辑课程对话框。
  * 周次 1..N 任意多选；时段 = 周几 + 大节任意组合，可多个时段；
  * 保存时由 SessionExpander 展开为连续小节区间行（一门课多行，与导入数据同构）。
+ * @param initialRows 课程的全部行（多时段课程 = 多行）；编辑时加载全部时段，不限于点击的那一行。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun CourseEditDialog(
-    initial: CourseEntity?,
+    initialRows: List<CourseEntity>,
     totalWeeks: Int,
     /** 长按课表空白格进入时预填的时段。 */
     prefill: SessionExpander.Session? = null,
     onDismiss: () -> Unit,
     onSave: (List<CourseEntity>) -> Unit,
 ) {
+    val initial = initialRows.firstOrNull()
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var teacher by remember { mutableStateOf(initial?.teacher ?: "") }
     var location by remember { mutableStateOf(initial?.location ?: "") }
     var selectedWeeks by remember {
         mutableStateOf(
-            initial?.let { WeekUtils.weeksOf(it.weekBitmap).toSet() } ?: (1..totalWeeks).toSet(),
+            // 取所有行的周次并集（多时段课程可能不同行的周次位图一致，但保险起见取并集）
+            initialRows.flatMap { WeekUtils.weeksOf(it.weekBitmap) }.toSet()
+                .ifEmpty { (1..totalWeeks).toSet() },
         )
     }
     val sessions = remember {
         val seed = when {
-            initial != null -> SessionExpander.toSessions(
-                listOf(SessionExpander.Row(initial.dayOfWeek, initial.startSection, initial.endSection)),
+            initialRows.isNotEmpty() -> SessionExpander.toSessions(
+                initialRows.map { SessionExpander.Row(it.dayOfWeek, it.startSection, it.endSection) },
             ).map { SessionState(it.dayOfWeek, it.bigSections) }
             prefill != null -> listOf(SessionState(prefill.dayOfWeek, prefill.bigSections))
             else -> listOf(SessionState(1, setOf(0)))

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,6 +37,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -99,11 +101,15 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
     var weekMenuExpanded by remember { mutableStateOf(false) }
     var detailCourse by remember { mutableStateOf<CourseEntity?>(null) }
     var editingCourse by remember { mutableStateOf<CourseEntity?>(null) }
+    // 多时段课程编辑：存该课的全部行（同「名字+来源」），传给编辑框加载全部时段
+    var editCourseGroup by remember { mutableStateOf<List<CourseEntity>?>(null) }
     var prefillSession by remember { mutableStateOf<SessionExpander.Session?>(null) }
     var showEditDialog by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     // 长按空白格后待激活的"添加课程"格子（周几, 大节下标）
     var pendingSlot by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    // 无固定时间课程弹层
+    var showUnscheduledSheet by remember { mutableStateOf(false) }
 
     val totalWeeks = state.semester.totalWeeks
     val pagerState = rememberPagerState(
@@ -123,6 +129,7 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
     Scaffold(
         topBar = {
             // 自定义矮顶栏（替代 TopAppBar 64dp 大留白），内容单行紧凑排列
+            // 外层 Scaffold 已不消费状态栏 inset（contentWindowInsets=0），故这里自行 statusBarsPadding
             Surface(color = MaterialTheme.colorScheme.surface) {
                 Row(
                     modifier = Modifier
@@ -178,6 +185,11 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
                             scope.launch { pagerState.animateScrollToPage(state.currentWeek!! - 1) }
                         }) {
                             Icon(Icons.Default.DateRange, contentDescription = "回到本周")
+                        }
+                    }
+                    if (state.unscheduledCourses.isNotEmpty()) {
+                        IconButton(onClick = { showUnscheduledSheet = true }) {
+                            Icon(Icons.Default.MoreHoriz, contentDescription = "无固定时间课程")
                         }
                     }
                     IconButton(onClick = onImportClick) {
@@ -243,12 +255,6 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
                         onCourseClick = { detailCourse = it },
                     )
                 }
-                if (state.unscheduledCourses.isNotEmpty()) {
-                    UnscheduledStrip(
-                        courses = state.unscheduledCourses,
-                        onCourseClick = { detailCourse = it },
-                    )
-                }
             }
         }
     }
@@ -258,14 +264,22 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
             course = course,
             sectionTimes = state.sectionTimes,
             isSample = course.source == CourseEntity.SOURCE_SAMPLE,
+            isImported = course.source == CourseEntity.SOURCE_IMPORT,
             onDismiss = { detailCourse = null },
             onEdit = {
                 detailCourse = null
-                editingCourse = course
+                // 多时段课程：加载同名同源的全部行（编辑框回显全部时段）
+                editCourseGroup = state.courses.filter {
+                    it.name == course.name && it.source == course.source
+                }.ifEmpty { listOf(course) }
                 showEditDialog = true
             },
             onDelete = {
                 viewModel.deleteCourse(course.id)
+                detailCourse = null
+            },
+            onHide = {
+                viewModel.setCourseHidden(course.id, true)
                 detailCourse = null
             },
         )
@@ -273,17 +287,33 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
 
     if (showEditDialog) {
         CourseEditDialog(
-            initial = editingCourse,
+            initialRows = editCourseGroup ?: listOfNotNull(editingCourse),
             totalWeeks = totalWeeks,
             prefill = prefillSession,
             onDismiss = {
                 showEditDialog = false
                 prefillSession = null
+                editCourseGroup = null
             },
             onSave = { rows ->
-                viewModel.saveCourses(rows, replaceId = editingCourse?.id)
+                viewModel.saveCourses(rows, replaceIds = editCourseGroup?.map { it.id })
                 showEditDialog = false
                 prefillSession = null
+                editCourseGroup = null
+            },
+        )
+    }
+
+    if (showUnscheduledSheet) {
+        UnscheduledSheet(
+            courses = state.unscheduledCourses,
+            onDismiss = { showUnscheduledSheet = false },
+            onCourseClick = { course ->
+                showUnscheduledSheet = false
+                editCourseGroup = state.courses.filter {
+                    it.name == course.name && it.source == course.source
+                }.ifEmpty { listOf(course) }
+                showEditDialog = true
             },
         )
     }
@@ -292,12 +322,14 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
         SemesterSettingsDialog(
             current = state.semester,
             hasSample = state.hasSample,
+            hiddenCourses = state.hiddenCourses,
             reminderEnabled = reminderEnabled,
             reminderMinutes = reminderMinutes,
             onDismiss = { showSettings = false },
             onSave = { viewModel.saveSemester(it) },
             onReminderChange = { enabled, minutes -> viewModel.setReminder(enabled, minutes) },
             onClearSample = { viewModel.clearSampleData() },
+            onRestoreCourse = { viewModel.setCourseHidden(it, false) },
             onRequestNotificationPermission = { onGranted ->
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
                         context, Manifest.permission.POST_NOTIFICATIONS,
@@ -568,31 +600,41 @@ private fun Modifier.coursePosition(startSection: Int, span: Int): Modifier =
         }
     }
 
-/** 无固定时间课程横向列表（实验周/网课等）。 */
+/** 无固定时间课程弹层（实验周/网课等）：卡片可点击进入编辑。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun UnscheduledStrip(courses: List<CourseEntity>, onCourseClick: (CourseEntity) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
-        Text(
-            "无固定时间课程",
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(end = 88.dp, bottom = 8.dp), // 避开 FAB
+private fun UnscheduledSheet(
+    courses: List<CourseEntity>,
+    onDismiss: () -> Unit,
+    onCourseClick: (CourseEntity) -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(courses, key = { it.id }) { course ->
+            Text("无固定时间课程", style = MaterialTheme.typography.titleMedium)
+            if (courses.isEmpty()) {
+                Text(
+                    "没有无固定时间课程",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            courses.forEach { course ->
                 val (bg, fg) = CourseColors.of(course.name.hashCode())
                 Surface(
                     color = bg,
-                    shape = RoundedCornerShape(6.dp),
-                    modifier = Modifier.clickable { onCourseClick(course) },
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onCourseClick(course) },
                 ) {
-                    Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                        Text(course.name, fontSize = 12.sp, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                        Text(course.name, fontSize = 14.sp, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
                             WeekUtils.describe(course.weekBitmap),
-                            fontSize = 10.sp,
+                            fontSize = 12.sp,
                             color = fg.copy(alpha = 0.75f),
                         )
                     }

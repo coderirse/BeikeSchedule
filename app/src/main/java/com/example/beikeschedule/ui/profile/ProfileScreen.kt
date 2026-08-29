@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -22,6 +23,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -33,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -59,7 +62,21 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
     var showUpdateDialog by remember { mutableStateOf(false) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("我的") }) },
+        topBar = {
+            // 紧凑矮顶栏（外层 Scaffold 不消费状态栏 inset，这里自行处理）
+            Surface(color = MaterialTheme.colorScheme.surface) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .height(48.dp)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("我的", style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        },
     ) { padding ->
         Column(
             Modifier
@@ -75,17 +92,19 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
             ) {
                 Column(Modifier.padding(16.dp)) {
                     if (studentProfile.isLoggedIn) {
-                        ProfileRow("姓名", studentProfile.xm)
-                        ProfileRow("学号", studentProfile.xh)
-                        ProfileRow("学院", studentProfile.yxmc)
-                        ProfileRow("专业", studentProfile.zymc)
-                        ProfileRow("班级", studentProfile.bjmc)
-                        ProfileRow("年级", studentProfile.njmc)
-                        ProfileRow(
-                            "学籍状态",
-                            (if (studentProfile.xjsfzx == "1") "在校" else "不在校") +
-                                " · " + (if (studentProfile.xjsfzc == "1") "已注册" else "未注册"),
-                        )
+                        if (studentProfile.xm.isNotBlank()) ProfileRow("姓名", studentProfile.xm)
+                        if (studentProfile.xh.isNotBlank()) ProfileRow("学号", studentProfile.xh)
+                        if (studentProfile.yxmc.isNotBlank()) ProfileRow("学院", studentProfile.yxmc)
+                        if (studentProfile.zymc.isNotBlank()) ProfileRow("专业", studentProfile.zymc)
+                        if (studentProfile.bjmc.isNotBlank()) ProfileRow("班级", studentProfile.bjmc)
+                        if (studentProfile.njmc.isNotBlank()) ProfileRow("年级", studentProfile.njmc)
+                        if (studentProfile.xjsfzx.isNotBlank() || studentProfile.xjsfzc.isNotBlank()) {
+                            ProfileRow(
+                                "学籍状态",
+                                (if (studentProfile.xjsfzx == "1") "在校" else "不在校") +
+                                    " · " + (if (studentProfile.xjsfzc == "1") "已注册" else "未注册"),
+                            )
+                        }
                     } else {
                         Text(
                             "未获取学籍信息",
@@ -128,89 +147,37 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                 is UpdateState.Failed -> u.message
                 UpdateState.Idle -> "检查 GitHub Releases 是否有新版本"
             }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        val u = update
-                        if (u is UpdateState.Available) showUpdateDialog = true
-                        else viewModel.checkUpdate()
-                    }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("检查更新", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (update is UpdateState.Failed) MaterialTheme.colorScheme.error
-                        else if (update is UpdateState.Available) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (update is UpdateState.Available) {
-                    TextButton(onClick = { showUpdateDialog = true }) { Text("查看") }
-                }
-            }
-
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL)))
-                    }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    painterResource(R.drawable.ic_github),
-                    contentDescription = "GitHub",
-                    modifier = Modifier.size(22.dp),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("GitHub 仓库", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        REPO_URL.removePrefix("https://"),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("版本", style = MaterialTheme.typography.bodyLarge)
-                Spacer(Modifier.weight(1f))
-                Text(
-                    appVersion,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { viewModel.clearGradesCache() }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("清除成绩缓存", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        "删除本地成绩与 GPA 数据，下次进入教务 Tab 重新抓取",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            SettingsRow(
+                title = "检查更新",
+                subtitle = subtitle,
+                subtitleColor = if (update is UpdateState.Failed) MaterialTheme.colorScheme.error
+                else if (update is UpdateState.Available) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                trailing = if (update is UpdateState.Available) {
+                    { TextButton(onClick = { showUpdateDialog = true }) { Text("查看") } }
+                } else null,
+                onClick = {
+                    val u = update
+                    if (u is UpdateState.Available) showUpdateDialog = true
+                    else viewModel.checkUpdate()
+                },
+            )
+            SettingsRow(
+                title = "GitHub 仓库",
+                subtitle = REPO_URL.removePrefix("https://"),
+                icon = { Icon(painterResource(R.drawable.ic_github), "GitHub", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurface) },
+                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))) },
+            )
+            SettingsRow(
+                title = "版本",
+                subtitle = appVersion,
+                onClick = null,
+            )
+            SettingsRow(
+                title = "清除成绩缓存",
+                subtitle = "删除本地成绩与 GPA 数据，下次进入教务 Tab 重新抓取",
+                onClick = { viewModel.clearGradesCache() },
+            )
 
             Spacer(Modifier.height(32.dp))
             Text(
@@ -266,5 +233,40 @@ private fun ProfileRow(label: String, value: String) {
             modifier = Modifier.width(60.dp),
         )
         Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+    }
+}
+
+/** 设置页统一列表行：可选图标 + 标题 + 副文本 + 右侧动作，整行可点。 */
+@Composable
+private fun SettingsRow(
+    title: String,
+    subtitle: String? = null,
+    subtitleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    icon: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+    onClick: (() -> Unit)? = null,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        icon?.let {
+            it()
+            Spacer(Modifier.width(12.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (subtitle != null && subtitle.isNotBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = subtitleColor,
+                )
+            }
+        }
+        trailing?.let { it() }
     }
 }

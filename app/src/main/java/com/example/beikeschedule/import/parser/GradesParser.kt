@@ -64,19 +64,25 @@ object GradesParser {
         return GpaInfo(gpa, earned, passed, rank, total)
     }
 
-    /** 解析 user/me 返回 → 学籍快照；关键字段缺失返回 null。 */
-    fun parseStudentProfile(jsonText: String): StudentProfile? {
-        val o = runCatching { json.parseToJsonElement(jsonText).jsonObject }.getOrNull() ?: return null
+    /** 解析 user/me + queryxsxx → 学籍快照；学号缺失返回 null。 */
+    fun parseStudentProfile(userJson: String, xsxxJson: String): StudentProfile? {
+        val o = runCatching { json.parseToJsonElement(userJson).jsonObject }.getOrNull() ?: return null
         fun str(key: String) = o[key]?.jsonPrimitive?.content ?: ""
         val xh = str("yhdm").ifBlank { str("xh") }
-        return if (xh.isBlank()) null else StudentProfile(
+        if (xh.isBlank()) return null
+        // 专业名/班级名在 queryxsxx（UserManager/queryxsxx）里；user/me 的 bjzydm 只是代码
+        val xsxx = runCatching { json.parseToJsonElement(xsxxJson).jsonObject }.getOrNull()
+        fun xs(key: String) = xsxx?.get(key)?.jsonPrimitive?.content.orEmpty()
+        val bjmc = xs("BJMC").ifBlank { xs("bjmc") }.ifBlank { str("bjmc") }
+        val zymc = xs("ZYMC").ifBlank { xs("zymc") }
+        val njmc = xs("NJMC").ifBlank { xs("njmc") }.ifBlank { str("njmc") }
+        return StudentProfile(
             xm = str("xm"),
             xh = xh,
             yxmc = str("bmmc"),
-            zymc = o["xkxg_xs"]?.jsonObject?.get("bjzydm")?.jsonPrimitive?.content
-                ?: str("zymc"),
-            bjmc = str("bjmc"),
-            njmc = o["xkxg_xs"]?.jsonObject?.get("bjnj")?.jsonPrimitive?.content ?: str("njmc"),
+            zymc = zymc.ifBlank { str("zymc") },
+            bjmc = bjmc,
+            njmc = njmc,
             xjsfzx = str("sfzx"),
             xjsfzc = str("sfzc"),
         )

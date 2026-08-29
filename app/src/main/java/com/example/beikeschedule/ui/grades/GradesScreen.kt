@@ -4,12 +4,16 @@ import android.webkit.WebView
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -65,16 +69,24 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("成绩") },
-                actions = {
+            // 紧凑矮顶栏（外层 Scaffold 不消费状态栏 inset，这里自行处理）
+            Surface(color = MaterialTheme.colorScheme.surface) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .height(48.dp)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("成绩", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     if (!state.showWebView) {
                         IconButton(onClick = { viewModel.startRefresh() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新成绩")
                         }
                     }
-                },
-            )
+                }
+            }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -82,7 +94,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                 WebViewFetch(
                     fetching = state.fetching,
                     onFetchStart = { viewModel.onFetchStart() },
-                    onResult = { gpa, grades, user -> viewModel.onFetchResult(gpa, grades, user) },
+                    onResult = { gpa, grades, user, xsxx -> viewModel.onFetchResult(gpa, grades, user, xsxx) },
                     onError = { viewModel.onFetchError(it) },
                 )
             } else if (state.grades.isEmpty()) {
@@ -129,7 +141,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
 private fun WebViewFetch(
     fetching: Boolean,
     onFetchStart: () -> Unit,
-    onResult: (String, String, String) -> Unit,
+    onResult: (String, String, String, String) -> Unit,
     onError: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -157,7 +169,7 @@ private fun WebViewFetch(
         }
         JwWebView(
             bridge = GradesBridge(
-                onResult = { gpa, grades, user -> webView?.post { onResult(gpa, grades, user) } },
+                onResult = { gpa, grades, user, xsxx -> webView?.post { onResult(gpa, grades, user, xsxx) } },
                 onFailure = { msg -> webView?.post { onError(msg) } },
             ),
             bridgeName = "BeikeGrades",
@@ -169,6 +181,7 @@ private fun WebViewFetch(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GradesContent(
     state: GradesUiState,
@@ -219,6 +232,7 @@ private fun GradesContent(
 }
 
 /** GPA/加权成绩卡片：模式切换 + 学期筛选 + 课程勾选。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ScoreCard(
     state: GradesUiState,
@@ -269,8 +283,9 @@ private fun ScoreCard(
 
             // 加权模式：学期筛选
             if (state.scoreMode == ScoreMode.WEIGHTED && state.semesters.size > 1) {
-                Row(
+                FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     FilterChip(
@@ -349,7 +364,13 @@ private fun ScoreCard(
                     Text(if (showCourseSelector) "收起课程选择" else "自定义纳入计算的课程（${state.weightEligible.count { it.second }}/${state.weightEligible.size}）")
                 }
                 if (showCourseSelector) {
-                    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    // 课程可能很多，限高滚动，避免卡片撑出屏幕
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 260.dp),
+                        verticalArrangement = Arrangement.spacedBy(0.dp),
+                    ) {
                         state.weightEligible.forEach { (grade, included) ->
                             Row(
                                 Modifier.fillMaxWidth().padding(vertical = 2.dp),

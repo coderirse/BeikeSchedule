@@ -15,6 +15,16 @@ interface CourseDao {
     @Query("SELECT * FROM course WHERE source = :source")
     suspend fun getBySource(source: Int): List<CourseEntity>
 
+    /** 全部同类课程（含隐藏），用于多时段课程分组编辑。 */
+    @Query("SELECT * FROM course WHERE source IN (:sources) AND name LIKE :name ORDER BY dayOfWeek, startSection")
+    fun observeByNames(sources: List<Int>, name: String): Flow<List<CourseEntity>>
+
+    @Query("SELECT * FROM course WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<Long>): List<CourseEntity>
+
+    @Query("UPDATE course SET hidden = :hidden WHERE id = :id")
+    suspend fun setHidden(id: Long, hidden: Boolean)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(courses: List<CourseEntity>)
 

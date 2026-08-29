@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [CourseEntity::class, SectionTimeEntity::class, GradeEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -34,6 +34,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v2 → v3：course 表新增 hidden 列（教务课程隐藏而非删除）。 */
+        private val MIGRATE_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `course` ADD COLUMN `hidden` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -43,7 +50,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "beike_schedule.db",
-                ).addMigrations(MIGRATE_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATE_1_2, MIGRATE_2_3).build().also { instance = it }
             }
     }
 }

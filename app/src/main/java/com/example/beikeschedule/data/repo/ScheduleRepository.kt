@@ -48,9 +48,18 @@ class ScheduleRepository(context: Context) {
     /** 原样插入课程行（保留 source，用于编辑展开后的多行写回）。 */
     suspend fun insertCourses(courses: List<CourseEntity>) = courseDao.insertAll(courses)
 
+    /** 更新单行课程（手动课程编辑走保存替换时较少用；编辑展开用 insertCourses+deleteCourse）。 */
     suspend fun updateCourse(course: CourseEntity) = courseDao.update(course)
 
+    /** 删除一门课的指定 id（手动课程删除；编辑替换旧行时也用它）。 */
     suspend fun deleteCourse(id: Long) = courseDao.deleteById(id)
+
+    /** 隐藏/恢复教务导入课程（隐藏 = 不显示但保留；手动/示例删除用 deleteCourse）。 */
+    suspend fun setCourseHidden(id: Long, hidden: Boolean) = courseDao.setHidden(id, hidden)
+
+    /** 按源 + 课程名取全部行（含隐藏），用于多时段课程的整体编辑。 */
+    fun observeCourseByName(sources: List<Int>, name: String): Flow<List<CourseEntity>> =
+        courseDao.observeByNames(sources, name)
 
     /** 载入示例课表（assets 内置的真实教务样本），source=SOURCE_SAMPLE 便于一键清除。 */
     suspend fun loadSampleData(courses: List<CourseEntity>, sectionTimes: List<SectionTimeEntity>) {

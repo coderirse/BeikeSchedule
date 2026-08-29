@@ -42,9 +42,15 @@
                 current: 1, pageSize: 500,
                 xscjlb: null, sffx: null, yhdm: me.yhdm || null
             })
-        ]).then(function (results) {
+        ]).then(function (all) {
             window.__beikeGradesRunning = false;
-            window.BeikeGrades.onGradesResult(results[0], results[1], rs[1]);
+            // all[0]=getgpa, all[1]=grcjcx, 最外层 rs[0]=querydangqianxnxq, rs[1]=user/me
+            // 再抓一次学籍信息（含专业名/班级名），用 queryxsxx
+            return postForm('/UserManager/queryxsxx', {}).then(function (xsxx) {
+                window.BeikeGrades.onGradesResult(all[0], all[1], rs[1], xsxx);
+            }).catch(function () {
+                window.BeikeGrades.onGradesResult(all[0], all[1], rs[1], '');
+            });
         });
     }).catch(function (e) {
         window.__beikeGradesRunning = false;
