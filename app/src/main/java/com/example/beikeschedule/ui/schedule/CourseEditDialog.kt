@@ -1,6 +1,10 @@
 package com.example.beikeschedule.ui.schedule
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -9,10 +13,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
@@ -30,17 +37,21 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.beikeschedule.data.local.CourseEntity
 import com.example.beikeschedule.model.SectionMap
 import com.example.beikeschedule.model.SessionExpander
 import com.example.beikeschedule.model.WeekUtils
+import com.example.beikeschedule.ui.theme.CourseColors
 
 private val WEEKDAY_NAMES_FULL = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
@@ -54,29 +65,39 @@ private class SessionState(dayOfWeek: Int, bigSections: Set<Int>) {
  * 手动添加 / 编辑课程对话框。
  * 周次 1..N 任意多选；时段 = 周几 + 大节任意组合，可多个时段；
  * 保存时由 SessionExpander 展开为连续小节区间行（一门课多行，与导入数据同构）。
+ * @param initialRows 课程的全部行（多时段课程 = 多行）；编辑时加载全部时段，不限于点击的那一行。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun CourseEditDialog(
-    initial: CourseEntity?,
+    initialRows: List<CourseEntity>,
     totalWeeks: Int,
     /** 长按课表空白格进入时预填的时段。 */
     prefill: SessionExpander.Session? = null,
     onDismiss: () -> Unit,
     onSave: (List<CourseEntity>) -> Unit,
 ) {
+    val initial = initialRows.firstOrNull()
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var teacher by remember { mutableStateOf(initial?.teacher ?: "") }
     var location by remember { mutableStateOf(initial?.location ?: "") }
+    var selectedColor by remember {
+        mutableIntStateOf(
+            if (initialRows.isNotEmpty()) initialRows.first().colorIndex
+            else CourseColors.defaultColorIndex,
+        )
+    }
     var selectedWeeks by remember {
         mutableStateOf(
-            initial?.let { WeekUtils.weeksOf(it.weekBitmap).toSet() } ?: (1..totalWeeks).toSet(),
+            // 取所有行的周次并集（多时段课程可能不同行的周次位图一致，但保险起见取并集）
+            initialRows.flatMap { WeekUtils.weeksOf(it.weekBitmap) }.toSet()
+                .ifEmpty { (1..totalWeeks).toSet() },
         )
     }
     val sessions = remember {
         val seed = when {
-            initial != null -> SessionExpander.toSessions(
-                listOf(SessionExpander.Row(initial.dayOfWeek, initial.startSection, initial.endSection)),
+            initialRows.isNotEmpty() -> SessionExpander.toSessions(
+                initialRows.map { SessionExpander.Row(it.dayOfWeek, it.startSection, it.endSection) },
             ).map { SessionState(it.dayOfWeek, it.bigSections) }
             prefill != null -> listOf(SessionState(prefill.dayOfWeek, prefill.bigSections))
             else -> listOf(SessionState(1, setOf(0)))
@@ -109,6 +130,40 @@ fun CourseEditDialog(
                     value = location, onValueChange = { location = it },
                     label = { Text("地点") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 )
+
+                // —— 课程颜色 ——
+                Text("课程颜色", style = MaterialTheme.typography.titleSmall)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    (0..9).forEach { idx ->
+                        val (bg, fg) = CourseColors.of(idx)
+                        val selected = idx == selectedColor
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(bg)
+                                .border(
+                                    width = if (selected) 2.dp else 0.dp,
+                                    color = if (selected) fg else Color.Transparent,
+                                    shape = CircleShape,
+                                )
+                                .clickable { selectedColor = idx },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (selected) {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = fg,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+                }
 
                 HorizontalDivider()
                 Text("周次（可多选）", style = MaterialTheme.typography.titleSmall)
@@ -206,7 +261,7 @@ fun CourseEditDialog(
                                 startSection = row.startSection,
                                 endSection = row.endSection,
                                 weekBitmap = weekBitmap,
-                                colorIndex = initial?.colorIndex ?: name.trim().hashCode(),
+                                colorIndex = selectedColor,
                                 source = initial?.source ?: CourseEntity.SOURCE_MANUAL,
                             )
                         },

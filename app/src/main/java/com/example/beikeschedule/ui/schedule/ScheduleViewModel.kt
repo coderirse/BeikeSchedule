@@ -32,8 +32,12 @@ data class ScheduleUiState(
     val nextWeekMonday: String? = null,
     val loaded: Boolean = false,
 ) {
-    val scheduledCourses get() = courses.filter { !it.isUnscheduled }
-    val unscheduledCourses get() = courses.filter { it.isUnscheduled }
+    /** 未隐藏的有固定时间课程。 */
+    val scheduledCourses get() = courses.filter { !it.isUnscheduled && !it.hidden }
+    /** 未隐藏的无固定时间课程。 */
+    val unscheduledCourses get() = courses.filter { it.isUnscheduled && !it.hidden }
+    /** 已隐藏的课程（教务导入课程可隐藏，供学期设置里恢复）。 */
+    val hiddenCourses get() = courses.filter { it.hidden }
     val hasSample get() = courses.any { it.source == CourseEntity.SOURCE_SAMPLE }
 }
 
@@ -127,14 +131,23 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 批量保存一门课：编辑场景先删除被替换的旧行，再插入展开后的全部时段行。
-     * 行内 source 由对话框按来源保留（导入课程编辑后仍是导入源，下次导入会被正常覆盖）。
+     * 批量保存一门课：编辑场景先删除被替换的全部旧行，再插入展开后的全部时段行。
+     * 多时段课程编辑：传入该课程的所有行（同名同源），先删旧行再插入新行。
      */
-    fun saveCourses(courses: List<CourseEntity>, replaceId: Long?) {
+    fun saveCourses(courses: List<CourseEntity>, replaceIds: List<Long>?) {
         viewModelScope.launch {
-            if (replaceId != null && replaceId != 0L) repo.deleteCourse(replaceId)
+            replaceIds?.takeIf { it.isNotEmpty() }?.forEach { repo.deleteCourse(it) }
             repo.insertCourses(courses)
         }
+    }
+
+    /** 按名字+源加载一门课的全部行（多时段课程整体编辑用）。 */
+    fun observeCourseByName(sources: List<Int>, name: String) =
+        repo.observeCourseByName(sources, name)
+
+    /** 隐藏/恢复教务导入课程。 */
+    fun setCourseHidden(id: Long, hidden: Boolean) {
+        viewModelScope.launch { repo.setCourseHidden(id, hidden) }
     }
 
     fun deleteCourse(id: Long) {
