@@ -579,13 +579,8 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
     active: Boolean,
     onClick: () -> Unit,
 ) {
-    // 本周课程用课表色板；非本周课程统一中性淡底（彩色块半透明压在渐变上会发灰发脏）
-    val (bg, fg) = if (active) {
-        CourseColors.of(course.colorIndex)
-    } else {
-        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f) to
-            MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    // 本周/非本周都用课程本色：非本周整体淡化（灰底会被误认为本周有课，用户明确要求回退）
+    val (bg, fg) = CourseColors.of(course.colorIndex)
     // 13 节特殊加课钳制到第 12 节区间显示（网格按 12 小节排版）
     val clampedStart = course.startSection.coerceAtMost(SectionMap.TOTAL_SMALL_SECTIONS)
     val clampedEnd = course.endSection.coerceAtMost(SectionMap.TOTAL_SMALL_SECTIONS)
@@ -604,6 +599,7 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
             .align(androidx.compose.ui.Alignment.TopCenter)
             .coursePosition(clampedStart, span)
             .padding(1.dp)
+            .alpha(if (active) 1f else 0.3f)
             .clickable(onClick = onClick),
     ) {
         Column(Modifier.padding(3.dp)) {
