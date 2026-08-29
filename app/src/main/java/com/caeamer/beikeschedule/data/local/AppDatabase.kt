@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [CourseEntity::class, SectionTimeEntity::class, GradeEntity::class],
-    version = 3,
+    entities = [CourseEntity::class, SectionTimeEntity::class, GradeEntity::class, ExamEntity::class],
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -17,6 +17,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun courseDao(): CourseDao
     abstract fun sectionTimeDao(): SectionTimeDao
     abstract fun gradeDao(): GradeDao
+    abstract fun examDao(): ExamDao
 
     companion object {
         /** v1 → v2：新增 grade 表（课程/节次数据原样保留）。 */
@@ -41,6 +42,24 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v3 → v4：grade 加排名/考核方式列 + 新增 exam 表。 */
+        private val MIGRATE_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `grade` ADD COLUMN `pm` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `grade` ADD COLUMN `zrs` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `grade` ADD COLUMN `khfs` TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `exam` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`kcdm` TEXT NOT NULL, `kcmc` TEXT NOT NULL, " +
+                        "`kslx` TEXT NOT NULL, `kssjms` TEXT NOT NULL, " +
+                        "`ksrq` TEXT NOT NULL, `kssj` TEXT NOT NULL, `jssj` TEXT NOT NULL, " +
+                        "`cdmc` TEXT NOT NULL, `zwh` TEXT NOT NULL, `jkjsbz` TEXT NOT NULL, " +
+                        "`kkyxmc` TEXT NOT NULL, `xnxq` TEXT NOT NULL)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -50,7 +69,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "beike_schedule.db",
-                ).addMigrations(MIGRATE_1_2, MIGRATE_2_3).build().also { instance = it }
+                ).addMigrations(MIGRATE_1_2, MIGRATE_2_3, MIGRATE_3_4).build().also { instance = it }
             }
     }
 }

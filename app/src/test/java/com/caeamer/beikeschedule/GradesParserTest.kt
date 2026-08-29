@@ -31,6 +31,16 @@ class GradesParserTest {
     }
 
     @Test
+    fun `解析全量成绩 fixture - 单科排名与考核方式字段`() {
+        val grades = GradesParser.parseGrades(loadFixture("grcjcx-all.json"))
+        val first = grades.first()
+        // 真实样例：概率论与数理统计A pm=5 zrs=128 khfs=考试
+        assertEquals("5", first.pm)
+        assertEquals("128", first.zrs)
+        assertEquals("考试", first.khfs)
+    }
+
+    @Test
     fun `解析全量成绩 fixture - 学期分组覆盖多个学期`() {
         val grades = GradesParser.parseGrades(loadFixture("grcjcx-all.json"))
         val semesters = grades.map { it.xnxqmc }.distinct()

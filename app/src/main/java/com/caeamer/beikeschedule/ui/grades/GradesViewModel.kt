@@ -3,11 +3,20 @@ package com.caeamer.beikeschedule.ui.grades
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.local.GradeEntity
+import com.caeamer.beikeschedule.data.repo.CreditAggregator
+import com.caeamer.beikeschedule.data.repo.GpaCalculator
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.data.repo.WeightedScoreCalculator
+import com.caeamer.beikeschedule.import.parser.CreditProgressParser
+import com.caeamer.beikeschedule.import.parser.CreditProgressParser.CreditCategory
+import com.caeamer.beikeschedule.import.parser.CreditProgressParser.GraduationProgress
+import com.caeamer.beikeschedule.import.parser.ExamsParser
 import com.caeamer.beikeschedule.import.parser.GradesParser
 import com.caeamer.beikeschedule.import.parser.GpaInfo
+import com.caeamer.beikeschedule.import.parser.JwParser
+import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -19,10 +28,18 @@ import kotlinx.coroutines.launch
 /** 成绩展示模式：加权（默认，只看必修数字成绩）/ GPA（教务官方值）。 */
 enum class ScoreMode { WEIGHTED, GPA }
 
+/** 教务 Tab 分段：成绩 / 考试。 */
+enum class GradesSection { SCORES, EXAMS }
+
+/** 学分进度行：类别要求（接口）+ 本地已完成（成绩汇总）。 */
+data class CreditRow(val category: CreditCategory, val completed: Double)
+
 data class GradesUiState(
     val showWebView: Boolean = false,
     val fetching: Boolean = false,
+    val section: GradesSection = GradesSection.SCORES,
     val grades: List<GradeEntity> = emptyList(),
+    val exams: List<ExamEntity> = emptyList(),
     val gpa: GpaInfo? = null,
     val fetchedAt: Long = 0L,
     val error: String? = null,
@@ -33,10 +50,40 @@ data class GradesUiState(
     val schoolYearFilter: String = "",
     /** 用户手动排除出加权计算的课程代码集合。 */
     val excludedKcdm: Set<String> = emptySet(),
+    /** 学分类别要求（queryXflbyq）。 */
+    val creditCategories: List<CreditCategory> = emptyList(),
+    /** 毕业总进度（queryBxkqk）。 */
+    val gradProgress: GraduationProgress? = null,
 ) {
+    /** 本地 4.0 制 GPA：全部有数字成绩的课程，补考/重修覆盖正考（教务网 BL 是平均学分绩/20 口径，不可用）。 */
+    val localGpa: GpaCalculator.GpaResult? get() = GpaCalculator.calculate(grades)
     /** 按学期分组（学期名倒序，学期内按原始顺序）。 */
     val grouped: List<Pair<String, List<GradeEntity>>>
         get() = grades.groupBy { it.xnxqmc }.toSortedMap(compareByDescending { it }).map { (k, v) -> k to v }
+
+    /** 每学期挂科门数（学期名 → N）。 */
+    val failedBySemester: Map<String, Int>
+        get() = grades.filter { it.isFailed }.groupBy { it.xnxqmc }.mapValues { it.value.size }
+
+    /** 本地按课程类别汇总的已通过学分（与教务网页口径一致）。 */
+    val localCategorySums: Map<String, Double>
+        get() = CreditAggregator.sumPassedByCategory(grades)
+
+    /** 学分进度行：要求（接口）× 已完成（本地汇总）。 */
+    val creditRows: List<CreditRow>
+        get() {
+            val sums = localCategorySums
+            return creditCategories.map { CreditRow(it, CreditAggregator.completedCreditsFor(sums, it.kclbmc)) }
+        }
+
+    /** 考试按日期升序（无日期的排最后，按原文排序）。 */
+    val examsSorted: List<ExamEntity>
+        get() = exams.sortedWith(
+            compareByDescending<ExamEntity> { it.hasDate }
+                .thenBy { it.ksrq }
+                .thenBy { it.kssj }
+                .thenBy { it.kssjms },
+        )
 
     /** 去重后的学期列表（用于筛选）。 */
     val semesters: List<String> get() = grades.map { it.xnxqmc }.distinct().sortedDescending()
@@ -109,6 +156,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
     private val fetching = MutableStateFlow(false)
     private val gpaFromCache = MutableStateFlow<GpaInfo?>(null)
     private val error = MutableStateFlow<String?>(null)
+    private val section = MutableStateFlow(GradesSection.SCORES)
     private val scoreMode = MutableStateFlow(ScoreMode.WEIGHTED)
     private val semesterFilter = MutableStateFlow("")
     private val schoolYearFilter = MutableStateFlow("")
@@ -124,27 +172,40 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         val excluded: Set<String>,
     )
 
+    private data class FetchInfo(
+        val fetchedAt: Long,
+        val showWebView: Boolean,
+        val fetching: Boolean,
+        val section: GradesSection,
+    )
+
     val uiState: StateFlow<GradesUiState> = combine(
         repo.grades,
-        repo.settings.gradesFetchedAt,
-        showWebView,
-        fetching,
+        repo.exams,
+        combine(repo.settings.xflbyqJson, repo.settings.bxkqkJson) { a, b -> a to b },
+        combine(repo.settings.gradesFetchedAt, showWebView, fetching, section) { a, b, c, d ->
+            FetchInfo(a, b, c, d)
+        },
         combine(
             gpaFromCache, error, scoreMode, semesterFilter,
             combine(schoolYearFilter, excludedKcdm) { y, x -> y to x },
-        ) { gpa, e, m, f, (y, x) -> UiPrefs(gpa, e, m, f, y, x) },
-    ) { grades, fetchedAt, webView, fetchingNow, prefs ->
+        ) { g, e, m, f, (y, x) -> UiPrefs(g, e, m, f, y, x) },
+    ) { grades, exams, creditJson, info, prefs ->
         GradesUiState(
-            showWebView = webView,
-            fetching = fetchingNow,
+            showWebView = info.showWebView,
+            fetching = info.fetching,
+            section = info.section,
             grades = grades,
+            exams = exams,
             gpa = prefs.gpa,
-            fetchedAt = fetchedAt,
+            fetchedAt = info.fetchedAt,
             error = prefs.error,
             scoreMode = prefs.mode,
             semesterFilter = prefs.filter,
             schoolYearFilter = prefs.schoolYear,
             excludedKcdm = prefs.excluded,
+            creditCategories = CreditProgressParser.parseCategories(creditJson.first),
+            gradProgress = CreditProgressParser.parseProgress(creditJson.second),
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), GradesUiState())
 
@@ -166,8 +227,17 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         error.value = null
     }
 
-    /** GradesBridge 回调（含学籍快照）。 */
-    fun onFetchResult(gpaJson: String, gradesJson: String, userJson: String, xsxxJson: String) {
+    /** GradesBridge 回调：成绩+GPA+学籍+当前学期+考试+学业进度，一次会话全量。 */
+    fun onFetchResult(
+        gpaJson: String,
+        gradesJson: String,
+        userJson: String,
+        xsxxJson: String,
+        semJson: String,
+        examsJson: String,
+        xflbyqJson: String,
+        bxkqkJson: String,
+    ) {
         viewModelScope.launch {
             try {
                 val grades = GradesParser.parseGrades(gradesJson)
@@ -180,6 +250,18 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
                     // 学籍快照顺手存（"我的"页离线展示）
                     GradesParser.parseStudentProfile(userJson, xsxxJson)?.let {
                         repo.settings.saveStudentProfile(it)
+                    }
+                    // 考试安排（仅当前学期）
+                    val (semXn, semXq, _) = JwParser.parseCurrentSemester(semJson)
+                    val exams = ExamsParser.parseExams(examsJson, semXn + semXq)
+                    repo.replaceExams(exams)
+                    // 学业进度缓存
+                    if (xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()) {
+                        repo.settings.saveCreditMeta(xflbyqJson, bxkqkJson)
+                    }
+                    // 考试有数据 → 重排考前提醒
+                    if (exams.isNotEmpty()) {
+                        ExamReminderScheduler.reschedule(getApplication())
                     }
                     error.value = null
                 }
@@ -205,6 +287,10 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dismissError() {
         error.value = null
+    }
+
+    fun setSection(section: GradesSection) {
+        this.section.value = section
     }
 
     fun setScoreMode(mode: ScoreMode) {

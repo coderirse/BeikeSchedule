@@ -50,11 +50,13 @@ import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Class
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Grade
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HowToReg
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -227,6 +229,48 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                 value = "删除本地成绩与 GPA",
                 destructive = true,
                 onClick = { showClearCacheConfirm = true },
+            )
+
+            // —— 外部系统 ——（浏览器跳转；课程平台/实践平台地址待补后追加）
+            Text(
+                "外部系统",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            SettingsItemRow(
+                icon = { Icon(Icons.Default.Grade, null, Modifier.size(20.dp)) },
+                title = "评教系统",
+                value = "教学评价",
+                trailing = {
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                onClick = {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(SettingsViewModel.PINGJIAO_URL)),
+                    )
+                },
+            )
+            SettingsItemRow(
+                icon = { Icon(Icons.Default.Science, null, Modifier.size(20.dp)) },
+                title = "大创 / SRTP",
+                value = "大学生创新创业训练计划",
+                trailing = {
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                onClick = {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(SettingsViewModel.SRTP_URL)),
+                    )
+                },
             )
 
             // —— 主题 ——

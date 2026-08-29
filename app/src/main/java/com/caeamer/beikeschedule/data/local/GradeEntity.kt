@@ -18,10 +18,18 @@ data class GradeEntity(
     val bkcx: String,      // 正考/补考
     val yxmc: String,      // 开课学院
     val sffx: Boolean,     // 是否辅修
+    val pm: String = "",   // 该课排名（原始字符串，""=无/等级制）
+    val zrs: String = "",  // 该课程总人数
+    val khfs: String = "", // 考核方式（考试/考查）
 ) {
     /** 数字成绩；非数字成绩（等级制）返回 null。 */
     val numericScore: Double? get() = zzcj.toDoubleOrNull()
 
     /** 是否不及格（仅对数字成绩判定；等级制不标红）。 */
     val isFailed: Boolean get() = (numericScore?.let { it < 60 } == true)
+
+    /** 是否已通过：数字 ≥60，或等级制 优/良/中/及格/合格（学分汇总口径，与教务网页一致）。 */
+    val isPassed: Boolean
+        get() = numericScore?.let { it >= 60 } == true ||
+            zzcj in setOf("优", "良", "中", "及格", "合格")
 }
