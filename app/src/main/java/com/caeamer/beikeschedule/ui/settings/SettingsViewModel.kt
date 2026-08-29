@@ -53,11 +53,14 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { settings.setThemeMode(mode) }
     }
 
-    /** 清除成绩本地缓存（下次进教务 Tab 重新抓取）。 */
+    /** 清除成绩本地缓存（含考试安排与学业进度，下次进教务 Tab 重新抓取）。 */
     fun clearGradesCache() {
         viewModelScope.launch {
+            val repo = ScheduleRepository(getApplication())
             settings.saveGradesMeta("", 0L)
-            ScheduleRepository(getApplication()).replaceGrades(emptyList())
+            settings.saveCreditMeta("", "")
+            repo.replaceGrades(emptyList())
+            repo.replaceExams(emptyList())
         }
     }
 
@@ -106,5 +109,9 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         /** 仓库主页（"我的"页 GitHub 入口与更新检查共用）。 */
         const val REPO_URL = "https://github.com/coderirse/BeikeSchedule"
         private const val RELEASES_API = "https://api.github.com/repos/coderirse/BeikeSchedule/releases/latest"
+
+        /** 外部系统入口（"我的"页外链组）。课程平台/实践平台地址待补后追加。 */
+        const val PINGJIAO_URL = "https://pingjiao.ustb.edu.cn"
+        const val SRTP_URL = "https://srtp.ustb.edu.cn"
     }
 }

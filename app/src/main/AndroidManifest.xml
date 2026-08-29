@@ -34,6 +34,7 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.caeamer.beikeschedule.action.REMIND" />
+                <action android:name="com.caeamer.beikeschedule.action.EXAM_REMIND" />
                 <action android:name="com.caeamer.beikeschedule.action.DAILY_PULSE" />
             </intent-filter>
         </receiver>

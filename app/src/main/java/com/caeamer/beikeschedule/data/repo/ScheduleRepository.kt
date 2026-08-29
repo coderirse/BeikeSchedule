@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.withTransaction
 import com.caeamer.beikeschedule.data.local.AppDatabase
 import com.caeamer.beikeschedule.data.local.CourseEntity
+import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.local.GradeEntity
 import com.caeamer.beikeschedule.data.local.SectionTimeEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
@@ -21,16 +22,24 @@ class ScheduleRepository(context: Context) {
     private val courseDao = db.courseDao()
     private val sectionTimeDao = db.sectionTimeDao()
     private val gradeDao = db.gradeDao()
+    private val examDao = db.examDao()
     val settings = SettingsStore(context)
 
     val courses: Flow<List<CourseEntity>> = courseDao.observeAll()
     val sectionTimes: Flow<List<SectionTimeEntity>> = sectionTimeDao.observeAll()
     val grades: Flow<List<GradeEntity>> = gradeDao.observeAll()
+    val exams: Flow<List<ExamEntity>> = examDao.observeAll()
 
     /** 覆盖式写入成绩（全量刷新语义）。单事务保证不会出现"清空后未写入"的中间态。 */
     suspend fun replaceGrades(grades: List<GradeEntity>) = db.withTransaction {
         gradeDao.clear()
         gradeDao.insertAll(grades)
+    }
+
+    /** 覆盖式写入考试安排（仅当前学期）。 */
+    suspend fun replaceExams(exams: List<ExamEntity>) = db.withTransaction {
+        examDao.clear()
+        examDao.insertAll(exams)
     }
 
     /** 覆盖式写入教务导入结果：先删旧导入数据，再插入新数据与节次时间。单事务原子完成。 */

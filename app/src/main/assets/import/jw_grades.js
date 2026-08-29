@@ -1,8 +1,9 @@
 /**
- * 北科教务成绩抓取脚本。在已登录的 byyt 页面注入，同源 fetch 复用 SESSION。
- * grcjcx 为 JSON POST（与课表接口的 form 提交不同），getgpa 为 form POST；
- * 请求体里的 yhdm/pylx 从 user/me 取。
- * 结果经 BeikeGrades 桥回传：onGradesResult(gpaJson, gradesJson)。
+ * 北科教务成绩+考试+学业进度抓取脚本。在已登录的 byyt 页面注入，同源 fetch 复用 SESSION。
+ * grcjcx 为 JSON POST（与课表接口的 form 提交不同），getgpa/getXss 为 form POST，
+ * queryXflbyq/queryBxkqk 为 JSON POST（参数依赖 getXss 的培养方案标识），
+ * queryXsksByxhList 参数带 p 前缀（pxn/pxq/ppylx）。
+ * 结果经 BeikeGrades 桥回传：onGradesResult(gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk)。
  */
 (function () {
     if (window.__beikeGradesRunning) return;
@@ -26,6 +27,22 @@
         }).then(function (r) { return r.text(); });
     }
 
+    /** 学业进度：getXss 取培养方案标识 → 并发查学分类别要求 + 毕业总进度；失败回退空串不阻塞成绩。 */
+    function fetchProgress(xn, xq) {
+        return postForm('/cjgl/cjzhtjcx/cjcx/getXss', {}).then(function (text) {
+            var xs = (JSON.parse(text).content || [])[0] || {};
+            var body = {
+                xh: xs.xh || '', pylx: xs.pylx || '1', nj: xs.nj || '',
+                jzxnxq: xn + xq, xjid: xs.xjid || '', fah: xs.fah || ''
+            };
+            var bxkqkBody = Object.assign({ sfcxxfj: '0' }, body);
+            return Promise.all([
+                postJson('/cjgl/cjzhtjcx/cjcx/queryXflbyq', body),
+                postJson('/cjgl/cjzhtjcx/cjcx/queryBxkqk', bxkqkBody)
+            ]);
+        }).catch(function () { return ['', '']; });
+    }
+
     Promise.all([
         postForm('/component/querydangqianxnxq', {}),
         postForm('/user/me', {})
@@ -41,16 +58,16 @@
                 pylx: me.pylx || '1',
                 current: 1, pageSize: 500,
                 xscjlb: null, sffx: null, yhdm: me.yhdm || null
-            })
+            }),
+            postForm('/UserManager/queryxsxx', {}).catch(function () { return ''; }),
+            postForm('/kscxtj/queryXsksByxhList', {
+                pxn: sem.XN, pxq: sem.XQ, ppylx: '1', pageNum: 1, pageSize: 100
+            }).catch(function () { return ''; }),
+            fetchProgress(sem.XN, sem.XQ)
         ]).then(function (all) {
             window.__beikeGradesRunning = false;
-            // all[0]=getgpa, all[1]=grcjcx, 最外层 rs[0]=querydangqianxnxq, rs[1]=user/me
-            // 再抓一次学籍信息（含专业名/班级名），用 queryxsxx
-            return postForm('/UserManager/queryxsxx', {}).then(function (xsxx) {
-                window.BeikeGrades.onGradesResult(all[0], all[1], rs[1], xsxx);
-            }).catch(function () {
-                window.BeikeGrades.onGradesResult(all[0], all[1], rs[1], '');
-            });
+            // all[0]=getgpa, all[1]=grcjcx, all[2]=queryxsxx, all[3]=考试, all[4]=[xflbyq, bxkqk]
+            window.BeikeGrades.onGradesResult(all[0], all[1], rs[1], all[2], rs[0], all[3], all[4][0], all[4][1]);
         });
     }).catch(function (e) {
         window.__beikeGradesRunning = false;

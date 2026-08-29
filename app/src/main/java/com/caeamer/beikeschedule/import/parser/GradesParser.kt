@@ -47,6 +47,9 @@ object GradesParser {
                     bkcx = str("bkcx"),
                     yxmc = str("yxmc"),
                     sffx = o["sffx"]?.jsonPrimitive?.booleanOrNull ?: false,
+                    pm = str("pm"),
+                    zrs = str("zrs"),
+                    khfs = str("khfs"),
                 )
             }.getOrNull()
         }

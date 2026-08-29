@@ -69,6 +69,9 @@ class SettingsStore(private val context: Context) {
         val WEIGHT_SEMESTER = stringPreferencesKey("weight_semester")
         val WEIGHT_EXCLUDED = stringPreferencesKey("weight_excluded")
         val HIDE_WEEKEND = booleanPreferencesKey("hide_weekend")
+        val XFLBYQ_JSON = stringPreferencesKey("xflbyq_json")
+        val BXKQK_JSON = stringPreferencesKey("bxkqk_json")
+        val EXAM_REMINDER_CODES = stringPreferencesKey("exam_reminder_codes")
     }
 
     val semester: Flow<SemesterConfig> = context.dataStore.data.map { p ->
@@ -116,6 +119,30 @@ class SettingsStore(private val context: Context) {
     suspend fun saveReminderScheduledCodes(codes: Set<Int>) {
         context.dataStore.edit { p ->
             p[Keys.REMINDER_CODES] = codes.joinToString(",")
+        }
+    }
+
+    /** 已排考试提醒闹钟的 requestCode 集合（逗号分隔），用于精确取消。 */
+    val examReminderScheduledCodes: Flow<Set<Int>> = context.dataStore.data.map { p ->
+        p[Keys.EXAM_REMINDER_CODES]?.takeIf { it.isNotBlank() }
+            ?.split(",")?.mapNotNull { it.toIntOrNull() }?.toSet()
+            ?: emptySet()
+    }
+
+    suspend fun saveExamReminderScheduledCodes(codes: Set<Int>) {
+        context.dataStore.edit { p ->
+            p[Keys.EXAM_REMINDER_CODES] = codes.joinToString(",")
+        }
+    }
+
+    /** 学分类别要求（queryXflbyq 原始 JSON）与毕业总进度（queryBxkqk 原始 JSON）缓存。 */
+    val xflbyqJson: Flow<String> = context.dataStore.data.map { p -> p[Keys.XFLBYQ_JSON] ?: "" }
+    val bxkqkJson: Flow<String> = context.dataStore.data.map { p -> p[Keys.BXKQK_JSON] ?: "" }
+
+    suspend fun saveCreditMeta(xflbyqJson: String, bxkqkJson: String) {
+        context.dataStore.edit { p ->
+            p[Keys.XFLBYQ_JSON] = xflbyqJson
+            p[Keys.BXKQK_JSON] = bxkqkJson
         }
     }
 
