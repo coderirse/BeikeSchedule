@@ -134,8 +134,8 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
         topBar = {
             // 自定义矮顶栏（替代 TopAppBar 64dp 大留白），内容单行紧凑排列
             // 外层 Scaffold 已不消费状态栏 inset（contentWindowInsets=0），故这里自行 statusBarsPadding
-            // 半透明白融入渐变背景
-            Surface(color = Color.White.copy(alpha = 0.4f)) {
+            // 透明，透出 MainActivity 的整屏渐变背景
+            Surface(color = Color.Transparent) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

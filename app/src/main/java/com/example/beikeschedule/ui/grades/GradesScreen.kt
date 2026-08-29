@@ -43,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -70,8 +71,8 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
 
     Scaffold(
         topBar = {
-            // 紧凑矮顶栏（外层 Scaffold 不消费状态栏 inset，这里自行处理）
-            Surface(color = MaterialTheme.colorScheme.surface) {
+            // 紧凑矮顶栏（外层 Scaffold 不消费状态栏 inset，这里自行处理）——透明透出整屏渐变
+            Surface(color = Color.Transparent) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
