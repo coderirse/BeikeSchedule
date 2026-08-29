@@ -13,17 +13,18 @@ val signingProps = Properties().apply {
 }
 
 android {
-    namespace = "com.example.beikeschedule"
+    namespace = "com.caeamer.beikeschedule"
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId = "com.example.beikeschedule"
+        //对外分发的正式包名（2026-08 起，旧 com.example 包名的安装无法覆盖升级，需重装导入）
+        applicationId = "com.caeamer.beikeschedule"
         minSdk = 34
         targetSdk = 37
-        versionCode = 15
-        versionName = "1.0.14"
+        versionCode = 18
+        versionName = "1.0.17"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -39,9 +40,8 @@ android {
 
     buildTypes {
         release {
-            optimization {
-                enable = false
-            }
+            // 开启 R8 压缩/优化（依赖库均自带 consumer keep 规则：Compose/Room/kotlinx.serialization）
+            isMinifyEnabled = true
             signingConfig = signingConfigs.getByName("release")
         }
     }
@@ -52,6 +52,11 @@ android {
     buildFeatures {
         compose = true
     }
+}
+
+ksp {
+    // Room schema 导出：迁移可入库版本化，配合 MigrationTestHelper 可测
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
