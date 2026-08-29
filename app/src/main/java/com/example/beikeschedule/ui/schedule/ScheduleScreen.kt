@@ -27,7 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DateRange
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -84,7 +84,6 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
     val state by viewModel.uiState.collectAsState()
     val reminderEnabled by viewModel.reminderEnabled.collectAsState()
     val reminderMinutes by viewModel.reminderMinutes.collectAsState()
-    val themeMode by viewModel.themeMode.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -126,11 +125,20 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = state.semester.name.ifBlank { "贝壳课表" },
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Spacer(Modifier.width(8.dp))
+                        // 学期名可点击 → 学期设置（原右上角齿轮的入口移到这里）
+                        TextButton(onClick = { showSettings = true }) {
+                            Text(
+                                text = state.semester.name.ifBlank { "贝壳课表" },
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Icon(
+                                Icons.Default.ExpandMore,
+                                contentDescription = "学期设置",
+                                modifier = Modifier.width(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(Modifier.width(4.dp))
                         TextButton(onClick = { weekMenuExpanded = true }) {
                             Text("第${state.selectedWeek}周 ▾")
                         }
@@ -169,9 +177,6 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
                     }
                     IconButton(onClick = onImportClick) {
                         Icon(Icons.Default.CloudDownload, contentDescription = "从教务系统导入")
-                    }
-                    IconButton(onClick = { showSettings = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "学期设置")
                     }
                 },
             )
@@ -284,11 +289,9 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
             hasSample = state.hasSample,
             reminderEnabled = reminderEnabled,
             reminderMinutes = reminderMinutes,
-            themeMode = themeMode,
             onDismiss = { showSettings = false },
             onSave = { viewModel.saveSemester(it) },
             onReminderChange = { enabled, minutes -> viewModel.setReminder(enabled, minutes) },
-            onThemeModeChange = { viewModel.setThemeMode(it) },
             onClearSample = { viewModel.clearSampleData() },
             onRequestNotificationPermission = { onGranted ->
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(

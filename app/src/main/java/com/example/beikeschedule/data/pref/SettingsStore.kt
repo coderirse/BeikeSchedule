@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -41,6 +42,8 @@ class SettingsStore(private val context: Context) {
         val REMINDER_MINUTES = intPreferencesKey("reminder_minutes")
         val REMINDER_CODES = stringPreferencesKey("reminder_codes")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val GPA_CACHE = stringPreferencesKey("gpa_cache")
+        val GRADES_FETCHED_AT = longPreferencesKey("grades_fetched_at")
     }
 
     val semester: Flow<SemesterConfig> = context.dataStore.data.map { p ->
@@ -97,6 +100,17 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { p -> p[Keys.THEME_MODE] = mode.name }
+    }
+
+    /** GPA 概览缓存（getgpa 原始 JSON）与成绩刷新时间（epoch 毫秒，0=从未抓取）。 */
+    val gpaCache: Flow<String> = context.dataStore.data.map { p -> p[Keys.GPA_CACHE] ?: "" }
+    val gradesFetchedAt: Flow<Long> = context.dataStore.data.map { p -> p[Keys.GRADES_FETCHED_AT] ?: 0L }
+
+    suspend fun saveGradesMeta(gpaJson: String, fetchedAt: Long) {
+        context.dataStore.edit { p ->
+            p[Keys.GPA_CACHE] = gpaJson
+            p[Keys.GRADES_FETCHED_AT] = fetchedAt
+        }
     }
 
     private companion object {

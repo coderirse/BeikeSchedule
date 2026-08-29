@@ -4,18 +4,36 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [CourseEntity::class, SectionTimeEntity::class],
-    version = 1,
+    entities = [CourseEntity::class, SectionTimeEntity::class, GradeEntity::class],
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun courseDao(): CourseDao
     abstract fun sectionTimeDao(): SectionTimeDao
+    abstract fun gradeDao(): GradeDao
 
     companion object {
+        /** v1 → v2：新增 grade 表（课程/节次数据原样保留）。 */
+        private val MIGRATE_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `grade` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`kcdm` TEXT NOT NULL, `kcmc` TEXT NOT NULL, " +
+                        "`xnxq` TEXT NOT NULL, `xnxqmc` TEXT NOT NULL, " +
+                        "`kcxz` TEXT NOT NULL, `kclb` TEXT NOT NULL, " +
+                        "`xf` REAL NOT NULL, `zzcj` TEXT NOT NULL, " +
+                        "`bkcx` TEXT NOT NULL, `yxmc` TEXT NOT NULL, `sffx` INTEGER NOT NULL)",
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -25,7 +43,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "beike_schedule.db",
-                ).build().also { instance = it }
+                ).addMigrations(MIGRATE_1_2).build().also { instance = it }
             }
     }
 }

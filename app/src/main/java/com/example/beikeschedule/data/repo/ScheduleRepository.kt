@@ -3,6 +3,7 @@ package com.example.beikeschedule.data.repo
 import android.content.Context
 import com.example.beikeschedule.data.local.AppDatabase
 import com.example.beikeschedule.data.local.CourseEntity
+import com.example.beikeschedule.data.local.GradeEntity
 import com.example.beikeschedule.data.local.SectionTimeEntity
 import com.example.beikeschedule.data.pref.SettingsStore
 import kotlinx.coroutines.flow.Flow
@@ -17,10 +18,18 @@ class ScheduleRepository(context: Context) {
     private val db = AppDatabase.get(context)
     private val courseDao = db.courseDao()
     private val sectionTimeDao = db.sectionTimeDao()
+    private val gradeDao = db.gradeDao()
     val settings = SettingsStore(context)
 
     val courses: Flow<List<CourseEntity>> = courseDao.observeAll()
     val sectionTimes: Flow<List<SectionTimeEntity>> = sectionTimeDao.observeAll()
+    val grades: Flow<List<GradeEntity>> = gradeDao.observeAll()
+
+    /** 覆盖式写入成绩（全量刷新语义）。 */
+    suspend fun replaceGrades(grades: List<GradeEntity>) {
+        gradeDao.clear()
+        gradeDao.insertAll(grades)
+    }
 
     /** 覆盖式写入教务导入结果：先删旧导入数据，再插入新数据与节次时间。 */
     suspend fun replaceImportedData(

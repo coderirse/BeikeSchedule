@@ -39,7 +39,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
-/** 设置：学期信息 / 教学周日历状态 / 上课提醒 / 主题，另含示例数据清除入口。 */
+/** 学期设置：学期名 / 开学日期 / 总周数 / 上课提醒 / 示例数据清除（主题在设置 Tab）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SemesterSettingsDialog(
@@ -47,11 +47,9 @@ fun SemesterSettingsDialog(
     hasSample: Boolean,
     reminderEnabled: Boolean,
     reminderMinutes: Int,
-    themeMode: SettingsStore.ThemeMode,
     onDismiss: () -> Unit,
     onSave: (SettingsStore.SemesterConfig) -> Unit,
     onReminderChange: (enabled: Boolean, minutes: Int) -> Unit,
-    onThemeModeChange: (SettingsStore.ThemeMode) -> Unit,
     onClearSample: () -> Unit,
     onRequestNotificationPermission: (onGranted: () -> Unit) -> Unit,
 ) {
@@ -144,19 +142,7 @@ fun SemesterSettingsDialog(
 
                 HorizontalDivider()
 
-                // —— 主题 ——
-                DropdownField(
-                    label = "主题",
-                    options = listOf(
-                        SettingsStore.ThemeMode.SYSTEM to "跟随系统",
-                        SettingsStore.ThemeMode.LIGHT to "浅色",
-                        SettingsStore.ThemeMode.DARK to "深色",
-                    ),
-                    selected = themeMode,
-                    onSelect = onThemeModeChange,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
+                // —— 主题在底部 Tab「设置」中 ——
                 if (hasSample) {
                     Spacer(Modifier.height(4.dp))
                     TextButton(onClick = {
