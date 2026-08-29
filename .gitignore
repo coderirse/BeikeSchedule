@@ -17,3 +17,6 @@ local.properties
 # release signing (secrets)
 keystore.properties
 keystore/
+
+# IDE 全量忽略（此前只忽略部分 .idea 子路径，其余会漏进 git status）
+.idea/
