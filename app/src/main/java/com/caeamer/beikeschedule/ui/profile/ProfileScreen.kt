@@ -259,7 +259,7 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
             HorizontalDivider(Modifier.padding(horizontal = 16.dp))
             Spacer(Modifier.height(8.dp))
             Text(
-                "© 2026 caeamer · 开源于 GitHub",
+                "© 2026 caeamer. All rights reserved.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 modifier = Modifier.fillMaxWidth(),

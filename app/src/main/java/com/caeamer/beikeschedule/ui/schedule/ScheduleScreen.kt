@@ -477,17 +477,25 @@ private fun WeekGrid(
         }
         // N 天列（隐藏周末时为 5 天）
         days.forEach { day ->
-            // 重叠课程分槽：本周课程优先占槽，非本周课程只在剩余空位淡化显示；
-            // 同槽内课程互不重叠、并排窄列渲染，冲突课程不再被静默丢弃
-            val slots = remember(courses, day, week) {
-                val sorted = courses.filter { it.dayOfWeek == day }
-                    .sortedByDescending { it.hasClassOnWeek(week) }
-                val slots = mutableListOf<MutableList<CourseEntity>>()
-                sorted.forEach { c ->
-                    val slot = slots.firstOrNull { members -> members.none { sectionsOverlap(it, c) } }
-                    if (slot != null) slot += c else slots += mutableListOf(c)
+            // 冲突簇：仅"本周有课且节次重叠"的课程分簇并排窄列（含传递重叠，A-B-C 链式同簇）；
+            // 互不重叠的课程各自占满整列宽。非本周课程保持旧语义：只在与所有已显示课程
+            // 都不重叠的空位整宽淡化显示。
+            val dayLayout = remember(courses, day, week) {
+                val actives = courses.filter { it.dayOfWeek == day && it.hasClassOnWeek(week) }
+                    .sortedBy { it.startSection }
+                val clusters = mutableListOf<MutableList<CourseEntity>>()
+                actives.forEach { c ->
+                    val cluster = clusters.firstOrNull { cl -> cl.any { sectionsOverlap(it, c) } }
+                    if (cluster != null) cluster += c else clusters += mutableListOf(c)
                 }
-                slots
+                val inactives = courses.filter { it.dayOfWeek == day && !it.hasClassOnWeek(week) }
+                    .fold(mutableListOf<CourseEntity>()) { shown, c ->
+                        val blocked = actives.any { sectionsOverlap(it, c) } ||
+                            shown.any { sectionsOverlap(it, c) }
+                        if (!blocked) shown += c
+                        shown
+                    }
+                DayLayout(clusters, inactives)
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 // 空白格交互层（最底层）：长按出 +，点击 + 打开预填的添加课程框，点其他格取消
@@ -533,24 +541,37 @@ private fun WeekGrid(
                         )
                     }
                 }
-                // 课程块层：每个槽一行并排（单槽占满整列宽）
-                slots.forEach { slot ->
+                // 课程块层：冲突簇并排窄列，簇与簇、以及非本周课程各自独占整列宽
+                dayLayout.clusters.forEach { cluster ->
                     Row(Modifier.fillMaxSize()) {
-                        slot.forEach { course ->
+                        cluster.forEach { course ->
                             Box(Modifier.weight(1f).fillMaxHeight()) {
                                 CourseCard(
                                     course = course,
-                                    active = course.hasClassOnWeek(week),
+                                    active = true,
                                     onClick = { onCourseClick(course) },
                                 )
                             }
                         }
                     }
                 }
+                dayLayout.inactives.forEach { course ->
+                    CourseCard(
+                        course = course,
+                        active = false,
+                        onClick = { onCourseClick(course) },
+                    )
+                }
             }
         }
     }
 }
+
+/** 一天列的布局：activeConflicts = 本周冲突簇（簇内并排）；inactiveShown = 淡化展示的非本周课程。 */
+private data class DayLayout(
+    val clusters: List<List<CourseEntity>>,
+    val inactives: List<CourseEntity>,
+)
 
 @Composable
 private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
