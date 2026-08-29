@@ -40,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
@@ -85,6 +86,7 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
     val appVersion by viewModel.appVersion.collectAsState()
     val context = LocalContext.current
     var showUpdateDialog by remember { mutableStateOf(false) }
+    var showClearCacheConfirm by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -109,40 +111,45 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
-            // —— 学籍信息 ——（每行独立卡片：图标 + 标签 + 值）
+            // —— 学籍信息 ——（一张大卡片，内部 label:value 多行）
             Text(
                 "学籍信息",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
-            if (studentProfile.isLoggedIn) {
-                if (studentProfile.xm.isNotBlank())
-                    SettingsItemRow(icon = { Icon(Icons.Default.Person, null, Modifier.size(20.dp)) }, title = "姓名", value = studentProfile.xm)
-                if (studentProfile.xh.isNotBlank())
-                    SettingsItemRow(icon = { Icon(Icons.Default.Badge, null, Modifier.size(20.dp)) }, title = "学号", value = studentProfile.xh)
-                if (studentProfile.yxmc.isNotBlank())
-                    SettingsItemRow(icon = { Icon(Icons.Default.School, null, Modifier.size(20.dp)) }, title = "学院", value = studentProfile.yxmc)
-                if (studentProfile.zymc.isNotBlank())
-                    SettingsItemRow(icon = { Icon(Icons.Default.Book, null, Modifier.size(20.dp)) }, title = "专业", value = studentProfile.zymc)
-                if (studentProfile.bjmc.isNotBlank())
-                    SettingsItemRow(icon = { Icon(Icons.Default.Groups, null, Modifier.size(20.dp)) }, title = "班级", value = studentProfile.bjmc)
-                if (studentProfile.njmc.isNotBlank())
-                    SettingsItemRow(icon = { Icon(Icons.Default.Class, null, Modifier.size(20.dp)) }, title = "年级", value = studentProfile.njmc)
-                if (studentProfile.xjsfzx.isNotBlank() || studentProfile.xjsfzc.isNotBlank()) {
-                    SettingsItemRow(
-                        icon = { Icon(Icons.Default.HowToReg, null, Modifier.size(20.dp)) },
-                        title = "学籍状态",
-                        value = (if (studentProfile.xjsfzx == "1") "在校" else "不在校") +
-                            " · " + (if (studentProfile.xjsfzc == "1") "已注册" else "未注册"),
-                    )
+            Card(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    if (studentProfile.isLoggedIn) {
+                        if (studentProfile.xm.isNotBlank()) ProfileRow("姓名", studentProfile.xm)
+                        if (studentProfile.xh.isNotBlank()) ProfileRow("学号", studentProfile.xh)
+                        if (studentProfile.yxmc.isNotBlank()) ProfileRow("学院", studentProfile.yxmc)
+                        if (studentProfile.zymc.isNotBlank()) ProfileRow("专业", studentProfile.zymc)
+                        if (studentProfile.bjmc.isNotBlank()) ProfileRow("班级", studentProfile.bjmc)
+                        if (studentProfile.njmc.isNotBlank()) ProfileRow("年级", studentProfile.njmc)
+                        if (studentProfile.xjsfzx.isNotBlank() || studentProfile.xjsfzc.isNotBlank()) {
+                            ProfileRow(
+                                "学籍状态",
+                                (if (studentProfile.xjsfzx == "1") "在校" else "不在校") +
+                                    " · " + (if (studentProfile.xjsfzc == "1") "已注册" else "未注册"),
+                            )
+                        }
+                    } else {
+                        Text(
+                            "未获取学籍信息",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "在教务 Tab 抓取一次成绩后自动显示",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        )
+                    }
                 }
-            } else {
-                SettingsItemRow(
-                    icon = { Icon(Icons.Default.Info, null, Modifier.size(20.dp)) },
-                    title = "未获取学籍信息",
-                    value = "在教务 Tab 抓取一次成绩后自动显示",
-                )
             }
 
             Spacer(Modifier.height(16.dp))
@@ -191,7 +198,7 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                 icon = { Icon(Icons.Default.DeleteSweep, null, Modifier.size(20.dp)) },
                 title = "清除成绩缓存",
                 value = "删除本地成绩与 GPA",
-                onClick = { viewModel.clearGradesCache() },
+                onClick = { showClearCacheConfirm = true },
             )
 
             // —— 主题 ——
@@ -251,6 +258,21 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
             )
         }
     }
+
+    if (showClearCacheConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearCacheConfirm = false },
+            title = { Text("清除成绩缓存") },
+            text = { Text("将删除本地的成绩与 GPA 数据，下次进入教务 Tab 需重新抓取。是否继续？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.clearGradesCache()
+                    showClearCacheConfirm = false
+                }) { Text("清除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showClearCacheConfirm = false }) { Text("取消") } },
+        )
+    }
 }
 
 /** 设置列表项行：左侧几何图标 + 中间标题/值 + 右侧可点按钮（仿 Net-USTB）。 */
@@ -298,5 +320,22 @@ private fun SettingsItemRow(
             }
             trailing?.invoke()
         }
+    }
+}
+
+/** 学籍信息大卡片内的 label:value 行。 */
+@Composable
+private fun ProfileRow(label: String, value: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(64.dp),
+        )
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
     }
 }

@@ -29,6 +29,8 @@ data class GradesUiState(
     val scoreMode: ScoreMode = ScoreMode.WEIGHTED,
     /** 学期筛选：空=全部学期。 */
     val semesterFilter: String = "",
+    /** 学年筛选：空=全部；值如 "2024-2025"（含该学年1/2学期）；"-3" 代表小学期单独一组。 */
+    val schoolYearFilter: String = "",
     /** 用户手动排除出加权计算的课程代码集合。 */
     val excludedKcdm: Set<String> = emptySet(),
 ) {
@@ -36,14 +38,51 @@ data class GradesUiState(
     val grouped: List<Pair<String, List<GradeEntity>>>
         get() = grades.groupBy { it.xnxqmc }.toSortedMap(compareByDescending { it }).map { (k, v) -> k to v }
 
-    /** 去重后的学期列表（用于筛选 chips）。 */
+    /** 去重后的学期列表（用于筛选）。 */
     val semesters: List<String> get() = grades.map { it.xnxqmc }.distinct().sortedDescending()
+
+    /** 学年候选：按学年前4位聚合（只含 1/2 学期），小学期(-3)单独一组。 */
+    val schoolYears: List<String> get() {
+        val ys = grades.mapNotNull { g ->
+            val m = Regex("^(\\d{4}-\\d{4})-(\\d)$").find(g.xnxqmc)
+            if (m == null) null else m.groupValues[1] + "-" + m.groupValues[2]
+        }.distinct()
+        // 保留有 1/2 的学年，3 归到"小学期"
+        return buildList {
+            ys.filter { it.endsWith("-1") || it.endsWith("-2") }
+                .map { it.substringBeforeLast("-") }
+                .distinct()
+                .sortedDescending()
+                .forEach { add(it) }
+            if (ys.any { it.endsWith("-3") }) add("小学期")
+        }
+    }
+
+    /** 当前学年筛选下的学期候选（用于学期下拉；"全部学年"时列全部学期）。 */
+    val semestersOfSchoolYear: List<String>
+        get() {
+            if (schoolYearFilter.isBlank() || schoolYearFilter == "小学期") return semesters
+            return semesters.filter { it.startsWith(schoolYearFilter) && !it.endsWith("-3") }
+        }
+
+    /** 当前筛选是否命中某条成绩（学年 + 学期 双重口径）。 */
+    private fun matchesFilter(g: GradeEntity): Boolean {
+        // 学年维度
+        val yearOk = when {
+            schoolYearFilter.isBlank() -> true
+            schoolYearFilter == "小学期" -> g.xnxqmc.endsWith("-3")
+            else -> g.xnxqmc.startsWith(schoolYearFilter) && !g.xnxqmc.endsWith("-3")
+        }
+        if (!yearOk) return false
+        // 学期维度（在学年基础上精确定到具体学期）
+        if (semesterFilter.isNotBlank() && g.xnxqmc != semesterFilter) return false
+        return true
+    }
 
     /** 加权成绩计算结果（当前筛选+勾选状态下）。 */
     val weightedResult: WeightedScoreCalculator.WeightedResult?
         get() {
-            val filtered = if (semesterFilter.isBlank()) grades
-            else grades.filter { it.xnxqmc == semesterFilter }
+            val filtered = grades.filter { matchesFilter(it) }
             val triples = filtered.map {
                 WeightedScoreCalculator.GradeTriple(xf = it.xf, score = it.numericScore, kcxz = it.kcxz)
             }
@@ -56,8 +95,7 @@ data class GradesUiState(
     /** 当前筛选下参与加权计算的课程（UI 勾选列表用）。 */
     val weightEligible: List<Pair<GradeEntity, Boolean>>
         get() {
-            val filtered = if (semesterFilter.isBlank()) grades
-            else grades.filter { it.xnxqmc == semesterFilter }
+            val filtered = grades.filter { matchesFilter(it) }
             return filtered
                 .filter { it.kcxz == "必修" && it.numericScore != null }
                 .map { it to (it.kcdm !in excludedKcdm) }
@@ -73,6 +111,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
     private val error = MutableStateFlow<String?>(null)
     private val scoreMode = MutableStateFlow(ScoreMode.WEIGHTED)
     private val semesterFilter = MutableStateFlow("")
+    private val schoolYearFilter = MutableStateFlow("")
     private val excludedKcdm = MutableStateFlow<Set<String>>(emptySet())
 
     val uiState: StateFlow<GradesUiState> = combine(
@@ -80,7 +119,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         repo.settings.gradesFetchedAt,
         showWebView,
         fetching,
-        combine(error, scoreMode, semesterFilter, excludedKcdm) { e, m, f, x -> Quad(e, m, f, x) },
+        combine(error, scoreMode, semesterFilter, schoolYearFilter, excludedKcdm) { e, m, f, y, x -> Quad(e, m, f, y, x) },
     ) { grades, fetchedAt, webView, fetchingNow, quad ->
         GradesUiState(
             showWebView = webView,
@@ -91,6 +130,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
             error = quad.error,
             scoreMode = quad.mode,
             semesterFilter = quad.filter,
+            schoolYearFilter = quad.schoolYear,
             excludedKcdm = quad.excluded,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), GradesUiState())
@@ -109,6 +149,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         val error: String?,
         val mode: ScoreMode,
         val filter: String,
+        val schoolYear: String,
         val excluded: Set<String>,
     )
 
@@ -167,6 +208,12 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setSemesterFilter(semester: String) {
         semesterFilter.value = semester
+        schoolYearFilter.value = ""
+    }
+
+    fun setSchoolYearFilter(schoolYear: String) {
+        schoolYearFilter.value = schoolYear
+        semesterFilter.value = ""
     }
 
     /** 切换课程是否纳入加权计算。 */

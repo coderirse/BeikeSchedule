@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.example.beikeschedule.data.pref.SettingsStore
@@ -44,6 +46,32 @@ import com.example.beikeschedule.ui.profile.ProfileScreen
 import com.example.beikeschedule.ui.schedule.ScheduleScreen
 import com.example.beikeschedule.ui.theme.BeikeScheduleTheme
 import com.example.beikeschedule.ui.theme.CourseColors
+
+/** 底部三个 Tab 的横向内容（课表/教务/我的）。需在 RowScope 内调用（用 weight 均分）。 */
+@Composable
+private fun RowScope.BottomTabContent(tab: String, onTab: (String) -> Unit) {
+    TabItem(
+        selected = tab == "schedule",
+        onClick = { onTab("schedule") },
+        icon = Icons.Default.CalendarMonth,
+        label = "课表",
+        modifier = Modifier.weight(1f),
+    )
+    TabItem(
+        selected = tab == "jw",
+        onClick = { onTab("jw") },
+        icon = Icons.Default.School,
+        label = "教务",
+        modifier = Modifier.weight(1f),
+    )
+    TabItem(
+        selected = tab == "mine",
+        onClick = { onTab("mine") },
+        icon = Icons.Default.Person,
+        label = "我的",
+        modifier = Modifier.weight(1f),
+    )
+}
 
 /** 底部 Tab 项（紧凑单列：图标在上文字在下，无默认 padding）。 */
 @Composable
@@ -97,43 +125,43 @@ class MainActivity : ComponentActivity() {
                     // 导入为全屏流程（含返回），不显示底部 Tab
                     ImportScreen(onDone = { showImport = false })
                 } else {
-                    // 整屏一张连通的暖色渐变（含顶栏/底部 Tab/内容区），所有子层透明透出
-                    Box(Modifier.fillMaxSize().background(CourseColors.scheduleGradient)) {
+                    // 整屏渐变仅在「浅色 + 课表页」开启：课表透出渐变；其他页用主题默认背景+默认底部Tab
+                    val useGradient = !darkTheme && tab == "schedule"
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            if (useGradient) CourseColors.scheduleGradient else SolidColor(Color.Transparent),
+                        ),
+                    ) {
                         Scaffold(
-                            // 内容区不消费系统栏 insets：各页顶栏自行处理状态栏，
-                            // 否则教务/我的页的 TopAppBar 会与这里双重叠加状态栏高度 → 顶部大片空白
+                            // 内容区不消费系统栏 insets：各页顶栏自行处理状态栏
                             contentWindowInsets = WindowInsets(0, 0, 0, 0),
-                            containerColor = Color.Transparent,
+                            // 开启渐变色透明，否则用主题默认背景
+                            containerColor = if (useGradient) Color.Transparent else MaterialTheme.colorScheme.background,
                             bottomBar = {
-                                // 底部栏自己处理手势条高度，背景透明透出渐变
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .navigationBarsPadding()
-                                        .height(56.dp)
-                                        .padding(horizontal = 8.dp),
-                                ) {
-                                    TabItem(
-                                        selected = tab == "schedule",
-                                        onClick = { tab = "schedule" },
-                                        icon = Icons.Default.CalendarMonth,
-                                        label = "课表",
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    TabItem(
-                                        selected = tab == "jw",
-                                        onClick = { tab = "jw" },
-                                        icon = Icons.Default.School,
-                                        label = "教务",
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    TabItem(
-                                        selected = tab == "mine",
-                                        onClick = { tab = "mine" },
-                                        icon = Icons.Default.Person,
-                                        label = "我的",
-                                        modifier = Modifier.weight(1f),
-                                    )
+                                // 底部栏：课表页透出渐变，其他页用默认 surface 色调
+                                if (useGradient) {
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .navigationBarsPadding()
+                                            .height(56.dp)
+                                            .padding(horizontal = 8.dp),
+                                    ) {
+                                        BottomTabContent(tab, onTab = { tab = it })
+                                    }
+                                } else {
+                                    // 非课表页：默认 surface 底色；去掉 tonalElevation 避免顶部阴影色块
+                                    Surface(color = MaterialTheme.colorScheme.surface) {
+                                        Row(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .navigationBarsPadding()
+                                                .height(56.dp)
+                                                .padding(horizontal = 8.dp),
+                                        ) {
+                                            BottomTabContent(tab, onTab = { tab = it })
+                                        }
+                                    }
                                 }
                             },
                         ) { padding ->
@@ -141,7 +169,7 @@ class MainActivity : ComponentActivity() {
                                 when (tab) {
                                     "jw" -> GradesScreen()
                                     "mine" -> ProfileScreen()
-                                    else -> ScheduleScreen(onImportClick = { showImport = true })
+                                    else -> ScheduleScreen(onImportClick = { showImport = true }, darkTheme = darkTheme)
                                 }
                             }
                         }

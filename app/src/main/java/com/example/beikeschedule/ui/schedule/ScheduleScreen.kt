@@ -4,6 +4,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -83,7 +85,11 @@ private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "�
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel = viewModel()) {
+fun ScheduleScreen(
+    onImportClick: () -> Unit = {},
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    viewModel: ScheduleViewModel = viewModel(),
+) {
     val state by viewModel.uiState.collectAsState()
     val reminderEnabled by viewModel.reminderEnabled.collectAsState()
     val reminderMinutes by viewModel.reminderMinutes.collectAsState()
@@ -127,9 +133,9 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
         state.currentWeek?.let { pagerState.scrollToPage(it - 1) }
     }
 
+    // 暗色模式不铺渐变（透出下面 MainActivity 的暗背景）；浅色才铺暖色渐变
     Scaffold(
-        // 全屏暖色渐变背景：顶栏/日期行/网格共用一层渐变，卡片半透明白叠加其上
-        modifier = Modifier.background(CourseColors.scheduleGradient),
+        modifier = Modifier.background(if (darkTheme) SolidColor(Color.Transparent) else CourseColors.scheduleGradient),
         containerColor = Color.Transparent,
         topBar = {
             // 自定义矮顶栏（替代 TopAppBar 64dp 大留白），内容单行紧凑排列
@@ -498,7 +504,7 @@ private fun WeekGrid(
                         }
                     }
                 }
-                // 大节分隔线
+                // 大节分隔线：贴合当前背景色（浅色=白/暗色=深），避免产生突兀的"黑框/暗带"
                 Column(Modifier.fillMaxSize()) {
                     SectionMap.BIG_SECTIONS.forEach { range ->
                         Box(
@@ -506,8 +512,8 @@ private fun WeekGrid(
                                 .weight(range.count().toFloat())
                                 .fillMaxWidth()
                                 .padding(vertical = 0.5.dp)
-                                .alpha(0.06f)
-                                .background(MaterialTheme.colorScheme.onSurface),
+                                .alpha(0.5f)
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.4f)),
                         )
                     }
                 }

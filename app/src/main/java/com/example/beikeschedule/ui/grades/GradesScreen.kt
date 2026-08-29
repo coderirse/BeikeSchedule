@@ -1,6 +1,7 @@
 package com.example.beikeschedule.ui.grades
 
 import android.webkit.WebView
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -23,7 +27,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -35,6 +42,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -143,6 +151,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                 GradesContent(
                     state = state,
                     onModeChange = { viewModel.setScoreMode(it) },
+                    onSchoolYearFilter = { viewModel.setSchoolYearFilter(it) },
                     onSemesterFilter = { viewModel.setSemesterFilter(it) },
                     onToggleCourse = { viewModel.toggleExcluded(it) },
                     onErrorDismiss = { viewModel.dismissError() },
@@ -202,12 +211,13 @@ private fun WebViewFetch(
 private fun GradesContent(
     state: GradesUiState,
     onModeChange: (ScoreMode) -> Unit,
+    onSchoolYearFilter: (String) -> Unit,
     onSemesterFilter: (String) -> Unit,
     onToggleCourse: (String) -> Unit,
     onErrorDismiss: () -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize()) {
-        item { ScoreCard(state, onModeChange, onSemesterFilter, onToggleCourse) }
+        item { ScoreCard(state, onModeChange, onSchoolYearFilter, onSemesterFilter, onToggleCourse) }
         state.grouped.forEach { (semester, grades) ->
             item(key = "header_$semester") {
                 Text(
@@ -253,6 +263,7 @@ private fun GradesContent(
 private fun ScoreCard(
     state: GradesUiState,
     onModeChange: (ScoreMode) -> Unit,
+    onSchoolYearFilter: (String) -> Unit,
     onSemesterFilter: (String) -> Unit,
     onToggleCourse: (String) -> Unit,
 ) {
@@ -297,26 +308,19 @@ private fun ScoreCard(
                 }
             }
 
-            // 加权模式：学期筛选（下拉，简洁）
-            if (state.scoreMode == ScoreMode.WEIGHTED && state.semesters.isNotEmpty()) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "学期范围",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                        modifier = Modifier.width(72.dp),
-                    )
-                    DropdownField(
-                        label = "全部学期",
-                        options = listOf("" to "全部学期") + state.semesters.map { it to it },
-                        selected = state.semesterFilter,
-                        onSelect = { onSemesterFilter(it) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+            // 加权模式：单个下拉框，打开后两竖排（左=学期，右=学年）
+            if (state.scoreMode == ScoreMode.WEIGHTED && state.schoolYears.isNotEmpty()) {
+                DualFilterField(
+                    semesterLabel = state.semesterFilter.ifBlank { "全部学期" },
+                    schoolYearLabel = state.schoolYearFilter.ifBlank { "全部学年" },
+                    semesters = listOf("" to "全部学期") + state.semestersOfSchoolYear.map { it to it },
+                    schoolYears = listOf("" to "全部学年") + state.schoolYears.map { it to it },
+                    selectedSemester = state.semesterFilter,
+                    selectedSchoolYear = state.schoolYearFilter,
+                    onSemesterSelect = onSemesterFilter,
+                    onSchoolYearSelect = onSchoolYearFilter,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Spacer(Modifier.height(8.dp))
             }
 
@@ -380,11 +384,12 @@ private fun ScoreCard(
                     Text(if (showCourseSelector) "收起课程选择" else "自定义纳入计算的课程（${state.weightEligible.count { it.second }}/${state.weightEligible.size}）")
                 }
                 if (showCourseSelector) {
-                    // 课程可能很多，限高滚动，避免卡片撑出屏幕
+                    // 课程可能很多，限高 + 可滚动，避免卡片撑出屏幕且能下滑查看
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 260.dp),
+                            .heightIn(max = 260.dp)
+                            .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(0.dp),
                     ) {
                         state.weightEligible.forEach { (grade, included) ->
@@ -435,5 +440,67 @@ private fun GradeRow(grade: GradeEntity) {
             fontWeight = FontWeight.Bold,
             color = if (grade.isFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
         )
+    }
+}
+
+/** 学年+学期双列筛选：单个下拉框，打开后左列选学期、右列选学年。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DualFilterField(
+    semesterLabel: String,
+    schoolYearLabel: String,
+    semesters: List<Pair<String, String>>,
+    schoolYears: List<Pair<String, String>>,
+    selectedSemester: String,
+    selectedSchoolYear: String,
+    onSemesterSelect: (String) -> Unit,
+    onSchoolYearSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = modifier) {
+        Row(
+            Modifier
+                .menuAnchor(androidx.compose.material3.ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
+                .fillMaxWidth()
+                .background(
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                    RoundedCornerShape(8.dp),
+                )
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "筛选：${schoolYearLabel} · ${semesterLabel}",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Text("▾", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.Top) {
+                // 左列：学期
+                Column(Modifier.weight(1f)) {
+                    Text("学期", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    semesters.forEach { (value, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label, fontSize = 13.sp, fontWeight = if (value == selectedSemester) FontWeight.Bold else FontWeight.Normal) },
+                            onClick = { onSemesterSelect(value); expanded = false },
+                        )
+                    }
+                }
+                VerticalDivider(Modifier.height(220.dp))
+                // 右列：学年
+                Column(Modifier.weight(1f)) {
+                    Text("学年", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    schoolYears.forEach { (value, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label, fontSize = 13.sp, fontWeight = if (value == selectedSchoolYear) FontWeight.Bold else FontWeight.Normal) },
+                            onClick = { onSchoolYearSelect(value); expanded = false },
+                        )
+                    }
+                }
+            }
+        }
     }
 }
