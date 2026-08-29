@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -84,100 +85,96 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
-            // —— 学籍信息 ——
-            SectionTitle("学籍信息")
-            Card(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    if (studentProfile.isLoggedIn) {
-                        if (studentProfile.xm.isNotBlank()) ProfileRow("姓名", studentProfile.xm)
-                        if (studentProfile.xh.isNotBlank()) ProfileRow("学号", studentProfile.xh)
-                        if (studentProfile.yxmc.isNotBlank()) ProfileRow("学院", studentProfile.yxmc)
-                        if (studentProfile.zymc.isNotBlank()) ProfileRow("专业", studentProfile.zymc)
-                        if (studentProfile.bjmc.isNotBlank()) ProfileRow("班级", studentProfile.bjmc)
-                        if (studentProfile.njmc.isNotBlank()) ProfileRow("年级", studentProfile.njmc)
-                        if (studentProfile.xjsfzx.isNotBlank() || studentProfile.xjsfzc.isNotBlank()) {
-                            ProfileRow(
-                                "学籍状态",
-                                (if (studentProfile.xjsfzx == "1") "在校" else "不在校") +
-                                    " · " + (if (studentProfile.xjsfzc == "1") "已注册" else "未注册"),
-                            )
-                        }
-                    } else {
-                        Text(
-                            "未获取学籍信息",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            "在教务 Tab 抓取一次成绩后自动显示",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            // —— 学籍信息卡 ——
+            SectionCard(title = "学籍信息") {
+                if (studentProfile.isLoggedIn) {
+                    if (studentProfile.xm.isNotBlank()) ProfileRow("姓名", studentProfile.xm)
+                    if (studentProfile.xh.isNotBlank()) ProfileRow("学号", studentProfile.xh)
+                    if (studentProfile.yxmc.isNotBlank()) ProfileRow("学院", studentProfile.yxmc)
+                    if (studentProfile.zymc.isNotBlank()) ProfileRow("专业", studentProfile.zymc)
+                    if (studentProfile.bjmc.isNotBlank()) ProfileRow("班级", studentProfile.bjmc)
+                    if (studentProfile.njmc.isNotBlank()) ProfileRow("年级", studentProfile.njmc)
+                    if (studentProfile.xjsfzx.isNotBlank() || studentProfile.xjsfzc.isNotBlank()) {
+                        ProfileRow(
+                            "学籍状态",
+                            (if (studentProfile.xjsfzx == "1") "在校" else "不在校") +
+                                " · " + (if (studentProfile.xjsfzc == "1") "已注册" else "未注册"),
                         )
                     }
+                } else {
+                    Text(
+                        "未获取学籍信息",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "在教务 Tab 抓取一次成绩后自动显示",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
                 }
             }
 
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            Spacer(Modifier.height(12.dp))
 
-            // —— 外观 ——
-            SectionTitle("外观")
-            DropdownField(
-                label = "主题",
-                options = listOf(
-                    SettingsStore.ThemeMode.SYSTEM to "跟随系统",
-                    SettingsStore.ThemeMode.LIGHT to "浅色",
-                    SettingsStore.ThemeMode.DARK to "深色",
-                ),
-                selected = themeMode,
-                onSelect = { viewModel.setThemeMode(it) },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            )
-
-            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-
-            // —— 通用 ——
-            SectionTitle("通用")
-            val subtitle = when (val u = update) {
-                is UpdateState.Checking -> "正在检查…"
-                is UpdateState.UpToDate -> "已是最新版本"
-                is UpdateState.Available -> "发现新版本 v${u.latestVersion}，点击查看"
-                is UpdateState.Failed -> u.message
-                UpdateState.Idle -> "检查 GitHub Releases 是否有新版本"
+            // —— 外观卡 ——
+            SectionCard(title = "外观") {
+                DropdownField(
+                    label = "主题",
+                    options = listOf(
+                        SettingsStore.ThemeMode.SYSTEM to "跟随系统",
+                        SettingsStore.ThemeMode.LIGHT to "浅色",
+                        SettingsStore.ThemeMode.DARK to "深色",
+                    ),
+                    selected = themeMode,
+                    onSelect = { viewModel.setThemeMode(it) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
-            SettingsRow(
-                title = "检查更新",
-                subtitle = subtitle,
-                subtitleColor = if (update is UpdateState.Failed) MaterialTheme.colorScheme.error
-                else if (update is UpdateState.Available) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                trailing = if (update is UpdateState.Available) {
-                    { TextButton(onClick = { showUpdateDialog = true }) { Text("查看") } }
-                } else null,
-                onClick = {
-                    val u = update
-                    if (u is UpdateState.Available) showUpdateDialog = true
-                    else viewModel.checkUpdate()
-                },
-            )
-            SettingsRow(
-                title = "GitHub 仓库",
-                subtitle = REPO_URL.removePrefix("https://"),
-                icon = { Icon(painterResource(R.drawable.ic_github), "GitHub", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurface) },
-                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))) },
-            )
-            SettingsRow(
-                title = "版本",
-                subtitle = appVersion,
-                onClick = null,
-            )
-            SettingsRow(
-                title = "清除成绩缓存",
-                subtitle = "删除本地成绩与 GPA 数据，下次进入教务 Tab 重新抓取",
-                onClick = { viewModel.clearGradesCache() },
-            )
+
+            Spacer(Modifier.height(12.dp))
+
+            // —— 通用卡 ——
+            SectionCard(title = "通用") {
+                val subtitle = when (val u = update) {
+                    is UpdateState.Checking -> "正在检查…"
+                    is UpdateState.UpToDate -> "已是最新版本"
+                    is UpdateState.Available -> "发现新版本 v${u.latestVersion}，点击查看"
+                    is UpdateState.Failed -> u.message
+                    UpdateState.Idle -> "检查 GitHub Releases 是否有新版本"
+                }
+                SettingsRow(
+                    title = "检查更新",
+                    subtitle = subtitle,
+                    subtitleColor = if (update is UpdateState.Failed) MaterialTheme.colorScheme.error
+                    else if (update is UpdateState.Available) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    trailing = if (update is UpdateState.Available) {
+                        { TextButton(onClick = { showUpdateDialog = true }) { Text("查看") } }
+                    } else null,
+                    onClick = {
+                        val u = update
+                        if (u is UpdateState.Available) showUpdateDialog = true
+                        else viewModel.checkUpdate()
+                    },
+                )
+                SettingsRow(
+                    title = "GitHub 仓库",
+                    subtitle = REPO_URL.removePrefix("https://"),
+                    icon = { Icon(painterResource(R.drawable.ic_github), "GitHub", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurface) },
+                    onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))) },
+                )
+                SettingsRow(
+                    title = "版本",
+                    subtitle = appVersion,
+                    onClick = null,
+                )
+                SettingsRow(
+                    title = "清除成绩缓存",
+                    subtitle = "删除本地成绩与 GPA 数据，下次进入教务 Tab 重新抓取",
+                    onClick = { viewModel.clearGradesCache() },
+                )
+            }
 
             Spacer(Modifier.height(32.dp))
             Text(
@@ -210,14 +207,23 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
     }
 }
 
+/** 卡片式分区：深色圆角卡片，内部标题 + 内容（仿 Net-USTB 设置页）。 */
 @Composable
-private fun SectionTitle(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-    )
+private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            content()
+        }
+    }
 }
 
 @Composable

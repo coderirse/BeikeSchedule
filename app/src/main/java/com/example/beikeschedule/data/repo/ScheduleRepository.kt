@@ -6,6 +6,7 @@ import com.example.beikeschedule.data.local.CourseEntity
 import com.example.beikeschedule.data.local.GradeEntity
 import com.example.beikeschedule.data.local.SectionTimeEntity
 import com.example.beikeschedule.data.pref.SettingsStore
+import com.example.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.flow.Flow
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -37,11 +38,18 @@ class ScheduleRepository(context: Context) {
         sectionTimes: List<SectionTimeEntity>,
     ) {
         courseDao.deleteBySource(CourseEntity.SOURCE_IMPORT)
-        courseDao.insertAll(courses)
+        courseDao.insertAll(assignImportColors(courses))
         sectionTimeDao.clear()
         sectionTimeDao.insertAll(sectionTimes)
     }
 
+    /**
+     * 教务课程颜色去重：
+     * - 同名课程（多时段）共享同一颜色；
+     * - 有原始 XB 色值（且在色板索引内）的课程优先保留该色；
+     * - 同一色值被多门不同课程占用时，后者顺延到下一个未占用的色板下标；
+     * - 无固定时间课程（原 99999/无 KEY）不再用 name 哈希撞色，统一走分配。
+     */
     suspend fun addManualCourse(course: CourseEntity) =
         courseDao.insert(course.copy(source = CourseEntity.SOURCE_MANUAL, taskId = ""))
 
@@ -73,6 +81,51 @@ class ScheduleRepository(context: Context) {
     suspend fun clearSampleData() = courseDao.deleteBySource(CourseEntity.SOURCE_SAMPLE)
 
     companion object {
+        /**
+         * 教务课程颜色去重（纯函数，导入插入前调用）：
+         * - 同名课程（多时段）共享同一颜色；
+         * - 有原始 XB 色值（且在色板索引内）的课程优先保留该色；
+         * - 同一色值被多门不同课程占用时，后者顺延到下一个未占用的色板下标；
+         * - 无固定时间课程（原 99999/无 KEY）不再用 name 哈希撞色，统一走分配。
+         */
+        internal fun assignImportColors(courses: List<CourseEntity>): List<CourseEntity> {
+            val paletteSize = 10 // 与 CourseColors.basePalette 尺寸一致
+            val usedColors = mutableMapOf<Int, String>() // colorIndex -> 首次占用的课程名
+            val nameColor = mutableMapOf<String, Int>()   // 课程名 -> 分配到的色
+            val result = mutableListOf<CourseEntity>()
+
+            fun pick(original: Int, courseName: String): Int {
+                val norm = CourseColors.importedOf(original)
+                // 同名已分配，复用
+                nameColor[courseName]?.let { return it }
+                // 优先尝试教务原始色（未被他课占用），否则顺延到未占用色
+                val candidates = sequenceOf(norm) + (0 until paletteSize)
+                for (c in candidates) {
+                    val holder = usedColors[c]
+                    if (holder == null || holder == courseName) {
+                        usedColors[c] = courseName
+                        nameColor[courseName] = c
+                        return c
+                    }
+                }
+                // 全部占满（理论上不可能，paletteSize 大于课程数），取模兜底
+                val fallback = kotlin.math.abs(courseName.hashCode()) % paletteSize
+                usedColors[fallback] = courseName
+                nameColor[courseName] = fallback
+                return fallback
+            }
+
+            courses.forEach { course ->
+                val color = if (course.colorIndex == CourseEntity.COLOR_UNSCHEDULED) {
+                    pick(kotlin.math.abs(course.name.hashCode()), course.name)
+                } else {
+                    pick(course.colorIndex, course.name)
+                }
+                result += course.copy(colorIndex = color)
+            }
+            return result
+        }
+
         /**
          * 由第 1 周周一日期推算今天处于第几周；不在学期范围内返回 null。
          * firstMonday 格式 yyyy-MM-dd。

@@ -73,6 +73,8 @@ fun JwWebView(
                 WebView.setWebContentsDebuggingEnabled(true)
             }
             WebView(it).apply {
+                // 教务登录页 PC 布局加载慢，且默认白背景刺眼；设淡暖色底让加载过程更柔和
+                setBackgroundColor(android.graphics.Color.parseColor("#F5EFEF"))
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 // 配合 PAGE_FIX_JS 的 meta 改写：宽视口布局 + 总览缩放把 PC 页面缩放到一屏

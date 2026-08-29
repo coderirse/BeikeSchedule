@@ -54,6 +54,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -127,10 +128,14 @@ fun ScheduleScreen(onImportClick: () -> Unit = {}, viewModel: ScheduleViewModel 
     }
 
     Scaffold(
+        // 全屏暖色渐变背景：顶栏/日期行/网格共用一层渐变，卡片半透明白叠加其上
+        modifier = Modifier.background(CourseColors.scheduleGradient),
+        containerColor = Color.Transparent,
         topBar = {
             // 自定义矮顶栏（替代 TopAppBar 64dp 大留白），内容单行紧凑排列
             // 外层 Scaffold 已不消费状态栏 inset（contentWindowInsets=0），故这里自行 statusBarsPadding
-            Surface(color = MaterialTheme.colorScheme.surface) {
+            // 半透明白融入渐变背景
+            Surface(color = Color.White.copy(alpha = 0.4f)) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -622,7 +627,7 @@ private fun UnscheduledSheet(
                 )
             }
             courses.forEach { course ->
-                val (bg, fg) = CourseColors.of(course.name.hashCode())
+                val (bg, fg) = CourseColors.of(course.colorIndex)
                 Surface(
                     color = bg,
                     shape = RoundedCornerShape(8.dp),

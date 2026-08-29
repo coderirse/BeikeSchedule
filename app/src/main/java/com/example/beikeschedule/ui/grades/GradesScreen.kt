@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,12 +18,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,6 +53,7 @@ import com.example.beikeschedule.data.local.GradeEntity
 import com.example.beikeschedule.import.GradesBridge
 import com.example.beikeschedule.import.JwWebView
 import com.example.beikeschedule.import.loadAssetScript
+import com.example.beikeschedule.ui.schedule.DropdownField
 import java.text.DecimalFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -66,6 +66,7 @@ private val SCORE_FMT = DecimalFormat("0.00")
 @Composable
 fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsState()
+    var showRefreshConfirm by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -81,7 +82,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                 ) {
                     Text("成绩", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     if (!state.showWebView) {
-                        IconButton(onClick = { viewModel.startRefresh() }) {
+                        IconButton(onClick = { showRefreshConfirm = true }) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新成绩")
                         }
                     }
@@ -90,6 +91,20 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
+            if (showRefreshConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showRefreshConfirm = false },
+                    title = { Text("重新抓取成绩") },
+                    text = { Text("将进入教务系统重新抓取成绩与 GPA，当前本地数据会保留到抓取成功。是否继续？") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showRefreshConfirm = false
+                            viewModel.startRefresh()
+                        }) { Text("继续") }
+                    },
+                    dismissButton = { TextButton(onClick = { showRefreshConfirm = false }) { Text("取消") } },
+                )
+            }
             if (state.showWebView) {
                 WebViewFetch(
                     fetching = state.fetching,
@@ -281,27 +296,27 @@ private fun ScoreCard(
                 }
             }
 
-            // 加权模式：学期筛选
-            if (state.scoreMode == ScoreMode.WEIGHTED && state.semesters.size > 1) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp),
-                    modifier = Modifier.fillMaxWidth(),
+            // 加权模式：学期筛选（下拉，简洁）
+            if (state.scoreMode == ScoreMode.WEIGHTED && state.semesters.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    FilterChip(
-                        selected = state.semesterFilter.isBlank(),
-                        onClick = { onSemesterFilter("") },
-                        label = { Text("全部", fontSize = 11.sp) },
+                    Text(
+                        "学期范围",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                        modifier = Modifier.width(72.dp),
                     )
-                    state.semesters.forEach { sem ->
-                        FilterChip(
-                            selected = state.semesterFilter == sem,
-                            onClick = { onSemesterFilter(sem) },
-                            label = { Text(sem, fontSize = 11.sp) },
-                        )
-                    }
+                    DropdownField(
+                        label = "全部学期",
+                        options = listOf("" to "全部学期") + state.semesters.map { it to it },
+                        selected = state.semesterFilter,
+                        onSelect = { onSemesterFilter(it) },
+                        modifier = Modifier.weight(1f),
+                    )
                 }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(8.dp))
             }
 
             // 主数值
