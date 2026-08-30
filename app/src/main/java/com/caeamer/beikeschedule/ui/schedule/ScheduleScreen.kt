@@ -69,6 +69,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.local.SectionTimeEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
+import com.caeamer.beikeschedule.model.CourseMerger
 import com.caeamer.beikeschedule.model.SectionMap
 import com.caeamer.beikeschedule.model.SessionExpander
 import com.caeamer.beikeschedule.model.WeekUtils
@@ -150,16 +151,27 @@ fun ScheduleScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .height(48.dp)
+                        .height(58.dp)
                         .padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // 学期名可点击 → 学期设置
+                    // 学期名（下挂今天日期与周次状态）可点击 → 学期设置
                     TextButton(onClick = { showSettings = true }) {
-                        Text(
-                            text = state.semester.name.ifBlank { "贝壳课表" },
-                            style = MaterialTheme.typography.titleMedium,
-                        )
+                        Column(horizontalAlignment = Alignment.Start) {
+                            Text(
+                                text = state.semester.name.ifBlank { "贝壳课表" },
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = todayStatusLine(state),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                         Icon(
                             Icons.Default.ExpandMore,
                             contentDescription = "学期设置",
@@ -392,7 +404,22 @@ private fun EmptyState(onLoadSample: () -> Unit, onImportClick: () -> Unit, onAd
     }
 }
 
-/** 顶部日期行：左格对齐节次列，N 天列；优先用官方教学周日历取周一日期，今天用主题色胶囊高亮。 */
+/** 顶栏学期名下的小字：今天日期 + 学期状态（未开学/第N周/假期中/已放假）。 */
+private fun todayStatusLine(state: ScheduleUiState): String {
+    val today = LocalDate.now()
+    val dateText = "${today.monthValue}月${today.dayOfMonth}日 周${"一二三四五六日"[today.dayOfWeek.value - 1]}"
+    val status = when {
+        // locateWeek 的显示语义"未开学视为第1周"用 beforeStart 区分，不能只看 currentWeek
+        state.beforeStart -> "未开学"
+        state.inHoliday -> "假期中"
+        state.currentWeek != null -> "第${state.currentWeek}周"
+        state.afterEnd -> "已放假"
+        else -> "未开学"
+    }
+    return "$dateText · $status"
+}
+
+/** 顶部日期行：左格对齐节次列，N 天列；优先用官方教学周日历取周一日期，今天用主题色实心胶囊高亮。 */
 @Composable
 private fun DateRow(week: Int, semester: SettingsStore.SemesterConfig, today: LocalDate, days: List<Int>) {
     val monday = remember(semester, week) {
@@ -408,10 +435,10 @@ private fun DateRow(week: Int, semester: SettingsStore.SemesterConfig, today: Lo
                 modifier = Modifier.weight(1f).padding(horizontal = 1.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                // 今天：主题色胶囊背景，扫视一眼定位
+                // 今天：主题色实心胶囊 + 白字，一眼定位
                 Column(
                     modifier = Modifier.background(
-                        if (isToday) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent,
+                        if (isToday) MaterialTheme.colorScheme.primary else Color.Transparent,
                         RoundedCornerShape(10.dp),
                     ).padding(horizontal = 8.dp, vertical = 2.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -420,13 +447,14 @@ private fun DateRow(week: Int, semester: SettingsStore.SemesterConfig, today: Lo
                         "周${WEEKDAY_NAMES[day - 1]}",
                         fontSize = 12.sp,
                         fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-                        color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        color = if (isToday) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                     )
                     if (date != null) {
                         Text(
                             "${date.monthValue}/${date.dayOfMonth}",
                             fontSize = 10.sp,
-                            color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (isToday) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -455,6 +483,8 @@ private fun WeekGrid(
     onCourseClick: (CourseEntity) -> Unit,
 ) {
     val timeMap = remember(sectionTimes) { sectionTimes.associateBy { it.section } }
+    // 同名同段多行（教务单周调课/单双周拆分）先合并成一张卡，再进冲突聚类
+    val mergedCourses = remember(courses) { CourseMerger.mergeSameSlot(courses) }
     Row(Modifier.fillMaxSize()) {
         // 节次列
         // 节次列：按 6 大节显示（一~六 + 起止时间），行高按小节数加权
@@ -480,15 +510,15 @@ private fun WeekGrid(
             // 冲突簇：仅"本周有课且节次重叠"的课程分簇并排窄列（含传递重叠，A-B-C 链式同簇）；
             // 互不重叠的课程各自占满整列宽。非本周课程保持旧语义：只在与所有已显示课程
             // 都不重叠的空位整宽淡化显示。
-            val dayLayout = remember(courses, day, week) {
-                val actives = courses.filter { it.dayOfWeek == day && it.hasClassOnWeek(week) }
+            val dayLayout = remember(mergedCourses, day, week) {
+                val actives = mergedCourses.filter { it.dayOfWeek == day && it.hasClassOnWeek(week) }
                     .sortedBy { it.startSection }
                 val clusters = mutableListOf<MutableList<CourseEntity>>()
                 actives.forEach { c ->
                     val cluster = clusters.firstOrNull { cl -> cl.any { sectionsOverlap(it, c) } }
                     if (cluster != null) cluster += c else clusters += mutableListOf(c)
                 }
-                val inactives = courses.filter { it.dayOfWeek == day && !it.hasClassOnWeek(week) }
+                val inactives = mergedCourses.filter { it.dayOfWeek == day && !it.hasClassOnWeek(week) }
                     .fold(mutableListOf<CourseEntity>()) { shown, c ->
                         val blocked = actives.any { sectionsOverlap(it, c) } ||
                             shown.any { sectionsOverlap(it, c) }

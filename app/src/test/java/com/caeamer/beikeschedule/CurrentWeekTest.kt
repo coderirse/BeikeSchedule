@@ -84,19 +84,33 @@ class CurrentWeekTest {
         val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 8, 28))
         assertEquals(1, loc.week)
         assertEquals(false, loc.isHoliday)
+        // 状态文案语义：开学前必须能区分出来（v1.1.1 曾因此误显示"第1周"）
+        assertEquals(true, loc.beforeStart)
     }
 
     @Test
-    fun `官方日历 学期结束后 week 为 null`() {
+    fun `官方日历 学期结束后 week 为 null 且标记 afterEnd`() {
         val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 11, 5))
         assertNull(loc.week)
         assertEquals(false, loc.isHoliday)
+        assertEquals(true, loc.afterEnd)
+        assertEquals(false, loc.beforeStart)
+    }
+
+    @Test
+    fun `官方日历 开学当天不算 beforeStart`() {
+        // 9/7 是第 1 周周一，当天已是学期内
+        val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 9, 7))
+        assertEquals(1, loc.week)
+        assertEquals(false, loc.beforeStart)
     }
 
     @Test
     fun `官方日历 空日历回退 week 为 null`() {
         val loc = ScheduleRepository.locateWeek(emptyList(), LocalDate.of(2026, 9, 21))
         assertNull(loc.week)
+        assertEquals(false, loc.beforeStart)
+        assertEquals(false, loc.afterEnd)
     }
 
     // —— 严格教学周判定 teachingWeekOf（提醒排期用）——

@@ -30,6 +30,10 @@ data class ScheduleUiState(
     val inHoliday: Boolean = false,
     /** 假期提示：假期后第一个教学周的周一日期。 */
     val nextWeekMonday: String? = null,
+    /** 开学前（显示语义仍视为第 1 周，但状态文案应显示"未开学"）。 */
+    val beforeStart: Boolean = false,
+    /** 学期已结束（currentWeek=null）。 */
+    val afterEnd: Boolean = false,
     val loaded: Boolean = false,
 ) {
     /** 未隐藏的有固定时间课程。 */
@@ -62,6 +66,8 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
             currentWeek = location.week,
             inHoliday = location.isHoliday,
             nextWeekMonday = location.nextWeekMonday,
+            beforeStart = location.beforeStart,
+            afterEnd = location.afterEnd,
             loaded = true,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ScheduleUiState())
@@ -92,10 +98,16 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         if (semester.weekMondays.isNotEmpty()) {
             ScheduleRepository.locateWeek(semester.weekMondays)
         } else {
+            val week = ScheduleRepository.currentWeek(semester.firstMonday, semester.totalWeeks)
+            val start = runCatching { java.time.LocalDate.parse(semester.firstMonday) }.getOrNull()
+            val today = java.time.LocalDate.now()
             ScheduleRepository.Companion.WeekLocation(
-                week = ScheduleRepository.currentWeek(semester.firstMonday, semester.totalWeeks),
+                week = week,
                 isHoliday = false,
                 nextWeekMonday = null,
+                beforeStart = start != null && today.isBefore(start),
+                afterEnd = week == null && start != null &&
+                    today.isAfter(start.plusWeeks(semester.totalWeeks.toLong())),
             )
         }
 

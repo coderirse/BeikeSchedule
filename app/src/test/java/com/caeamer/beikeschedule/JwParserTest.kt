@@ -79,6 +79,38 @@ class JwParserTest {
         assertEquals(7, JwParser.parseDayOfWeek("xq7_jc5"))
     }
 
+    @Test
+    fun `单周调课行 - 无KSJC从KEY的jc段推导小节`() {
+        // 教务"单周调课行"真实结构：KSJC/JSJC 为 null，地点写"-"，只有 KEY 标明调到哪一大节
+        val json = """
+            [
+              {"RWH":"2026-2027-1-4040016-003","KEY":"xq3_jc1","KSJC":null,"JSJC":null,
+               "SKSJ":"机电传动控制\n韩天\n8周\n【校本部】-","ZC":"0000000010000000000000000000000000","XB":5},
+              {"RWH":"2026-2027-1-4040016-003","KEY":"xq3_jc2","KSJC":null,"JSJC":null,
+               "SKSJ":"机电传动控制\n韩天\n7周\n【校本部】-","ZC":"0000000100000000000000000000000000","XB":5},
+              {"RWH":"r2","KEY":"xq4_jc6","KSJC":null,"JSJC":null,
+               "SKSJ":"电子技术实习C\n某某\n9周\n【校本部】-","ZC":"0000000010000000000000000000000000","XB":7}
+            ]
+        """.trimIndent()
+        val courses = JwParser.parseCourses(json)
+        assertEquals(3, courses.size)
+        // xq3_jc1 → 周三 1-2 节；xq3_jc2 → 周三 3-4 节；xq4_jc6 → 周四 11-12 节
+        assertEquals(1 to 2, courses[0].startSection to courses[0].endSection)
+        assertEquals(3, courses[0].dayOfWeek)
+        assertEquals(3 to 4, courses[1].startSection to courses[1].endSection)
+        assertEquals(11 to 12, courses[2].startSection to courses[2].endSection)
+        assertTrue(courses[0].hasClassOnWeek(8))
+    }
+
+    @Test
+    fun `KEY 小节段推导 - 各大节边界`() {
+        assertEquals(1 to 2, JwParser.keySectionRange("xq3_jc1"))
+        assertEquals(9 to 10, JwParser.keySectionRange("xq3_jc5"))
+        assertEquals(11 to 12, JwParser.keySectionRange("xq3_jc6"))
+        assertEquals(null, JwParser.keySectionRange("xq3_jc7"))
+        assertEquals(null, JwParser.keySectionRange("bz"))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `KEY 解析 - 非法格式抛异常`() {
         JwParser.parseDayOfWeek("bad_key")

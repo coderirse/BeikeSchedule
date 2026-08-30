@@ -2,6 +2,7 @@ package com.caeamer.beikeschedule.import.parser
 
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.local.SectionTimeEntity
+import com.caeamer.beikeschedule.model.SectionMap
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -106,8 +107,11 @@ object JwParser {
         val unscheduled = key == "bz" || key.isNullOrBlank() || colorIndex == CourseEntity.COLOR_UNSCHEDULED
 
         val dayOfWeek = if (unscheduled) 0 else parseDayOfWeek(key!!)
-        val startSection = if (unscheduled) 0 else obj["KSJC"]?.jsonPrimitive?.intOrNull ?: 0
-        val endSection = if (unscheduled) 0 else obj["JSJC"]?.jsonPrimitive?.intOrNull ?: startSection
+        // 小节：教务"单周调课行"没有 KSJC/JSJC（null），只有 KEY 的 jc 段标明调课到哪一大节
+        // （如 xq3_jc1=1-2节），此时从 KEY 推导，避免解析成 0 导致渲染成错位细条
+        val keyRange = key?.let { keySectionRange(it) }
+        val startSection = if (unscheduled) 0 else obj["KSJC"]?.jsonPrimitive?.intOrNull ?: keyRange?.first ?: 0
+        val endSection = if (unscheduled) 0 else obj["JSJC"]?.jsonPrimitive?.intOrNull ?: keyRange?.second ?: startSection
 
         val (name, teacher, location) = splitSksj(sksj, unscheduled)
 
@@ -130,6 +134,12 @@ object JwParser {
             source = CourseEntity.SOURCE_IMPORT,
         )
     }
+
+    /** KEY 的 jc 段 → 该大节的小节区间（jc=1 → 1..2，jc=6 → 11..12）；无法识别返回 null。 */
+    internal fun keySectionRange(key: String): Pair<Int, Int>? =
+        Regex("jc(\\d+)").find(key)?.groupValues?.get(1)?.toIntOrNull()
+            ?.takeIf { it in 1..SectionMap.BIG_SECTIONS.size }
+            ?.let { big -> SectionMap.BIG_SECTIONS[big - 1].let { it.first to it.last } }
 
     /** 从备注文本解析周数（"机械设计 5-7周"、"微机原理与应用B 15,16周"），生成长度 34 的位图。 */
     internal fun parseNoteWeeks(sksj: String): String {
