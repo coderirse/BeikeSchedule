@@ -170,16 +170,20 @@ class ScheduleRepository(context: Context) {
             val week: Int?,
             val isHoliday: Boolean,
             val nextWeekMonday: String?,
+            /** 开学前（显示语义仍视为第 1 周，便于课表默认定位，但状态文案应显示"未开学"）。 */
+            val beforeStart: Boolean = false,
+            /** 学期已结束（week=null）。 */
+            val afterEnd: Boolean = false,
         )
 
         /**
          * 用官方教学周日历定位今天：周→周一映射精确反映长假跳周（如国庆周不占序号）。
-         * weekMondays 下标+1 = 教学周。未开学视为第 1 周；学期结束返回 week=null。
+         * weekMondays 下标+1 = 教学周。未开学视为第 1 周（beforeStart=true）；学期结束返回 week=null（afterEnd=true）。
          */
         fun locateWeek(weekMondays: List<String>, today: LocalDate = LocalDate.now()): WeekLocation {
             val mondays = weekMondays.mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
             if (mondays.isEmpty()) return WeekLocation(null, false, null)
-            if (today.isBefore(mondays.first())) return WeekLocation(1, false, null)
+            if (today.isBefore(mondays.first())) return WeekLocation(1, false, null, beforeStart = true)
             mondays.forEachIndexed { i, monday ->
                 val sunday = monday.plusDays(6)
                 if (!today.isBefore(monday) && !today.isAfter(sunday)) {
@@ -190,7 +194,7 @@ class ScheduleRepository(context: Context) {
                     return WeekLocation(i + 2, true, mondays[i + 1].toString())
                 }
             }
-            return WeekLocation(null, false, null)
+            return WeekLocation(null, false, null, afterEnd = true)
         }
 
         /**

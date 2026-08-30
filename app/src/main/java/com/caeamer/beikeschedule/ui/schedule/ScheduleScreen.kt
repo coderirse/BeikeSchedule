@@ -404,14 +404,17 @@ private fun EmptyState(onLoadSample: () -> Unit, onImportClick: () -> Unit, onAd
     }
 }
 
-/** 顶栏学期名下的小字：今天日期 + 学期状态（未开学/第N周/假期中）。 */
+/** 顶栏学期名下的小字：今天日期 + 学期状态（未开学/第N周/假期中/已放假）。 */
 private fun todayStatusLine(state: ScheduleUiState): String {
     val today = LocalDate.now()
     val dateText = "${today.monthValue}月${today.dayOfMonth}日 周${"一二三四五六日"[today.dayOfWeek.value - 1]}"
     val status = when {
-        state.currentWeek == null -> "未开学"
+        // locateWeek 的显示语义"未开学视为第1周"用 beforeStart 区分，不能只看 currentWeek
+        state.beforeStart -> "未开学"
         state.inHoliday -> "假期中"
-        else -> "第${state.currentWeek}周"
+        state.currentWeek != null -> "第${state.currentWeek}周"
+        state.afterEnd -> "已放假"
+        else -> "未开学"
     }
     return "$dateText · $status"
 }
