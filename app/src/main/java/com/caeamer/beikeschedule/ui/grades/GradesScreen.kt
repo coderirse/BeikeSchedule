@@ -61,7 +61,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -84,6 +88,13 @@ import java.util.Locale
 
 /** Locale 无关的两位小数（DecimalFormat 跟随系统 locale，部分地区会输出 "91,50"）。 */
 private fun fmt2(v: Double): String = String.format(Locale.US, "%.2f", v)
+
+/** 消费本组件内的全部滚动 delta（内嵌滚动区到顶/到底不联动父页面滑动）。 */
+private fun Modifier.consumeAllScroll(): Modifier = nestedScroll(
+    object : NestedScrollConnection {
+        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset = available
+    },
+)
 
 /** 教务 Tab：成绩/考试分段 + 加权/GPA 双模式 + 学期筛选 + 课程勾选 + 学分进度。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -371,7 +382,7 @@ private fun CreditProgressCard(state: GradesUiState) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 300.dp)
-                        .verticalScroll(rememberScrollState()),
+                        .consumeAllScroll().verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     state.creditRows.forEach { row ->
@@ -754,7 +765,7 @@ private fun ScoreCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 260.dp)
-                            .verticalScroll(rememberScrollState()),
+                            .consumeAllScroll().verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(0.dp),
                     ) {
                         state.weightEligible.forEach { (grade, included) ->
