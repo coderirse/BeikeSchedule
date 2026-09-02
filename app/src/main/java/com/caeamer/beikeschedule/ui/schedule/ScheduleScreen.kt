@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
@@ -676,7 +677,7 @@ private fun Modifier.coursePosition(startSection: Int, span: Int): Modifier =
         }
     }
 
-/** 无固定时间课程弹层（实验周/网课等）：卡片可点击进入编辑。 */
+/** 无固定时间课程弹层（实验周/网课等）：同名行去重、LazyColumn 稳定滚动不截断、卡片可点击进入编辑。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun UnscheduledSheet(
@@ -684,20 +685,26 @@ private fun UnscheduledSheet(
     onDismiss: () -> Unit,
     onCourseClick: (CourseEntity) -> Unit,
 ) {
+    // 教务对"单周调课/单双周拆分"的同名课程会拆多行（如 电子技术实验 + 电子技术实验【实验】）
+    // 注意：remember 必须在 ModalBottomSheet 外，sheet 内容 lambda 里放 remember 会导致内容叠加重影
+    val distinctCourses = remember(courses) { courses.distinctBy { it.name } }
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+        LazyColumn(
+            Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("无固定时间课程", style = MaterialTheme.typography.titleMedium)
-            if (courses.isEmpty()) {
-                Text(
-                    "没有无固定时间课程",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            item { Text("无固定时间课程", style = MaterialTheme.typography.titleMedium) }
+            if (distinctCourses.isEmpty()) {
+                item {
+                    Text(
+                        "没有无固定时间课程",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            courses.forEach { course ->
+            items(distinctCourses, key = { it.id }) { course ->
                 val (bg, fg) = CourseColors.of(course.colorIndex)
                 Surface(
                     color = bg,
