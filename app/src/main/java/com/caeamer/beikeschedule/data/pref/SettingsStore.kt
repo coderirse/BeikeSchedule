@@ -69,6 +69,7 @@ class SettingsStore(private val context: Context) {
         val WEIGHT_SEMESTER = stringPreferencesKey("weight_semester")
         val WEIGHT_EXCLUDED = stringPreferencesKey("weight_excluded")
         val HIDE_WEEKEND = booleanPreferencesKey("hide_weekend")
+        val HIDE_SCORES = booleanPreferencesKey("hide_scores")
         val XFLBYQ_JSON = stringPreferencesKey("xflbyq_json")
         val BXKQK_JSON = stringPreferencesKey("bxkqk_json")
         val EXAM_REMINDER_CODES = stringPreferencesKey("exam_reminder_codes")
@@ -213,6 +214,13 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setHideWeekend(hidden: Boolean) {
         context.dataStore.edit { p -> p[Keys.HIDE_WEEKEND] = hidden }
+    }
+
+    /** 成绩隐私开关：加权/GPA 大数字与成绩行分数默认隐藏，点小眼睛切换显示。 */
+    val hideScores: Flow<Boolean> = context.dataStore.data.map { it[Keys.HIDE_SCORES] ?: true }
+
+    suspend fun setHideScores(hidden: Boolean) {
+        context.dataStore.edit { p -> p[Keys.HIDE_SCORES] = hidden }
     }
 
     private companion object {

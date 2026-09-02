@@ -26,6 +26,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -190,6 +192,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                             onToggleCourse = { viewModel.toggleExcluded(it) },
                             onErrorDismiss = { viewModel.dismissError() },
                             onGradeClick = { detailGrade = it },
+                            onToggleHideScores = { viewModel.toggleHideScores() },
                         )
                     }
                 }
@@ -198,7 +201,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
     }
 
     detailGrade?.let { grade ->
-        CourseGradeDetailSheet(grade = grade, onDismiss = { detailGrade = null })
+        CourseGradeDetailSheet(grade = grade, hideScores = state.hideScores, onDismiss = { detailGrade = null })
     }
 }
 
@@ -259,9 +262,10 @@ private fun GradesContent(
     onToggleCourse: (String) -> Unit,
     onErrorDismiss: () -> Unit,
     onGradeClick: (GradeEntity) -> Unit,
+    onToggleHideScores: () -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize()) {
-        item { ScoreCard(state, onModeChange, onSchoolYearFilter, onSemesterFilter, onToggleCourse) }
+        item { ScoreCard(state, onModeChange, onSchoolYearFilter, onSemesterFilter, onToggleCourse, onToggleHideScores) }
         // 学分修读进度（要求来自教务接口，已完成本地按成绩汇总）
         if (state.creditRows.isNotEmpty()) {
             item(key = "credit_progress") { CreditProgressCard(state) }
@@ -289,7 +293,7 @@ private fun GradesContent(
                 }
             }
             items(grades, key = { it.id }) { grade ->
-                GradeRow(grade, onClick = { onGradeClick(grade) })
+                GradeRow(grade, hideScores = state.hideScores, onClick = { onGradeClick(grade) })
                 HorizontalDivider(
                     Modifier.padding(horizontal = 16.dp),
                     color = MaterialTheme.colorScheme.outlineVariant,
@@ -549,17 +553,17 @@ private fun ExamRow(exam: ExamEntity, passed: Boolean) {
 /** 单科成绩详情弹层：排名/考核方式/性质/学分/正考补考/学院/学期。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CourseGradeDetailSheet(grade: GradeEntity, onDismiss: () -> Unit) {
+private fun CourseGradeDetailSheet(grade: GradeEntity, hideScores: Boolean, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
             Text(grade.kcmc, style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
-                    grade.zzcj,
+                    if (hideScores) "***" else grade.zzcj,
                     fontSize = 40.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (grade.isFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    color = if (grade.isFailed && !hideScores) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
@@ -597,7 +601,7 @@ private fun DetailRow(label: String, value: String) {
     }
 }
 
-/** GPA/加权成绩卡片：模式切换 + 学期筛选 + 课程勾选。 */
+/** GPA/加权成绩卡片：模式切换 + 学期筛选 + 课程勾选 + 隐私开关。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ScoreCard(
@@ -606,6 +610,7 @@ private fun ScoreCard(
     onSchoolYearFilter: (String) -> Unit,
     onSemesterFilter: (String) -> Unit,
     onToggleCourse: (String) -> Unit,
+    onToggleHideScores: () -> Unit,
 ) {
     var showCourseSelector by remember { mutableStateOf(false) }
 
@@ -655,11 +660,12 @@ private fun ScoreCard(
                 Spacer(Modifier.height(8.dp))
             }
 
-            // 主数值
+            // 主数值（隐藏时显示 ***；右侧小眼睛切换，默认隐藏保护隐私）
             Row(verticalAlignment = Alignment.Bottom) {
-                val value = when (state.scoreMode) {
-                    ScoreMode.WEIGHTED -> state.weightedResult?.let { fmt2(it.score) } ?: "—"
-                    ScoreMode.GPA -> state.localGpa?.let { fmt2(it.gpa) } ?: "—"
+                val value = when {
+                    state.hideScores -> "***"
+                    state.scoreMode == ScoreMode.WEIGHTED -> state.weightedResult?.let { fmt2(it.score) } ?: "—"
+                    else -> state.localGpa?.let { fmt2(it.gpa) } ?: "—"
                 }
                 Text(
                     value,
@@ -674,6 +680,14 @@ private fun ScoreCard(
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.padding(bottom = 6.dp),
                 )
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onToggleHideScores, modifier = Modifier.padding(bottom = 2.dp)) {
+                    Icon(
+                        if (state.hideScores) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (state.hideScores) "显示成绩" else "隐藏成绩",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                    )
+                }
             }
             Spacer(Modifier.height(8.dp))
 
@@ -770,7 +784,7 @@ private fun ScoreCard(
 }
 
 @Composable
-private fun GradeRow(grade: GradeEntity, onClick: () -> Unit) {
+private fun GradeRow(grade: GradeEntity, hideScores: Boolean, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .clickable(onClick = onClick)
@@ -789,10 +803,10 @@ private fun GradeRow(grade: GradeEntity, onClick: () -> Unit) {
             )
         }
         Text(
-            grade.zzcj,
+            if (hideScores) "***" else grade.zzcj,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
-            color = if (grade.isFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            color = if (grade.isFailed && !hideScores) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
         )
     }
 }

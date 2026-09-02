@@ -54,6 +54,8 @@ data class GradesUiState(
     val creditCategories: List<CreditCategory> = emptyList(),
     /** 毕业总进度（queryBxkqk）。 */
     val gradProgress: GraduationProgress? = null,
+    /** 成绩隐私：加权/GPA 大数字与成绩行分数默认隐藏，点小眼睛切换显示。 */
+    val hideScores: Boolean = true,
 ) {
     /** 本地 4.0 制 GPA：全部有数字成绩的课程，补考/重修覆盖正考（教务网 BL 是平均学分绩/20 口径，不可用）。 */
     val localGpa: GpaCalculator.GpaResult? get() = GpaCalculator.calculate(grades)
@@ -177,15 +179,17 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         val showWebView: Boolean,
         val fetching: Boolean,
         val section: GradesSection,
+        val hideScores: Boolean,
     )
 
     val uiState: StateFlow<GradesUiState> = combine(
         repo.grades,
         repo.exams,
         combine(repo.settings.xflbyqJson, repo.settings.bxkqkJson) { a, b -> a to b },
-        combine(repo.settings.gradesFetchedAt, showWebView, fetching, section) { a, b, c, d ->
-            FetchInfo(a, b, c, d)
-        },
+        combine(
+            repo.settings.gradesFetchedAt, showWebView, fetching, section,
+            repo.settings.hideScores,
+        ) { a, b, c, d, e -> FetchInfo(a, b, c, d, e) },
         combine(
             gpaFromCache, error, scoreMode, semesterFilter,
             combine(schoolYearFilter, excludedKcdm) { y, x -> y to x },
@@ -206,6 +210,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
             excludedKcdm = prefs.excluded,
             creditCategories = CreditProgressParser.parseCategories(creditJson.first),
             gradProgress = CreditProgressParser.parseProgress(creditJson.second),
+            hideScores = info.hideScores,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), GradesUiState())
 
@@ -291,6 +296,14 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setSection(section: GradesSection) {
         this.section.value = section
+    }
+
+    /** 成绩隐私开关：点击小眼睛切换显示/隐藏。 */
+    fun toggleHideScores() {
+        viewModelScope.launch {
+            val current = repo.settings.hideScores.first()
+            repo.settings.setHideScores(!current)
+        }
     }
 
     fun setScoreMode(mode: ScoreMode) {

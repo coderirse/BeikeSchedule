@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Grade
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HowToReg
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Science
@@ -222,6 +223,26 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                 icon = { Icon(Icons.Default.Badge, null, Modifier.size(20.dp)) },
                 title = "版本",
                 value = appVersion,
+            )
+            SettingsItemRow(
+                icon = { Icon(Icons.Default.MailOutline, null, Modifier.size(20.dp)) },
+                title = "联系开发者",
+                value = "caeamer@163.com · 问题反馈与建议",
+                trailing = {
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                onClick = {
+                    context.startActivity(
+                        Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:caeamer@163.com")).apply {
+                            putExtra(Intent.EXTRA_SUBJECT, "贝壳课表 反馈")
+                            putExtra(Intent.EXTRA_TEXT, "（请描述你遇到的问题或建议；版本 $appVersion）")
+                        },
+                    )
+                },
             )
             SettingsItemRow(
                 icon = { Icon(Icons.Default.DeleteSweep, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error) },
