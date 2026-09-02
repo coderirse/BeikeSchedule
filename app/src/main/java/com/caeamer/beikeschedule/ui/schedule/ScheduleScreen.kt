@@ -686,8 +686,9 @@ private fun UnscheduledSheet(
     onCourseClick: (CourseEntity) -> Unit,
 ) {
     // 教务对"单周调课/单双周拆分"的同名课程会拆多行（如 电子技术实验 + 电子技术实验【实验】）
+    // 注意：remember 必须在 ModalBottomSheet 外，sheet 内容 lambda 里放 remember 会导致内容叠加重影
+    val distinctCourses = remember(courses) { courses.distinctBy { it.name } }
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        val distinctCourses = remember(courses) { courses.distinctBy { it.name } }
         LazyColumn(
             Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),

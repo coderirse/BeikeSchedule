@@ -89,10 +89,14 @@ import java.util.Locale
 /** Locale 无关的两位小数（DecimalFormat 跟随系统 locale，部分地区会输出 "91,50"）。 */
 private fun fmt2(v: Double): String = String.format(Locale.US, "%.2f", v)
 
-/** 消费本组件内的全部滚动 delta（内嵌滚动区到顶/到底不联动父页面滑动）。 */
+/** 内嵌滚动区拦截：孩子消费完后剩余 delta 在此吃掉，到底/到顶不联动父页面滑动。 */
 private fun Modifier.consumeAllScroll(): Modifier = nestedScroll(
     object : NestedScrollConnection {
-        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset = available
+        override fun onPostScroll(
+            consumed: Offset,
+            available: Offset,
+            source: NestedScrollSource,
+        ): Offset = available
     },
 )
 
