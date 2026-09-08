@@ -23,8 +23,8 @@ android {
         applicationId = "com.caeamer.beikeschedule"
         minSdk = 34
         targetSdk = 37
-        versionCode = 23
-        versionName = "1.1.4"
+        versionCode = 24
+        versionName = "1.1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

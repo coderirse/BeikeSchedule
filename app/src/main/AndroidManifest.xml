@@ -4,6 +4,13 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+        USE_EXACT_ALARM：Android 13+ 安装即自动授予、用户不可撤销，是上课提醒准点触发的关键。
+        此前只声明 SCHEDULE_EXACT_ALARM，而 Android 14+ 对 targetSdk 33+ 的应用默认不授予该权限，
+        canScheduleExactAlarms() 恒为 false → 退化为非精确闹钟，在国产 ROM 省电管控下被压制到不触发。
+        SCHEDULE_EXACT_ALARM 保留作兜底（旧版语义/少数未生效 USE_EXACT_ALARM 的 ROM）。
+    -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
