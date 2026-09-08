@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -119,19 +120,31 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
                 if (cw != null && selectedWeek.value == 1) selectedWeek.value = cw
             }
         }
-        // 课程/学期/提醒设置任一变化 → 全量重排上课提醒闹钟（reschedule 幂等，
-        // Room/DataStore 流的首次发射即真实数据，无需跳过）
+        // 课程/学期/提醒设置任一变化 → 全量重排上课提醒闹钟。
+        // 必须按值去重：reschedule() 内部会把已排 requestCode 写回 DataStore(REMINDER_CODES)，
+        // 而下面三个设置流都源自同一个 DataStore.data，写任何键都会让它们重新发射（map 不去重），
+        // 不去重就会形成「重排→写 codes→重新发射→重排」的自激循环，闹钟被反复取消重设。
         viewModelScope.launch {
             combine(
                 repo.courses,
                 repo.settings.semester,
                 repo.settings.reminderEnabled,
                 repo.settings.reminderMinutes,
-            ) { _, _, _, _ -> Unit }.collect {
+            ) { courses, semester, enabled, minutes ->
+                ReminderKey(courses, semester, enabled, minutes)
+            }.distinctUntilChanged().collect {
                 ClassReminderScheduler.reschedule(getApplication())
             }
         }
     }
+
+    /** 重排触发条件的值快照：用于过滤 DataStore 的无关键写入（见 init 注释）。 */
+    private data class ReminderKey(
+        val courses: List<CourseEntity>,
+        val semester: SettingsStore.SemesterConfig,
+        val enabled: Boolean,
+        val minutes: Int,
+    )
 
     fun selectWeek(week: Int) {
         selectedWeek.value = week

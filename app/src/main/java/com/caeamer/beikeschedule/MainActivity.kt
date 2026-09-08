@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.caeamer.beikeschedule.data.pref.ScorePrivacy
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.import.ImportScreen
 import com.caeamer.beikeschedule.ui.grades.GradesScreen
@@ -106,6 +107,17 @@ private fun TabItem(
 }
 
 class MainActivity : ComponentActivity() {
+
+    /**
+     * 成绩隐私复位：App 退到后台（Home/切应用/锁屏/划掉后台）即把"显示成绩"复位为隐藏。
+     * 前台内切换 Tab 不触发 onStop，因此显示状态在 App 内得以保持；
+     * 旋转屏幕等配置变更会走 onStop 但不算退出，用 isChangingConfigurations 排除。
+     */
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) ScorePrivacy.hide()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

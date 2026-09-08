@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.local.GradeEntity
+import com.caeamer.beikeschedule.data.pref.ScorePrivacy
 import com.caeamer.beikeschedule.data.repo.CreditAggregator
 import com.caeamer.beikeschedule.data.repo.GpaCalculator
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
@@ -54,7 +55,7 @@ data class GradesUiState(
     val creditCategories: List<CreditCategory> = emptyList(),
     /** 毕业总进度（queryBxkqk）。 */
     val gradProgress: GraduationProgress? = null,
-    /** 成绩隐私：加权/GPA 大数字与成绩行分数默认隐藏，点小眼睛切换显示。 */
+    /** 成绩隐私：加权/GPA 大数字与成绩行分数默认隐藏，点小眼睛切换显示（会话级，退后台即复位）。 */
     val hideScores: Boolean = true,
 ) {
     /** 本地 4.0 制 GPA：全部有数字成绩的课程，补考/重修覆盖正考（教务网 BL 是平均学分绩/20 口径，不可用）。 */
@@ -188,7 +189,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         combine(repo.settings.xflbyqJson, repo.settings.bxkqkJson) { a, b -> a to b },
         combine(
             repo.settings.gradesFetchedAt, showWebView, fetching, section,
-            repo.settings.hideScores,
+            ScorePrivacy.hidden,
         ) { a, b, c, d, e -> FetchInfo(a, b, c, d, e) },
         combine(
             gpaFromCache, error, scoreMode, semesterFilter,
@@ -298,12 +299,9 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         this.section.value = section
     }
 
-    /** 成绩隐私开关：点击小眼睛切换显示/隐藏。 */
+    /** 成绩隐私开关：点击小眼睛切换显示/隐藏（会话级，退到后台自动复位隐藏）。 */
     fun toggleHideScores() {
-        viewModelScope.launch {
-            val current = repo.settings.hideScores.first()
-            repo.settings.setHideScores(!current)
-        }
+        ScorePrivacy.toggle()
     }
 
     fun setScoreMode(mode: ScoreMode) {
