@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Notes
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,11 +72,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.local.SectionTimeEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
+import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.model.CourseMerger
+import com.caeamer.beikeschedule.model.NextClass
 import com.caeamer.beikeschedule.model.SectionMap
 import com.caeamer.beikeschedule.model.SessionExpander
 import com.caeamer.beikeschedule.model.WeekUtils
 import com.caeamer.beikeschedule.ui.theme.CourseColors
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import android.Manifest
@@ -86,6 +91,14 @@ import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
 
 private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "日")
+
+/** 日期所属教学周（严格口径：开学前/假期跳周/学期后返回 null），与提醒排期同一套判定。 */
+private fun teachingWeekOf(semester: SettingsStore.SemesterConfig, date: LocalDate): Int? =
+    if (semester.weekMondays.isNotEmpty()) {
+        ScheduleRepository.teachingWeekOf(semester.weekMondays, date)
+    } else {
+        ScheduleRepository.currentWeek(semester.firstMonday, semester.totalWeeks, date)
+    }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -122,9 +135,27 @@ fun ScheduleScreen(
     var pendingSlot by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     // 无固定时间课程弹层
     var showUnscheduledSheet by remember { mutableStateOf(false) }
+    // "下一节课"图钉：每分钟重算一次，跨过上课点后自动前移（无需重进页面）
+    val now by remember {
+        flow {
+            while (true) {
+                emit(java.time.LocalDateTime.now())
+                kotlinx.coroutines.delay(60_000)
+            }
+        }
+    }.collectAsState(initial = java.time.LocalDateTime.now())
 
     val totalWeeks = state.semester.totalWeeks
     val visibleDays = if (hideWeekend) (1..5).toList() else (1..7).toList()
+    // 下一节课：仅今天（严格教学周内）尚未开始的最早一节；卡片 id 与合并后课程一致
+    val nextClassId = remember(state.scheduledCourses, state.sectionTimes, now, state.semester) {
+        NextClass.resolve(
+            courses = CourseMerger.mergeSameSlot(state.scheduledCourses),
+            sectionStartTimes = state.sectionTimes.associate { it.section to it.startTime },
+            todayTeachingWeek = teachingWeekOf(state.semester, now.toLocalDate()),
+            now = now,
+        )?.courseId
+    }
     val pagerState = rememberPagerState(
         initialPage = (state.currentWeek ?: 1) - 1,
         pageCount = { totalWeeks },
@@ -280,6 +311,8 @@ fun ScheduleScreen(
                         sectionTimes = state.sectionTimes,
                         days = visibleDays,
                         pendingSlot = pendingSlot,
+                        // 只在用户正看"今天所在教学周"时标记，翻到其他周不误导
+                        nextClassId = nextClassId.takeIf { page + 1 == teachingWeekOf(state.semester, now.toLocalDate()) },
                         onSlotLongPress = { day, big -> pendingSlot = day to big },
                         onSlotClick = { day, big ->
                             if (pendingSlot == day to big) {
@@ -479,6 +512,8 @@ private fun WeekGrid(
     sectionTimes: List<SectionTimeEntity>,
     days: List<Int>,
     pendingSlot: Pair<Int, Int>?,
+    /** 下一节课的卡片 id（null=不标记）；仅当本页正是今天所在教学周时由调用方传入。 */
+    nextClassId: Long?,
     onSlotLongPress: (day: Int, big: Int) -> Unit,
     onSlotClick: (day: Int, big: Int) -> Unit,
     onCourseClick: (CourseEntity) -> Unit,
@@ -580,6 +615,7 @@ private fun WeekGrid(
                                 CourseCard(
                                     course = course,
                                     active = true,
+                                    isNext = course.id == nextClassId,
                                     onClick = { onCourseClick(course) },
                                 )
                             }
@@ -590,6 +626,7 @@ private fun WeekGrid(
                     CourseCard(
                         course = course,
                         active = false,
+                        isNext = false,
                         onClick = { onCourseClick(course) },
                     )
                 }
@@ -608,6 +645,8 @@ private data class DayLayout(
 private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
     course: CourseEntity,
     active: Boolean,
+    /** 是否为"下一节课"（今天尚未开始的最早一节）：右上角叠加图钉徽标。 */
+    isNext: Boolean,
     onClick: () -> Unit,
 ) {
     // 本周/非本周都用课程本色：非本周整体淡化（灰底会被误认为本周有课，用户明确要求回退）
@@ -622,40 +661,64 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
         span == 2 -> 3
         else -> 4
     }
-    Surface(
-        color = bg,
-        shape = RoundedCornerShape(6.dp),
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .align(androidx.compose.ui.Alignment.TopCenter)
             .coursePosition(clampedStart, span)
-            .padding(1.dp)
-            .alpha(if (active) 1f else 0.3f)
-            .clickable(onClick = onClick),
+            .padding(1.dp),
     ) {
-        Column(Modifier.padding(3.dp)) {
-            Text(
-                course.name,
-                fontSize = 10.sp,
-                lineHeight = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = fg,
-                maxLines = nameMaxLines,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (span >= 2 && course.location.isNotBlank()) {
-                // 楼名+房号一行显示（"机械楼720"），省出的行高留给课名
+        Surface(
+            color = bg,
+            shape = RoundedCornerShape(6.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight()
+                .alpha(if (active) 1f else 0.3f)
+                .clickable(onClick = onClick),
+        ) {
+            Column(Modifier.padding(3.dp)) {
                 Text(
-                    course.location.replace(Regex("【[^】]*】"), "").trim(),
-                    fontSize = 9.sp,
-                    lineHeight = 11.sp,
-                    color = fg.copy(alpha = 0.8f),
-                    maxLines = 2,
+                    course.name,
+                    fontSize = 10.sp,
+                    lineHeight = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = fg,
+                    maxLines = nameMaxLines,
                     overflow = TextOverflow.Ellipsis,
+                    // 图钉占右上角，课名让出右侧空间，避免被徽标压住
+                    modifier = if (isNext) Modifier.padding(end = 15.dp) else Modifier,
                 )
+                if (span >= 2 && course.location.isNotBlank()) {
+                    // 楼名+房号一行显示（"机械楼720"），省出的行高留给课名
+                    Text(
+                        course.location.replace(Regex("【[^】]*】"), "").trim(),
+                        fontSize = 9.sp,
+                        lineHeight = 11.sp,
+                        color = fg.copy(alpha = 0.8f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (span >= 2 && oddEven.isNotEmpty()) {
+                    Text("[$oddEven]", fontSize = 9.sp, color = fg.copy(alpha = 0.7f))
+                }
             }
-            if (span >= 2 && oddEven.isNotEmpty()) {
-                Text("[$oddEven]", fontSize = 9.sp, color = fg.copy(alpha = 0.7f))
+        }
+        // 下一节课图钉徽标：右上角圆形叠标，不占卡片内文字行高
+        if (isNext) {
+            Surface(
+                color = MaterialTheme.colorScheme.primary,
+                shape = CircleShape,
+                shadowElevation = 2.dp,
+                modifier = Modifier.align(androidx.compose.ui.Alignment.TopEnd).padding(2.dp),
+            ) {
+                Icon(
+                    Icons.Default.PushPin,
+                    contentDescription = "下一节课",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.padding(2.dp).size(11.dp),
+                )
             }
         }
     }
