@@ -10,7 +10,10 @@ import android.os.Build
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
+import com.caeamer.beikeschedule.model.ReminderCourses
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -34,6 +37,13 @@ object ClassReminderScheduler {
     private const val REQUEST_DAILY_PULSE = 9_000_000
     private const val SCHEDULE_DAYS = 8
 
+    /**
+     * 重排串行化：reschedule 会被 App 打开、每日脉冲、开机广播等多处并发触发，
+     * 而它内部是"取消全部 → 重新排"的非原子序列，交错执行会让后一次的取消吃掉
+     * 前一次刚排好的闹钟（表现为偶发丢提醒）。
+     */
+    private val rescheduleMutex = Mutex()
+
     fun ensureChannel(context: Context) {
         val channel = NotificationChannel(
             CHANNEL_ID, "上课提醒", NotificationManager.IMPORTANCE_HIGH,
@@ -41,15 +51,22 @@ object ClassReminderScheduler {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
+    /**
+     * 需要排提醒的课程：排除无固定时间与已隐藏课程，并合并教务拆出的同名同段多行
+     * （否则同一节课会因多行各排一个闹钟而重复弹两次）。
+     */
+    internal fun reminderCourses(all: List<CourseEntity>): List<CourseEntity> =
+        ReminderCourses.eligible(all)
+
     /** 课程/学期/提醒设置变化时调用：取消旧闹钟，按最新数据重排。 */
-    suspend fun reschedule(context: Context) {
+    suspend fun reschedule(context: Context) = rescheduleMutex.withLock {
         val repo = ScheduleRepository(context)
         cancelRecorded(context, repo.settings)
 
         if (repo.settings.reminderEnabled.first()) {
             val minutes = repo.settings.reminderMinutes.first()
             val semester = repo.settings.semester.first()
-            val courses = repo.courses.first().filter { !it.isUnscheduled }
+            val courses = reminderCourses(repo.courses.first())
             val timeMap = repo.sectionTimes.first().associateBy { it.section }
             val now = LocalDateTime.now()
             val today = LocalDate.now()
@@ -133,7 +150,14 @@ object ClassReminderScheduler {
         settings.saveReminderScheduledCodes(emptySet())
     }
 
-    /** 每日凌晨脉冲：触发一次 reschedule 让提醒窗口永远向前滚动。 */
+    /**
+     * 每日凌晨脉冲：触发一次 reschedule 让 8 天排期窗口永远向前滚动。
+     *
+     * 用 setInexactRepeating 而非"一次性闹钟 + 触发后重新排自己"：
+     * 一次性脉冲一旦某次没送达（设备关机/Doze 深睡/OEM 清理）就永久不再续期，
+     * 8 天后所有提醒静默失效；重复闹钟由系统常驻，不依赖 App 每次重新武装。
+     * 续期只需在凌晨大致跑一次，非精确即可，也无需精确闹钟权限。
+     */
     private fun scheduleDailyPulse(context: Context) {
         val intent = Intent(context, ReminderReceiver::class.java).setAction(ACTION_DAILY_PULSE)
         val pending = PendingIntent.getBroadcast(
@@ -143,6 +167,6 @@ object ClassReminderScheduler {
         val nextRun = LocalDate.now().plusDays(1).atTime(4, 30)
         val millis = nextRun.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         context.getSystemService(AlarmManager::class.java)
-            .setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pending)
+            .setInexactRepeating(AlarmManager.RTC_WAKEUP, millis, AlarmManager.INTERVAL_DAY, pending)
     }
 }

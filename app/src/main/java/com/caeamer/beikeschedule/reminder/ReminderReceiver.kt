@@ -18,9 +18,11 @@ class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             ClassReminderScheduler.ACTION_REMIND -> {
+                // 只弹通知，绝不在此重排：reschedule 内部会先取消全部闹钟再重排"仍在未来"的，
+                // 若在提醒触发时重排，此刻已到点但尚未被系统投递的闹钟（Doze 延迟、同时间多节课）
+                // 会先被取消又不再重排，导致提醒永久丢失——这正是"时好时坏"的主因。
+                // 8 天排期窗口的前移由每日脉冲（ACTION_DAILY_PULSE）与开机/打开 App 时的重排负责。
                 showClassNotification(context, intent)
-                // 触发后窗口前移一天，顺带自续脉冲
-                rescheduleAsync(context)
             }
             ExamReminderScheduler.ACTION_EXAM_REMIND -> showExamNotification(context, intent)
             ClassReminderScheduler.ACTION_DAILY_PULSE -> rescheduleAsync(context)
