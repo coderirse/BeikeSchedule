@@ -1,6 +1,7 @@
 package com.caeamer.beikeschedule.ui.schedule
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -48,7 +49,9 @@ import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -91,6 +94,13 @@ import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
 
 private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "日")
+
+/**
+ * 无固定时间弹层从第几门课起固定用 Expanded 锚点。
+ * 半屏大约能放下 4 门（标题 + 每门两行文字 + 卡片内边距 + 8dp 间距），
+ * 到第 5 门就一定需要滚动了，此时半展开锚点会引发"滚动 ↔ 弹层高度"自激抖动。
+ */
+private const val SCROLLABLE_SHEET_MIN_ITEMS = 5
 
 /** 日期所属教学周（严格口径：开学前/假期跳周/学期后返回 null），与提醒排期同一套判定。 */
 private fun teachingWeekOf(semester: SettingsStore.SemesterConfig, date: LocalDate): Int? =
@@ -751,38 +761,56 @@ private fun UnscheduledSheet(
     // 教务对"单周调课/单双周拆分"的同名课程会拆多行（如 电子技术实验 + 电子技术实验【实验】）
     // 注意：remember 必须在 ModalBottomSheet 外，sheet 内容 lambda 里放 remember 会导致内容叠加重影
     val distinctCourses = remember(courses) { courses.distinctBy { it.name } }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        LazyColumn(
-            Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item { Text("无固定时间课程", style = MaterialTheme.typography.titleMedium) }
-            if (distinctCourses.isEmpty()) {
-                item {
-                    Text(
-                        "没有无固定时间课程",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            items(distinctCourses, key = { it.id }) { course ->
-                val (bg, fg) = CourseColors.of(course.colorIndex)
-                Surface(
-                    color = bg,
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onCourseClick(course) },
-                ) {
-                    Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                        Text(course.name, fontSize = 14.sp, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+    // 「往下使劲翻会抽搐」的根因：默认半展开锚点下，列表滚到尽头后剩余速度去拖动弹层，
+    // 弹层变高 → 列表一起变高 → 不再可滚 → 弹层回落到半展开 → 列表又可滚 → 再触发，
+    // 形成自激回路，实测表现为内容以约 6Hz、±20dp 整体上下抖动（弹层自身边缘不动）。
+    // 三层一起钉死回路：
+    //   1. 列表长到需要滚动时固定 Expanded 锚点（弹层不再改高度，也就不会重新测量列表）；
+    //   2. 列表高度钉在弹层内容区（fillMaxHeight），不随滚动状态变化；
+    //   3. 关掉列表自身的 overscroll 回弹（拉伸/辉光），避免它在列表尽头与嵌套滚动互相喂招。
+    // 列表很短（不需要滚动）时保留半展开与默认 overscroll，观感更轻，也不存在该回路。
+    val scrollable = distinctCourses.size >= SCROLLABLE_SHEET_MIN_ITEMS
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = scrollable)
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        CompositionLocalProvider(LocalOverscrollFactory provides null) {
+            LazyColumn(
+                modifier = if (scrollable) {
+                    Modifier.fillMaxWidth().fillMaxHeight()
+                } else {
+                    Modifier.fillMaxWidth()
+                },
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item { Text("无固定时间课程", style = MaterialTheme.typography.titleMedium) }
+                if (distinctCourses.isEmpty()) {
+                    item {
                         Text(
-                            WeekUtils.describe(course.weekBitmap),
-                            fontSize = 12.sp,
-                            color = fg.copy(alpha = 0.75f),
+                            "没有无固定时间课程",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                }
+                items(distinctCourses, key = { it.id }) { course ->
+                    val (bg, fg) = CourseColors.of(course.colorIndex)
+                    Surface(
+                        color = bg,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onCourseClick(course) },
+                    ) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                            Text(course.name, fontSize = 14.sp, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                WeekUtils.describe(course.weekBitmap),
+                                fontSize = 12.sp,
+                                color = fg.copy(alpha = 0.75f),
+                            )
+                        }
                     }
                 }
             }

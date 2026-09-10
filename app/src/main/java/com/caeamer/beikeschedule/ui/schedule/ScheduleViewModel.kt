@@ -37,13 +37,18 @@ data class ScheduleUiState(
     val afterEnd: Boolean = false,
     val loaded: Boolean = false,
 ) {
-    /** 未隐藏的有固定时间课程。 */
-    val scheduledCourses get() = courses.filter { !it.isUnscheduled && !it.hidden }
+    /**
+     * 未隐藏的有固定时间课程。
+     * 用 val 在构造时算一次，而不是 `get()`：`get()` 每次读取都新建一个 List，
+     * 下游 `remember(state.scheduledCourses)` / `items(list)` 的键于是每次都变，
+     * 白做整轮过滤与 diff（无固定时间弹层的抽搐就与这种不稳定列表有关）。
+     */
+    val scheduledCourses: List<CourseEntity> = courses.filter { !it.isUnscheduled && !it.hidden }
     /** 未隐藏的无固定时间课程。 */
-    val unscheduledCourses get() = courses.filter { it.isUnscheduled && !it.hidden }
+    val unscheduledCourses: List<CourseEntity> = courses.filter { it.isUnscheduled && !it.hidden }
     /** 已隐藏的课程（教务导入课程可隐藏，供学期设置里恢复）。 */
-    val hiddenCourses get() = courses.filter { it.hidden }
-    val hasSample get() = courses.any { it.source == CourseEntity.SOURCE_SAMPLE }
+    val hiddenCourses: List<CourseEntity> = courses.filter { it.hidden }
+    val hasSample: Boolean = courses.any { it.source == CourseEntity.SOURCE_SAMPLE }
 }
 
 class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
