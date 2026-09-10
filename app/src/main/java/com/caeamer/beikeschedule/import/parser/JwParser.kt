@@ -6,6 +6,7 @@ import com.caeamer.beikeschedule.model.SectionMap
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -15,6 +16,10 @@ import kotlinx.serialization.json.jsonPrimitive
  * 北科本研一体化教务系统（byyt.ustb.edu.cn）JSON → Entity 映射。
  * 纯 Kotlin 实现，不依赖 Android，可直接 JUnit 单测。
  * 接口与字段定义见 docs/TECH_DESIGN.md 2.1 节，样本见 docs/samples/。
+ *
+ * 注意：取字符串一律用 `contentOrNull`。`JsonNull` 本身是 `JsonPrimitive`，
+ * 其 `content` 返回字面量字符串 "null"，会让 `?: ""` / `?: return null` 全部失效 ——
+ * 例如 `"KEY":null` 会得到 "null" 而非 null，`parseDayOfWeek` 抛异常后整行课程被静默丢弃。
  */
 object JwParser {
 
@@ -34,9 +39,10 @@ object JwParser {
             ?: return emptyList()
         return content.mapNotNull { elem ->
             val obj = elem.jsonObject
-            val section = obj["xj"]?.jsonPrimitive?.content?.toIntOrNull() ?: return@mapNotNull null
-            val start = obj["kssj"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            val end = obj["jssj"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            val section = obj["xj"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: return@mapNotNull null
+            // 显式 null 必须落空跳过（用 content 会拿到 "null" 并被当成合法时间存库）
+            val start = obj["kssj"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val end = obj["jssj"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             SectionTimeEntity(section = section, startTime = start, endTime = end)
         }.sortedBy { it.section }
     }
@@ -44,9 +50,9 @@ object JwParser {
     /** 解析 /component/querydangqianxnxq 返回：学年、学期、学期展示名。 */
     fun parseCurrentSemester(jsonText: String): Triple<String, String, String> {
         val obj = json.parseToJsonElement(jsonText).jsonObject
-        val xn = obj["XN"]?.jsonPrimitive?.content.orEmpty()
-        val xq = obj["XQ"]?.jsonPrimitive?.content.orEmpty()
-        val name = obj["XNXQ"]?.jsonPrimitive?.content.orEmpty()
+        val xn = obj["XN"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val xq = obj["XQ"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val name = obj["XNXQ"]?.jsonPrimitive?.contentOrNull.orEmpty()
         return Triple(xn, xq, name)
     }
 
@@ -55,8 +61,8 @@ object JwParser {
         val content = json.parseToJsonElement(jsonText).jsonObject["content"]?.jsonArray
             ?: return null
         return content.map { it.jsonObject }
-            .firstOrNull { it["xqj"]?.jsonPrimitive?.content == "1" }
-            ?.get("rq")?.jsonPrimitive?.content
+            .firstOrNull { it["xqj"]?.jsonPrimitive?.contentOrNull == "1" }
+            ?.get("rq")?.jsonPrimitive?.contentOrNull
     }
 
     /**
@@ -77,7 +83,7 @@ object JwParser {
         val weeks = root["weeks"]?.jsonArray?.mapNotNull { elem ->
             val obj = elem.jsonObject
             val zc = obj["zc"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
-            val monday = obj["monday"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            val monday = obj["monday"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             zc to monday
         }?.sortedBy { it.first } ?: emptyList()
         // 按 zc 顺序展开为下标列表，zc 必须从 1 开始；中间缺失的周用前一周 +7 天补齐（防御性）
@@ -100,8 +106,8 @@ object JwParser {
     }
 
     private fun toCourse(obj: JsonObject): CourseEntity {
-        val sksj = obj["SKSJ"]?.jsonPrimitive?.content.orEmpty()
-        val key = obj["KEY"]?.jsonPrimitive?.content
+        val sksj = obj["SKSJ"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val key = obj["KEY"]?.jsonPrimitive?.contentOrNull
         val colorIndex = obj["XB"]?.jsonPrimitive?.intOrNull ?: 0
         // KEY="bz" 为教务备注行（实验/上机安排等），也归入无固定时间课程
         val unscheduled = key == "bz" || key.isNullOrBlank() || colorIndex == CourseEntity.COLOR_UNSCHEDULED
@@ -115,14 +121,14 @@ object JwParser {
 
         val (name, teacher, location) = splitSksj(sksj, unscheduled)
 
-        var weekBitmap = obj["ZC"]?.jsonPrimitive?.content.orEmpty()
+        var weekBitmap = obj["ZC"]?.jsonPrimitive?.contentOrNull.orEmpty()
         // 备注行没有 ZC 字段，从文本中的周数描述（如 "5-7周"、"15,16周"）构造位图
         if (unscheduled && weekBitmap.isEmpty()) {
             weekBitmap = parseNoteWeeks(sksj)
         }
 
         return CourseEntity(
-            taskId = obj["RWH"]?.jsonPrimitive?.content.orEmpty(),
+            taskId = obj["RWH"]?.jsonPrimitive?.contentOrNull.orEmpty(),
             name = name,
             teacher = teacher,
             location = location,

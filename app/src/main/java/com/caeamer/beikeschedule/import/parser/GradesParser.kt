@@ -4,6 +4,7 @@ import com.caeamer.beikeschedule.data.local.GradeEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore.StudentProfile
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -21,6 +22,11 @@ data class GpaInfo(
 /**
  * 成绩接口 JSON → Entity/模型。纯 Kotlin 可单测，
  * fixture 为 2026-08-29 真实会话抓取（docs/samples/grcjcx-all.json、getgpa.json）。
+ *
+ * 注意：取字符串一律用 `contentOrNull`，不能用 `content`。
+ * `JsonNull` 本身是 `JsonPrimitive`，其 `content` 返回字面量字符串 "null"，
+ * 于是 `o[key]?.jsonPrimitive?.content ?: ""` 的 `?:` 兜底永远不会触发 ——
+ * 真实成绩单里 `"pm":null` / `"khfs":null` / `"kclb":null` 会原样渲染成"排名 null/96"。
  */
 object GradesParser {
 
@@ -34,7 +40,7 @@ object GradesParser {
         return list.mapNotNull { elem ->
             runCatching {
                 val o = elem.jsonObject
-                fun str(key: String) = o[key]?.jsonPrimitive?.content ?: ""
+                fun str(key: String) = o[key]?.jsonPrimitive?.contentOrNull ?: ""
                 GradeEntity(
                     kcdm = str("kcdm"),
                     kcmc = str("kcmc").ifBlank { "未命名课程" },
@@ -70,12 +76,12 @@ object GradesParser {
     /** 解析 user/me + queryxsxx → 学籍快照；学号缺失返回 null。 */
     fun parseStudentProfile(userJson: String, xsxxJson: String): StudentProfile? {
         val o = runCatching { json.parseToJsonElement(userJson).jsonObject }.getOrNull() ?: return null
-        fun str(key: String) = o[key]?.jsonPrimitive?.content ?: ""
+        fun str(key: String) = o[key]?.jsonPrimitive?.contentOrNull ?: ""
         val xh = str("yhdm").ifBlank { str("xh") }
         if (xh.isBlank()) return null
         // 专业名/班级名在 queryxsxx（UserManager/queryxsxx）里；user/me 的 bjzydm 只是代码
         val xsxx = runCatching { json.parseToJsonElement(xsxxJson).jsonObject }.getOrNull()
-        fun xs(key: String) = xsxx?.get(key)?.jsonPrimitive?.content.orEmpty()
+        fun xs(key: String) = xsxx?.get(key)?.jsonPrimitive?.contentOrNull.orEmpty()
         val bjmc = xs("BJMC").ifBlank { xs("bjmc") }.ifBlank { str("bjmc") }
         val zymc = xs("ZYMC").ifBlank { xs("zymc") }
         val njmc = xs("NJMC").ifBlank { xs("njmc") }.ifBlank { str("njmc") }

@@ -1,5 +1,6 @@
 package com.caeamer.beikeschedule.import
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,12 +43,36 @@ import android.webkit.WebView
 /** 教务导入页：WebView 登录 → 自动注入脚本抓取 → 预览确认入库。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ImportScreen(onDone: () -> Unit, viewModel: ImportViewModel = viewModel()) {
+fun ImportScreen(
+    onDone: () -> Unit,
+    /**
+     * 通知宿主：当前是否正在展示"浅底"页面（WebView 里的教务页底色是浅色）。
+     * 宿主据此决定状态栏图标明暗 —— 深色模式下属主页面用白图标，
+     * 但导入页的教务页面本身是浅色，必须切成深色图标，否则图标看不清。
+     */
+    onLightBackgroundVisible: (Boolean) -> Unit = {},
+    viewModel: ImportViewModel = viewModel(),
+) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     var webView by remember { mutableStateOf<WebView?>(null) }
     var pageError by remember { mutableStateOf<String?>(null) }
     var pageLoading by remember { mutableStateOf(true) }
+
+    // 预览/错误态返回 → 回到 WebView 重新抓取；浏览/抓取态返回 → 退出整个导入流程。
+    // 本页是 Launcher Activity 里的一个 composable 分支（不是独立 Activity），
+    // 不拦返回键的话系统返回会直接 finish 掉 Activity，登录会话与预览一起丢。
+    BackHandler {
+        when (state) {
+            is ImportUiState.Preview, is ImportUiState.Error -> viewModel.backToBrowsing()
+            else -> onDone()
+        }
+    }
+
+    // WebView 只在 Browsing/Fetching 两个分支里存在，也只有在这些分支下底色才是浅的
+    val showingWebView = state is ImportUiState.Browsing || state is ImportUiState.Fetching
+    LaunchedEffect(showingWebView) { onLightBackgroundVisible(showingWebView) }
+    DisposableEffect(Unit) { onDispose { onLightBackgroundVisible(false) } }
 
     val runScript: () -> Unit = {
         webView?.evaluateJavascript(loadAssetScript(context, "import/jw_import.js"), null)

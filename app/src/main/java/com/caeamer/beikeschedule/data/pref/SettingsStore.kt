@@ -1,8 +1,10 @@
 package com.caeamer.beikeschedule.data.pref
 
 import android.content.Context
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -10,7 +12,15 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-private val Context.dataStore by preferencesDataStore(name = "settings")
+/**
+ * 配置存储。corruptionHandler 必加：settings.preferences_pb 一旦损坏（写中断/存储写满/恢复异常），
+ * 默认实现会抛 CorruptionException 进入 collectAsState/stateIn 的收集协程 → 每次启动都崩且无法自愈，
+ * 用户只能清应用数据。兜底重置为默认配置：成绩库与课表库是独立的 Room 数据库，不受影响。
+ */
+private val Context.dataStore by preferencesDataStore(
+    name = "settings",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+)
 
 /** 学期与提醒等配置（DataStore）。 */
 class SettingsStore(private val context: Context) {

@@ -1,8 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- API 26-30 的自动备份规则：成绩/课表/学籍属个人敏感数据，不上云备份（新装机由用户重新导入） -->
+<!--
+  API 26-30 的自动备份规则：成绩/课表/学籍属个人敏感数据，不上云备份（新装机由用户重新导入）。
+  规则文件没有 <include>，所以"未列出的一切默认会被备份"——必须显式排除，不能只靠注释。
+  注意 minSdk 34 时系统走 data_extraction_rules.xml，本文件仅为低版本兜底。
+-->
 <full-backup-content>
     <exclude domain="database" path="beike_schedule.db" />
     <exclude domain="database" path="beike_schedule.db-wal" />
     <exclude domain="database" path="beike_schedule.db-shm" />
     <exclude domain="file" path="datastore/" />
+    <!--
+      app_webview 属 root 域（getDataDir() 下、非 files/database/shared_prefs/cache 的子目录），
+      里面存着 CookieManager 落盘的教务 SESSION cookie 与 DOM storage —— 那是可直接调用
+      /xszykb、/component 等接口的登录凭证，绝不能被云备份带走。排除后换机需重新登录一次。
+    -->
+    <exclude domain="root" path="app_webview/" />
 </full-backup-content>
