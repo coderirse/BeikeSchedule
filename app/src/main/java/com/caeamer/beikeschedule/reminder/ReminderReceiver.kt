@@ -62,7 +62,7 @@ class ReminderReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
             .build()
         context.getSystemService(NotificationManager::class.java)
-            .notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+            .notify(notificationId(intent, fallbackSeed = name), notification)
     }
 
     private fun showExamNotification(context: Context, intent: Intent) {
@@ -87,7 +87,20 @@ class ReminderReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
             .build()
         context.getSystemService(NotificationManager::class.java)
-            .notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+            .notify(notificationId(intent, fallbackSeed = name), notification)
+    }
+
+    /**
+     * 通知 ID = 该闹钟的 requestCode。
+     *
+     * 旧实现用 `System.currentTimeMillis() % Int.MAX_VALUE`：同一天同一时间的两门课（真冲突）
+     * 闹钟会同批投递，若落在同一毫秒就得到同一个 ID，后一条把前一条覆盖掉 —— 表现为"只收到一条"。
+     * requestCode 由 (课程, 日期) 内容寻址，稳定且唯一，天然不会撞车
+     * （上课提醒在 [0, 8e6)，考试提醒在 8e6 段，两类的通知 ID 也不会互相覆盖）。
+     */
+    private fun notificationId(intent: Intent, fallbackSeed: String): Int {
+        val code = intent.getIntExtra(ReminderAlarmScheduler.EXTRA_REQUEST_CODE, Int.MIN_VALUE)
+        return if (code != Int.MIN_VALUE) code else Math.floorMod(fallbackSeed.hashCode(), 1_000_000)
     }
 
     private fun notificationPermissionDenied(context: Context): Boolean =

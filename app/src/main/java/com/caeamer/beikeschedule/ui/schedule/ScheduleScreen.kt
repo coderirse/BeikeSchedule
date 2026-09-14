@@ -121,6 +121,7 @@ fun ScheduleScreen(
     val reminderEnabled by viewModel.reminderEnabled.collectAsState()
     val reminderMinutes by viewModel.reminderMinutes.collectAsState()
     val hideWeekend by viewModel.hideWeekend.collectAsState()
+    val reminderSchedule by viewModel.reminderSchedule.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -406,6 +407,7 @@ fun ScheduleScreen(
             reminderEnabled = reminderEnabled,
             reminderMinutes = reminderMinutes,
             hideWeekend = hideWeekend,
+            reminderSchedule = reminderSchedule,
             onDismiss = { showSettings = false },
             onSave = { viewModel.saveSemester(it) },
             onReminderChange = { enabled, minutes -> viewModel.setReminder(enabled, minutes) },

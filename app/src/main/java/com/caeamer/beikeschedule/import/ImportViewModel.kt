@@ -73,6 +73,14 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 return
             }
             val weekCalendar = JwParser.parseWeekCalendar(calendar)
+            // 节次时间缺失时必须中止：确认导入会先清空 section_time 再写入，空表写进去之后
+            // 每门课都算不出上课时间点 —— 上课提醒会全部静默失效，课程详情也看不到起止时间。
+            // 宁可让用户重抓一次，也不能静默写坏（脚本返回 {code,...} 之类无 content 的响应时就会这样）。
+            val sectionTimes = JwParser.parseSectionTimes(sections)
+            if (sectionTimes.isEmpty()) {
+                _state.value = ImportUiState.Error("未获取到节次时间（queryKbjg 返回异常），请返回后重新抓取")
+                return
+            }
             _state.value = ImportUiState.Preview(
                 semesterName = name.ifBlank { "$xn-$xq" },
                 xn = xn,
@@ -82,7 +90,7 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                 weekMondays = weekCalendar.weekMondays,
                 totalWeeks = weekCalendar.totalWeeks.takeIf { it > 0 } ?: 20,
                 courses = courseList,
-                sectionTimes = JwParser.parseSectionTimes(sections),
+                sectionTimes = sectionTimes,
             )
         } catch (e: Exception) {
             _state.value = ImportUiState.Error("解析失败：${e.message}")

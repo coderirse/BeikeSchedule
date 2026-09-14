@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.GradesParser
+import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -61,6 +62,9 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             settings.saveCreditMeta("", "")
             repo.replaceGrades(emptyList())
             repo.replaceExams(emptyList())
+            // 考试数据已清空 → 同步取消已排的考前提醒
+            // （否则成绩清完了，旧的"明天考试"闹钟还会带着地点/座位号弹出来）
+            ExamReminderScheduler.reschedule(getApplication())
         }
     }
 

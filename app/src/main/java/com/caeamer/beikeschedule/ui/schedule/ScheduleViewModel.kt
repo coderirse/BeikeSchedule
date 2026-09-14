@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.DayOfWeek
@@ -51,6 +52,16 @@ data class ScheduleUiState(
     val hasSample: Boolean = courses.any { it.source == CourseEntity.SOURCE_SAMPLE }
 }
 
+/**
+ * 提醒排期诊断信息（设置页展示）：让"到底排上了没有 / 下次什么时候响"不用抓 logcat 就能看到。
+ * 系统层面的通知开关、精确闹钟权限是同步查询，放在设置页组合时现算，保证每次打开都是最新值。
+ */
+data class ReminderScheduleInfo(
+    val scheduledCount: Int = 0,
+    /** 最近一次提醒的触发时刻（epoch 毫秒）；没有未来提醒时为 null。 */
+    val nextTriggerAtMillis: Long? = null,
+)
+
 class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = ScheduleRepository(app)
@@ -86,6 +97,15 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsStore.ThemeMode.SYSTEM)
     val hideWeekend: StateFlow<Boolean> = repo.settings.hideWeekend
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    /** 提醒排期状态：已排上的未来闹钟数量与最近一次触发时刻（设置页 diagnostics 用）。 */
+    val reminderSchedule: StateFlow<ReminderScheduleInfo> = repo.settings.reminderScheduledAlarms
+        .map { alarms ->
+            val now = System.currentTimeMillis()
+            val future = alarms.mapNotNull { it.triggerAtMillis }.filter { it > now }
+            ReminderScheduleInfo(future.size, future.minOrNull())
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ReminderScheduleInfo())
 
     fun setHideWeekend(hidden: Boolean) {
         viewModelScope.launch { repo.settings.setHideWeekend(hidden) }

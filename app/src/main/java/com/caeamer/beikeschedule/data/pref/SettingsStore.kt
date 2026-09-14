@@ -119,30 +119,20 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    /** 已排课程提醒闹钟的 requestCode 集合（逗号分隔），用于精确取消。 */
-    val reminderScheduledCodes: Flow<Set<Int>> = context.dataStore.data.map { p ->
-        p[Keys.REMINDER_CODES]?.takeIf { it.isNotBlank() }
-            ?.split(",")?.mapNotNull { it.toIntOrNull() }?.toSet()
-            ?: emptySet()
+    /** 已排课程提醒闹钟（requestCode + 触发时刻），用于精确取消与"已到点不动它"的判定。 */
+    val reminderScheduledAlarms: Flow<List<ScheduledAlarm>> =
+        context.dataStore.data.map { p -> AlarmCodec.decode(p[Keys.REMINDER_CODES]) }
+
+    suspend fun saveReminderScheduledAlarms(alarms: List<ScheduledAlarm>) {
+        context.dataStore.edit { p -> p[Keys.REMINDER_CODES] = AlarmCodec.encode(alarms) }
     }
 
-    suspend fun saveReminderScheduledCodes(codes: Set<Int>) {
-        context.dataStore.edit { p ->
-            p[Keys.REMINDER_CODES] = codes.joinToString(",")
-        }
-    }
+    /** 已排考试提醒闹钟（requestCode + 触发时刻），语义同上。 */
+    val examScheduledAlarms: Flow<List<ScheduledAlarm>> =
+        context.dataStore.data.map { p -> AlarmCodec.decode(p[Keys.EXAM_REMINDER_CODES]) }
 
-    /** 已排考试提醒闹钟的 requestCode 集合（逗号分隔），用于精确取消。 */
-    val examReminderScheduledCodes: Flow<Set<Int>> = context.dataStore.data.map { p ->
-        p[Keys.EXAM_REMINDER_CODES]?.takeIf { it.isNotBlank() }
-            ?.split(",")?.mapNotNull { it.toIntOrNull() }?.toSet()
-            ?: emptySet()
-    }
-
-    suspend fun saveExamReminderScheduledCodes(codes: Set<Int>) {
-        context.dataStore.edit { p ->
-            p[Keys.EXAM_REMINDER_CODES] = codes.joinToString(",")
-        }
+    suspend fun saveExamScheduledAlarms(alarms: List<ScheduledAlarm>) {
+        context.dataStore.edit { p -> p[Keys.EXAM_REMINDER_CODES] = AlarmCodec.encode(alarms) }
     }
 
     /** 学分类别要求（queryXflbyq 原始 JSON）与毕业总进度（queryBxkqk 原始 JSON）缓存。 */
