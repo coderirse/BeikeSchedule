@@ -125,4 +125,32 @@ class GradeRowsTest {
         val rows = listOf(grade("A", "88"), grade("B", "优"), grade("C", "通过"))
         assertEquals(listOf("A"), GradeRows.numericOnly(rows).map { it.kcdm })
     }
+
+    // ——— GradesUiState 里两条派生值的口径（标红判定与未通过计数共用同一收敛结果）———
+
+    @Test
+    fun `补考通过后 - 该课不再计入未通过且正考行不标红`() {
+        // 成绩列表按原始行渲染（用户要看到"正考 52 / 补考 78"两行），
+        // 但"是否未通过"必须按收敛结果判定：
+        // - failedBySemester 用 bestRows.filter { isFailed } → 0，组头不显示"N 门未通过"；
+        // - GradeRow 的标红用 passedKcdm（= bestRows 里已通过的 kcdm）→ 正考行不标红。
+        val base = grade("MAKEUP", "52")
+        val rows = listOf(base.copy(bkcx = "正考"), base.copy(zzcj = "78", bkcx = "补考"))
+
+        val best = GradeRows.bestPerCourse(rows)
+        assertEquals("补考通过后不应再计入未通过", 0, best.count { it.isFailed })
+        assertEquals("补考通过的课程应进入 passedKcdm", setOf("MAKEUP"), best.filter { it.isPassed }.map { it.kcdm }.toSet())
+
+        // 原始行本身仍然是"挂科"，用来证明单看原始行会误判（这正是修复前的 bug）
+        assertTrue("原始正考行 isFailed 仍为 true，必须靠 passedKcdm 抑制标红", rows.any { it.isFailed })
+    }
+
+    @Test
+    fun `补考未通过 - 仍计入未通过`() {
+        val base = grade("FAILED", "52")
+        val rows = listOf(base.copy(bkcx = "正考"), base.copy(zzcj = "50", bkcx = "补考"))
+        val best = GradeRows.bestPerCourse(rows)
+        assertEquals(1, best.count { it.isFailed })
+        assertTrue(best.none { it.isPassed })
+    }
 }
