@@ -2,6 +2,7 @@ package com.caeamer.beikeschedule.import.parser
 
 import com.caeamer.beikeschedule.data.local.ExamEntity
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -30,7 +31,8 @@ object ExamsParser {
         return list.mapNotNull { elem ->
             runCatching {
                 val o = elem.jsonObject
-                fun str(key: String) = o[key]?.jsonPrimitive?.content ?: ""
+                // contentOrNull：显式 null 字段必须落回 ""，用 content 会拿到字面量 "null"
+                fun str(key: String) = o[key]?.jsonPrimitive?.contentOrNull ?: ""
                 val kssjms = str("KSSJMS")
                 val (date, start, end) = parseExamTime(kssjms)
                 ExamEntity(

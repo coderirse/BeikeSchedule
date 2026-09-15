@@ -41,6 +41,36 @@ class GradesParserTest {
     }
 
     @Test
+    fun `显式 null 字段解析为空串而不是字面量 null`() {
+        // 真实 fixture 里 "pm":null 出现 29 次、"khfs":null 8 次、"kclb":null 1 次。
+        // JsonNull 本身是 JsonPrimitive 且 content 返回字符串 "null"，
+        // 用 content 取值会让 UI 渲染出"排名 null/96"，必须用 contentOrNull。
+        val grades = GradesParser.parseGrades(loadFixture("grcjcx-all.json"))
+
+        val nullPm = grades.filter { it.pm.isEmpty() }
+        assertEquals(29, nullPm.size)
+        assertTrue("不应有任何 pm 被解析成字面量 null", grades.none { it.pm == "null" })
+        assertTrue(grades.none { it.zrs == "null" })
+        assertTrue(grades.none { it.khfs == "null" })
+        assertTrue(grades.none { it.kclb == "null" })
+        assertTrue(grades.none { it.kcxz == "null" })
+
+        // 有排名但无考核方式的行：以前会显示"排名 5/128"附近多出一个"考核方式 null"
+        assertEquals(8, grades.count { it.khfs.isEmpty() })
+        assertEquals(1, grades.count { it.kclb.isEmpty() })
+    }
+
+    @Test
+    fun `JSON null 字段的工具函数行为`() {
+        val grades = GradesParser.parseGrades(
+            """{"content":{"list":[{"kcdm":"x","kcmc":"课","zzcj":"90","pm":null,"kclb":null}]}}""",
+        )
+        assertEquals(1, grades.size)
+        assertEquals("", grades[0].pm)
+        assertEquals("", grades[0].kclb)
+    }
+
+    @Test
     fun `解析全量成绩 fixture - 学期分组覆盖多个学期`() {
         val grades = GradesParser.parseGrades(loadFixture("grcjcx-all.json"))
         val semesters = grades.map { it.xnxqmc }.distinct()

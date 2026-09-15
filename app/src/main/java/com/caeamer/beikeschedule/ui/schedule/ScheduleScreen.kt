@@ -1,6 +1,7 @@
 package com.caeamer.beikeschedule.ui.schedule
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -48,7 +49,9 @@ import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -77,6 +80,7 @@ import com.caeamer.beikeschedule.model.CourseMerger
 import com.caeamer.beikeschedule.model.NextClass
 import com.caeamer.beikeschedule.model.SectionMap
 import com.caeamer.beikeschedule.model.SessionExpander
+import com.caeamer.beikeschedule.model.WeekLayout
 import com.caeamer.beikeschedule.model.WeekUtils
 import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.flow.flow
@@ -91,6 +95,13 @@ import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
 
 private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "日")
+
+/**
+ * 无固定时间弹层从第几门课起固定用 Expanded 锚点。
+ * 半屏大约能放下 4 门（标题 + 每门两行文字 + 卡片内边距 + 8dp 间距），
+ * 到第 5 门就一定需要滚动了，此时半展开锚点会引发"滚动 ↔ 弹层高度"自激抖动。
+ */
+private const val SCROLLABLE_SHEET_MIN_ITEMS = 5
 
 /** 日期所属教学周（严格口径：开学前/假期跳周/学期后返回 null），与提醒排期同一套判定。 */
 private fun teachingWeekOf(semester: SettingsStore.SemesterConfig, date: LocalDate): Int? =
@@ -111,6 +122,8 @@ fun ScheduleScreen(
     val reminderEnabled by viewModel.reminderEnabled.collectAsState()
     val reminderMinutes by viewModel.reminderMinutes.collectAsState()
     val hideWeekend by viewModel.hideWeekend.collectAsState()
+    val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsState()
+    val reminderSchedule by viewModel.reminderSchedule.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -313,6 +326,7 @@ fun ScheduleScreen(
                         pendingSlot = pendingSlot,
                         // 只在用户正看"今天所在教学周"时标记，翻到其他周不误导
                         nextClassId = nextClassId.takeIf { page + 1 == teachingWeekOf(state.semester, now.toLocalDate()) },
+                        hideInactiveCourses = hideInactiveCourses,
                         onSlotLongPress = { day, big -> pendingSlot = day to big },
                         onSlotClick = { day, big ->
                             if (pendingSlot == day to big) {
@@ -396,6 +410,7 @@ fun ScheduleScreen(
             reminderEnabled = reminderEnabled,
             reminderMinutes = reminderMinutes,
             hideWeekend = hideWeekend,
+            reminderSchedule = reminderSchedule,
             onDismiss = { showSettings = false },
             onSave = { viewModel.saveSemester(it) },
             onReminderChange = { enabled, minutes -> viewModel.setReminder(enabled, minutes) },
@@ -499,10 +514,6 @@ private fun DateRow(week: Int, semester: SettingsStore.SemesterConfig, today: Lo
 
 private val SECTION_COL_WIDTH = 36.dp
 
-/** 判断两门课的节次区间是否重叠。 */
-private fun sectionsOverlap(a: CourseEntity, b: CourseEntity): Boolean =
-    a.startSection <= b.endSection && b.startSection <= a.endSection
-
 /** 一周课表网格：左节次列 + N 天列，课程块按节次绝对定位；同周重叠课程并排窄列显示；空白格长按可添加课程。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -514,6 +525,8 @@ private fun WeekGrid(
     pendingSlot: Pair<Int, Int>?,
     /** 下一节课的卡片 id（null=不标记）；仅当本页正是今天所在教学周时由调用方传入。 */
     nextClassId: Long?,
+    /** 开启后不再显示"本周暂时不上"的淡化课（设置页开关）。 */
+    hideInactiveCourses: Boolean,
     onSlotLongPress: (day: Int, big: Int) -> Unit,
     onSlotClick: (day: Int, big: Int) -> Unit,
     onCourseClick: (CourseEntity) -> Unit,
@@ -543,25 +556,10 @@ private fun WeekGrid(
         }
         // N 天列（隐藏周末时为 5 天）
         days.forEach { day ->
-            // 冲突簇：仅"本周有课且节次重叠"的课程分簇并排窄列（含传递重叠，A-B-C 链式同簇）；
-            // 互不重叠的课程各自占满整列宽。非本周课程保持旧语义：只在与所有已显示课程
-            // 都不重叠的空位整宽淡化显示。
-            val dayLayout = remember(mergedCourses, day, week) {
-                val actives = mergedCourses.filter { it.dayOfWeek == day && it.hasClassOnWeek(week) }
-                    .sortedBy { it.startSection }
-                val clusters = mutableListOf<MutableList<CourseEntity>>()
-                actives.forEach { c ->
-                    val cluster = clusters.firstOrNull { cl -> cl.any { sectionsOverlap(it, c) } }
-                    if (cluster != null) cluster += c else clusters += mutableListOf(c)
-                }
-                val inactives = mergedCourses.filter { it.dayOfWeek == day && !it.hasClassOnWeek(week) }
-                    .fold(mutableListOf<CourseEntity>()) { shown, c ->
-                        val blocked = actives.any { sectionsOverlap(it, c) } ||
-                            shown.any { sectionsOverlap(it, c) }
-                        if (!blocked) shown += c
-                        shown
-                    }
-                DayLayout(clusters, inactives)
+            // 冲突簇（本周重叠 → 并排窄列）与非本周淡化课的分拣逻辑见 WeekLayout（纯函数，有单测）。
+            // 开启"隐藏本周不上的课"后 inactives 为空，网格只留本周真正要上的课。
+            val dayLayout = remember(mergedCourses, day, week, hideInactiveCourses) {
+                WeekLayout.layoutDay(mergedCourses, day, week, hideInactiveCourses)
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 // 空白格交互层（最底层）：长按出 +，点击 + 打开预填的添加课程框，点其他格取消
@@ -634,12 +632,6 @@ private fun WeekGrid(
         }
     }
 }
-
-/** 一天列的布局：activeConflicts = 本周冲突簇（簇内并排）；inactiveShown = 淡化展示的非本周课程。 */
-private data class DayLayout(
-    val clusters: List<List<CourseEntity>>,
-    val inactives: List<CourseEntity>,
-)
 
 @Composable
 private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
@@ -751,38 +743,56 @@ private fun UnscheduledSheet(
     // 教务对"单周调课/单双周拆分"的同名课程会拆多行（如 电子技术实验 + 电子技术实验【实验】）
     // 注意：remember 必须在 ModalBottomSheet 外，sheet 内容 lambda 里放 remember 会导致内容叠加重影
     val distinctCourses = remember(courses) { courses.distinctBy { it.name } }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        LazyColumn(
-            Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item { Text("无固定时间课程", style = MaterialTheme.typography.titleMedium) }
-            if (distinctCourses.isEmpty()) {
-                item {
-                    Text(
-                        "没有无固定时间课程",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            items(distinctCourses, key = { it.id }) { course ->
-                val (bg, fg) = CourseColors.of(course.colorIndex)
-                Surface(
-                    color = bg,
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onCourseClick(course) },
-                ) {
-                    Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                        Text(course.name, fontSize = 14.sp, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+    // 「往下使劲翻会抽搐」的根因：默认半展开锚点下，列表滚到尽头后剩余速度去拖动弹层，
+    // 弹层变高 → 列表一起变高 → 不再可滚 → 弹层回落到半展开 → 列表又可滚 → 再触发，
+    // 形成自激回路，实测表现为内容以约 6Hz、±20dp 整体上下抖动（弹层自身边缘不动）。
+    // 三层一起钉死回路：
+    //   1. 列表长到需要滚动时固定 Expanded 锚点（弹层不再改高度，也就不会重新测量列表）；
+    //   2. 列表高度钉在弹层内容区（fillMaxHeight），不随滚动状态变化；
+    //   3. 关掉列表自身的 overscroll 回弹（拉伸/辉光），避免它在列表尽头与嵌套滚动互相喂招。
+    // 列表很短（不需要滚动）时保留半展开与默认 overscroll，观感更轻，也不存在该回路。
+    val scrollable = distinctCourses.size >= SCROLLABLE_SHEET_MIN_ITEMS
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = scrollable)
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        CompositionLocalProvider(LocalOverscrollFactory provides null) {
+            LazyColumn(
+                modifier = if (scrollable) {
+                    Modifier.fillMaxWidth().fillMaxHeight()
+                } else {
+                    Modifier.fillMaxWidth()
+                },
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item { Text("无固定时间课程", style = MaterialTheme.typography.titleMedium) }
+                if (distinctCourses.isEmpty()) {
+                    item {
                         Text(
-                            WeekUtils.describe(course.weekBitmap),
-                            fontSize = 12.sp,
-                            color = fg.copy(alpha = 0.75f),
+                            "没有无固定时间课程",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                }
+                items(distinctCourses, key = { it.id }) { course ->
+                    val (bg, fg) = CourseColors.of(course.colorIndex)
+                    Surface(
+                        color = bg,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onCourseClick(course) },
+                    ) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                            Text(course.name, fontSize = 14.sp, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                WeekUtils.describe(course.weekBitmap),
+                                fontSize = 12.sp,
+                                color = fg.copy(alpha = 0.75f),
+                            )
+                        }
                     }
                 }
             }

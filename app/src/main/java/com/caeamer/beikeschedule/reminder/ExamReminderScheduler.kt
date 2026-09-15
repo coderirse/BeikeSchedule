@@ -1,12 +1,11 @@
 package com.caeamer.beikeschedule.reminder
 
-import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
+import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import kotlinx.coroutines.flow.first
 import java.time.LocalDate
@@ -17,7 +16,10 @@ import java.time.ZoneId
 /**
  * 考前提醒调度：为未来 30 天内、能解析出日期的每场考试排两个闹钟——
  * 考前一天 20:00 与开考前 1 小时（无开始时间则只排前者）。
- * 全量重排策略与课程提醒一致；requestCode 固定使用 8_000_000 段，与其他闹钟隔离。
+ *
+ * 与上课提醒共用 [ReminderAlarmScheduler] 的"先算后换 + 只取消仍在未来的闹钟"策略
+ * （旧实现同样是先无条件取消再只重排未来的，会丢掉"已到点但系统还没投递"的那条）；
+ * requestCode 固定使用 8_000_000 段，与上课提醒、每日脉冲隔离。
  */
 object ExamReminderScheduler {
 
@@ -38,90 +40,105 @@ object ExamReminderScheduler {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    /** 考试数据变化/开机/每日脉冲时调用：取消旧闹钟，按最新数据全量重排。 */
+    /** 一条待排的考试提醒（纯数据，便于单测；PendingIntent 由调用方按需构造）。 */
+    internal data class PlannedExamReminder(
+        val requestCode: Int,
+        val triggerAtMillis: Long,
+        val exam: ExamEntity,
+        val titlePrefix: String,
+    )
+
+    /** 考试数据变化/开机/每日脉冲时调用：按最新数据全量重排。 */
     suspend fun reschedule(context: Context) {
         val repo = ScheduleRepository(context)
-        cancelRecorded(context, repo)
+        val settings = repo.settings
+
+        // —— 先算 ——
         val exams = repo.exams.first()
         val now = LocalDateTime.now()
-        val today = LocalDate.now()
-        val scheduled = mutableSetOf<Int>()
-        for (exam in exams) {
-            if (!exam.hasDate) continue
-            val date = runCatching { LocalDate.parse(exam.ksrq) }.getOrNull() ?: continue
-            if (date.isBefore(today) || date.isAfter(today.plusDays(SCHEDULE_DAYS.toLong()))) continue
+        val planned = planExamReminders(exams, now, ZoneId.systemDefault())
+        val recorded = settings.examScheduledAlarms.first()
+
+        // —— 后换 ——
+        ReminderAlarmScheduler.apply(
+            context = context,
+            action = ACTION_EXAM_REMIND,
+            recorded = recorded,
+            planned = planned.map { p ->
+                ReminderAlarmScheduler.PlannedAlarm(
+                    requestCode = p.requestCode,
+                    triggerAtMillis = p.triggerAtMillis,
+                    pendingIntent = pendingIntent(context, p),
+                )
+            },
+            persist = { settings.saveExamScheduledAlarms(it) },
+        )
+    }
+
+    /**
+     * 纯函数：算出未来 30 天内要排的考试提醒。
+     * 每场考试最多两条：考前一天 20:00、开考前 1 小时（需能解析出开始时间）。
+     */
+    internal fun planExamReminders(
+        exams: List<ExamEntity>,
+        now: LocalDateTime,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): List<PlannedExamReminder> {
+        val today = now.toLocalDate()
+        val result = mutableListOf<PlannedExamReminder>()
+        exams.forEach { exam ->
+            if (!exam.hasDate) return@forEach
+            val date = runCatching { LocalDate.parse(exam.ksrq) }.getOrNull() ?: return@forEach
+            if (date.isBefore(today) || date.isAfter(today.plusDays(SCHEDULE_DAYS.toLong()))) return@forEach
 
             // 考前一天 20:00
             val dayBefore = LocalDateTime.of(date.minusDays(1), LocalTime.of(20, 0))
             if (dayBefore.isAfter(now)) {
-                val code = requestCodeOf(exam, true)
-                setAlarm(context, pendingIntent(context, exam, "明天考试", code), dayBefore)
-                scheduled += code
+                result += PlannedExamReminder(
+                    requestCode = requestCodeOf(exam, dayBefore = true),
+                    triggerAtMillis = ReminderAlarmScheduler.toEpochMillis(dayBefore, zone),
+                    exam = exam,
+                    titlePrefix = "明天考试",
+                )
             }
             // 开考前 1 小时（需要解析出开始时间）
-            val start = runCatching { LocalTime.parse(exam.kssj) }.getOrNull()
-            if (start != null) {
-                val oneHourBefore = LocalDateTime.of(date, start).minusHours(1)
-                if (oneHourBefore.isAfter(now)) {
-                    val code = requestCodeOf(exam, false)
-                    setAlarm(context, pendingIntent(context, exam, "即将考试", code), oneHourBefore)
-                    scheduled += code
-                }
+            val start = runCatching { LocalTime.parse(exam.kssj) }.getOrNull() ?: return@forEach
+            val oneHourBefore = LocalDateTime.of(date, start).minusHours(1)
+            if (oneHourBefore.isAfter(now)) {
+                result += PlannedExamReminder(
+                    requestCode = requestCodeOf(exam, dayBefore = false),
+                    triggerAtMillis = ReminderAlarmScheduler.toEpochMillis(oneHourBefore, zone),
+                    exam = exam,
+                    titlePrefix = "即将考试",
+                )
             }
         }
-        repo.settings.saveExamReminderScheduledCodes(scheduled)
+        return result
     }
 
-    // 8_000_000 段：examId*2(+1)，与其他闹钟 requestCode 空间隔离
-    private fun requestCodeOf(exam: com.caeamer.beikeschedule.data.local.ExamEntity, dayBefore: Boolean): Int =
+    // 8_000_000 段：examId*2(+1)，与上课提醒的 requestCode 空间隔离
+    private fun requestCodeOf(exam: ExamEntity, dayBefore: Boolean): Int =
         REQUEST_CODE_BASE + (exam.id * 2).toInt() + if (dayBefore) 0 else 1
 
-    private fun examTimeText(exam: com.caeamer.beikeschedule.data.local.ExamEntity): String = when {
+    private fun examTimeText(exam: ExamEntity): String = when {
         exam.kssj.isNotBlank() && exam.jssj.isNotBlank() -> "${exam.ksrq} ${exam.kssj}-${exam.jssj}"
         exam.ksrq.isNotBlank() -> exam.ksrq
         else -> exam.kssjms
     }
 
-    private fun pendingIntent(
-        context: Context,
-        exam: com.caeamer.beikeschedule.data.local.ExamEntity,
-        titlePrefix: String,
-        requestCode: Int,
-    ): PendingIntent {
+    private fun pendingIntent(context: Context, plan: PlannedExamReminder): PendingIntent {
+        val exam = plan.exam
         val intent = Intent(context, ReminderReceiver::class.java)
             .setAction(ACTION_EXAM_REMIND)
             .putExtra(EXTRA_NAME, exam.kcmc)
             .putExtra(EXTRA_TIME_TEXT, examTimeText(exam))
             .putExtra(EXTRA_LOCATION, exam.cdmc)
             .putExtra(EXTRA_SEAT, exam.zwh)
-            .putExtra(EXTRA_TITLE_PREFIX, titlePrefix)
+            .putExtra(EXTRA_TITLE_PREFIX, plan.titlePrefix)
+            .putExtra(ReminderAlarmScheduler.EXTRA_REQUEST_CODE, plan.requestCode)
         return PendingIntent.getBroadcast(
-            context, requestCode, intent,
+            context, plan.requestCode, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-    }
-
-    private fun setAlarm(context: Context, pending: PendingIntent, trigger: LocalDateTime) {
-        val alarmManager = context.getSystemService(AlarmManager::class.java)
-        val millis = trigger.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()) {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pending)
-        } else {
-            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, millis, pending)
-        }
-    }
-
-    private suspend fun cancelRecorded(context: Context, repo: ScheduleRepository) {
-        val codes = repo.settings.examReminderScheduledCodes.first()
-        if (codes.isEmpty()) return
-        val alarmManager = context.getSystemService(AlarmManager::class.java)
-        codes.forEach { code ->
-            val intent = Intent(context, ReminderReceiver::class.java).setAction(ACTION_EXAM_REMIND)
-            PendingIntent.getBroadcast(
-                context, code, intent,
-                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
-            )?.let { alarmManager.cancel(it) }
-        }
-        repo.settings.saveExamReminderScheduledCodes(emptySet())
     }
 }

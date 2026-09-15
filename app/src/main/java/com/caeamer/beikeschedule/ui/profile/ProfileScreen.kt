@@ -1,7 +1,9 @@
 package com.caeamer.beikeschedule.ui.profile
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -27,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,19 +63,12 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+// 上面 6-17 行已 import 过 Column/Row/Spacer/fillMaxSize…，此处只保留 Box 与新增的 WindowInsets，
+// 原先这 12 行是重复粘贴（Kotlin 只报 Duplicate import 警告，故一直被忽略）
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.R
 import com.caeamer.beikeschedule.data.pref.SettingsStore
@@ -84,6 +80,7 @@ import com.caeamer.beikeschedule.ui.settings.UpdateState
 @Composable
 fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
     val themeMode by viewModel.themeMode.collectAsState()
+    val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsState()
     val update by viewModel.update.collectAsState()
     val studentProfile by viewModel.studentProfile.collectAsState()
     val appVersion by viewModel.appVersion.collectAsState()
@@ -93,6 +90,9 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
     var showThemeDialog by remember { mutableStateOf(false) }
 
     Scaffold(
+        // 外层 Scaffold（MainActivity）已用 navigationBarsPadding 预留底部 Tab 栏高度，
+        // 内层若用默认 contentWindowInsets 会再吃一遍导航栏 inset，底部多出一条空白。
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             // 紧凑矮顶栏（外层 Scaffold 不消费状态栏 inset，这里自行处理）——透明透出整屏渐变
             Surface(color = Color.Transparent) {
@@ -150,12 +150,16 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                         if (studentProfile.zymc.isNotBlank()) ProfileRow("专业", studentProfile.zymc)
                         if (studentProfile.bjmc.isNotBlank()) ProfileRow("班级", studentProfile.bjmc)
                         if (studentProfile.njmc.isNotBlank()) ProfileRow("年级", studentProfile.njmc)
-                        if (studentProfile.xjsfzx.isNotBlank() || studentProfile.xjsfzc.isNotBlank()) {
-                            ProfileRow(
-                                "学籍状态",
-                                (if (studentProfile.xjsfzx == "1") "在校" else "不在校") +
-                                    " · " + (if (studentProfile.xjsfzc == "1") "已注册" else "未注册"),
-                            )
+                        // 字段缺失（空串）不能当成否定结论：只有服务端明确返回了才展示对应半边，
+                        // 否则一个字段缺失会渲染出"不在校 · 已注册"这种凭空断言的文案。
+                        val statusParts = listOfNotNull(
+                            studentProfile.xjsfzx.takeIf { it.isNotBlank() }
+                                ?.let { if (it == "1") "在校" else "不在校" },
+                            studentProfile.xjsfzc.takeIf { it.isNotBlank() }
+                                ?.let { if (it == "1") "已注册" else "未注册" },
+                        )
+                        if (statusParts.isNotEmpty()) {
+                            ProfileRow("学籍状态", statusParts.joinToString(" · "))
                         }
                     } else {
                         Text(
@@ -214,8 +218,9 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                     )
                 },
                 onClick = {
-                    context.startActivity(
+                    context.openExternal(
                         Intent(Intent.ACTION_VIEW, Uri.parse(SettingsViewModel.REPO_URL)),
+                        "未找到可打开网页的应用",
                     )
                 },
             )
@@ -236,11 +241,12 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                     )
                 },
                 onClick = {
-                    context.startActivity(
+                    context.openExternal(
                         Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:caeamer@163.com")).apply {
                             putExtra(Intent.EXTRA_SUBJECT, "贝壳课表 反馈")
                             putExtra(Intent.EXTRA_TEXT, "（请描述你遇到的问题或建议；版本 $appVersion）")
                         },
+                        "未找到邮件客户端，可直接发信至 caeamer@163.com",
                     )
                 },
             )
@@ -271,8 +277,9 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                     )
                 },
                 onClick = {
-                    context.startActivity(
+                    context.openExternal(
                         Intent(Intent.ACTION_VIEW, Uri.parse(SettingsViewModel.PINGJIAO_URL)),
+                        "未找到可打开网页的应用",
                     )
                 },
             )
@@ -288,10 +295,35 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                     )
                 },
                 onClick = {
-                    context.startActivity(
+                    context.openExternal(
                         Intent(Intent.ACTION_VIEW, Uri.parse(SettingsViewModel.SRTP_URL)),
+                        "未找到可打开网页的应用",
                     )
                 },
+            )
+
+            // —— 课表显示 ——
+            Text(
+                "课表",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            SettingsItemRow(
+                icon = { Icon(Icons.Default.VisibilityOff, null, Modifier.size(20.dp)) },
+                title = "隐藏本周不上的课",
+                value = if (hideInactiveCourses) {
+                    "已开启：本周没有安排的课不再显示"
+                } else {
+                    "单双周的另一半、还没到的调课周会淡化显示"
+                },
+                trailing = {
+                    Switch(
+                        checked = hideInactiveCourses,
+                        onCheckedChange = { viewModel.setHideInactiveCourses(it) },
+                    )
+                },
+                onClick = { viewModel.setHideInactiveCourses(!hideInactiveCourses) },
             )
 
             // —— 主题 ——
@@ -343,7 +375,10 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                 text = { if (u.notes.isNotBlank()) Text(u.notes, style = MaterialTheme.typography.bodySmall) },
                 confirmButton = {
                     TextButton(onClick = {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u.url)))
+                        context.openExternal(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(u.url)),
+                            "未找到可打开网页的应用",
+                        )
                         showUpdateDialog = false
                     }) { Text("前往下载") }
                 },
@@ -477,5 +512,17 @@ private fun ProfileRow(label: String, value: String) {
             modifier = Modifier.width(64.dp),
         )
         Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+    }
+}
+
+/**
+ * 安全拉起外部应用。
+ * 本页所有外链都是隐式 Intent：设备上没有浏览器、或（尤其）没有邮件客户端时，
+ * startActivity 会抛 ActivityNotFoundException 直接崩掉进程 —— ACTION_SENDTO + mailto:
+ * 不像 ACTION_VIEW 那样有系统选择器兜底。JwWebView 的同类调用早已用 runCatching 包裹，这里补齐。
+ */
+private fun Context.openExternal(intent: Intent, unavailableHint: String) {
+    runCatching { startActivity(intent) }.onFailure {
+        Toast.makeText(this, unavailableHint, Toast.LENGTH_SHORT).show()
     }
 }

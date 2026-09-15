@@ -1,6 +1,7 @@
 package com.caeamer.beikeschedule.import.parser
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -44,7 +45,8 @@ object CreditProgressParser {
         return list.mapNotNull { elem ->
             runCatching {
                 val o = elem.jsonObject
-                fun str(key: String) = o[key]?.jsonPrimitive?.content ?: ""
+                // contentOrNull：显式 null 字段必须落回 ""，用 content 会拿到字面量 "null"
+                fun str(key: String) = o[key]?.jsonPrimitive?.contentOrNull ?: ""
                 fun num(key: String) = o[key]?.jsonPrimitive?.doubleOrNull ?: 0.0
                 val yqxf = num("yqwcxf")
                 if (yqxf <= 0.0) return@runCatching null

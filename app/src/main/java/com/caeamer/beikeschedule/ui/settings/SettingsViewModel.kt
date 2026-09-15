@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.GradesParser
+import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -45,6 +46,14 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrDefault(""),
     )
 
+    /** 「隐藏本周不上的课」：与课表页共用同一个 DataStore 键，两边即时同步。 */
+    val hideInactiveCourses: StateFlow<Boolean> = settings.hideInactiveCourses
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setHideInactiveCourses(hidden: Boolean) {
+        viewModelScope.launch { settings.setHideInactiveCourses(hidden) }
+    }
+
     init {
         checkUpdate()
     }
@@ -61,6 +70,9 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             settings.saveCreditMeta("", "")
             repo.replaceGrades(emptyList())
             repo.replaceExams(emptyList())
+            // 考试数据已清空 → 同步取消已排的考前提醒
+            // （否则成绩清完了，旧的"明天考试"闹钟还会带着地点/座位号弹出来）
+            ExamReminderScheduler.reschedule(getApplication())
         }
     }
 

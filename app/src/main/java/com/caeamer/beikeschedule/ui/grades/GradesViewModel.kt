@@ -265,10 +265,11 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
                     if (xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()) {
                         repo.settings.saveCreditMeta(xflbyqJson, bxkqkJson)
                     }
-                    // 考试有数据 → 重排考前提醒
-                    if (exams.isNotEmpty()) {
-                        ExamReminderScheduler.reschedule(getApplication())
-                    }
+                    // 无论有没有考试都重排：reschedule 会先把该取消的取消掉，
+                    // 空列表就只是"全部取消"。旧实现写成 if (exams.isNotEmpty())，
+                    // 于是考试列表变空（学期结束、或某次考试子请求失败被清空）时，
+                    // 旧的"明天考试/即将考试"闹钟还带着过期地点和座位号继续弹。
+                    ExamReminderScheduler.reschedule(getApplication())
                     error.value = null
                 }
             } catch (e: Exception) {

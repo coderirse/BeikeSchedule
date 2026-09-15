@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -28,9 +29,11 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -132,10 +135,27 @@ class MainActivity : ComponentActivity() {
             BeikeScheduleTheme(darkTheme = darkTheme) {
                 var tab by rememberSaveable { mutableStateOf("schedule") }
                 var showImport by rememberSaveable { mutableStateOf(false) }
+                // 导入页的 WebView 展示的是浅底教务页面，需要临时切成深色状态栏图标
+                var importLightPage by remember { mutableStateOf(false) }
+
+                // 状态栏/导航栏图标明暗：themeMode 只是 Compose 内部的主题选择，
+                // 不会改资源 uiMode，而 enableEdgeToEdge() 的 SystemBarStyle.auto 只看 uiMode
+                // （本应用主题是 android:Theme.Material.Light.NoActionBar，恒为 notnight），
+                // 所以必须自己按 darkTheme 设置，否则"系统浅色 + 应用深色"时是深图标压在近黑渐变上。
+                val darkIcons = if (showImport && importLightPage) true else !darkTheme
+                SideEffect {
+                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = darkIcons
+                        isAppearanceLightNavigationBars = darkIcons
+                    }
+                }
 
                 if (showImport) {
-                    // 导入为全屏流程（含返回），不显示底部 Tab
-                    ImportScreen(onDone = { showImport = false })
+                    // 导入为全屏流程，不显示底部 Tab；返回键由 ImportScreen 内的 BackHandler 接管
+                    ImportScreen(
+                        onDone = { showImport = false },
+                        onLightBackgroundVisible = { importLightPage = it },
+                    )
                 } else {
                     // 整屏渐变仅在「课表页」开启：浅色暖渐变/暗色暗渐变，其他页用主题默认背景
                     val useGradient = tab == "schedule"

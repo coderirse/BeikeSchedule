@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- API 31+ 备份/迁移规则：云备份排除敏感数据；device-transfer（本机换机迁移）保留，方便用户换机 -->
+<!--
+  API 31+ 备份/迁移规则：云备份排除敏感数据；device-transfer（本机换机迁移）保留课表/成绩，
+  同样排除教务登录态 —— 换机后重新登录一次即可，凭证不随迁移落地到新设备。
+  两个块内都没有 <include>，所以"未列出的一切默认会被包含"，排除项必须写全。
+-->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="database" path="beike_schedule.db" />
         <exclude domain="database" path="beike_schedule.db-wal" />
         <exclude domain="database" path="beike_schedule.db-shm" />
         <exclude domain="file" path="datastore/" />
+        <exclude domain="root" path="app_webview/" />
     </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="app_webview/" />
+    </device-transfer>
 </data-extraction-rules>

@@ -1,9 +1,12 @@
 package com.caeamer.beikeschedule.ui.schedule
 
 import android.app.AlarmManager
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -36,6 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
+import com.caeamer.beikeschedule.reminder.ClassReminderScheduler
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -50,6 +54,8 @@ fun SemesterSettingsDialog(
     reminderEnabled: Boolean,
     reminderMinutes: Int,
     hideWeekend: Boolean,
+    /** 提醒排期诊断（已排数量 / 最近一次触发时刻）。 */
+    reminderSchedule: ReminderScheduleInfo = ReminderScheduleInfo(),
     onDismiss: () -> Unit,
     onSave: (SettingsStore.SemesterConfig) -> Unit,
     onReminderChange: (enabled: Boolean, minutes: Int) -> Unit,
@@ -63,6 +69,12 @@ fun SemesterSettingsDialog(
     var totalWeeks by remember { mutableIntStateOf(current.totalWeeks) }
     var showDatePicker by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    // 系统层面的开关是同步查询，每次打开设置页现算，保证是最新值
+    val notificationsBlocked = remember { notificationsBlocked(context) }
+    val exactAlarmBlocked = remember {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            !context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -149,26 +161,44 @@ fun SemesterSettingsDialog(
                         onSelect = { onReminderChange(true, it) },
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                        !context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
-                    ) {
+                    // —— 提醒状态诊断 ——
+                    // 这个功能出过两次"偶发不提醒"。把"排上了没有 / 下次什么时候响 / 通知是不是被系统关了"
+                    // 直接摆到界面上，下次出问题不用再抓 logcat 或 dumpsys。
+                    if (notificationsBlocked) {
+                        Text(
+                            "通知已被系统关闭，上课提醒不会弹出。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        TextButton(onClick = { openNotificationSettings(context) }) { Text("去开启通知") }
+                    } else {
+                        Text(
+                            reminderStatusText(reminderSchedule),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (exactAlarmBlocked) {
                         Text(
                             "系统未授予精确闹钟权限，提醒可能延迟几分钟",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
                         TextButton(onClick = {
-                            context.startActivity(
-                                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
+                            // 隐式 Intent 一律兜住：个别 ROM 没有这个设置页
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            }
                         }) { Text("去开启精确闹钟") }
                     }
                 }
 
                 HorizontalDivider()
 
-                // —— 隐藏课程（教务导入课程可隐藏，此处恢复）——
+                // —— 隐藏课程（三类课程都可隐藏，此处恢复）——
                 Text("隐藏的课程", style = MaterialTheme.typography.titleSmall)
                 if (hiddenCourses.isEmpty()) {
                     Text(
@@ -185,13 +215,25 @@ fun SemesterSettingsDialog(
                             Text(
                                 course.name,
                                 style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f, fill = false),
                                 maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
+                            // 来源标注：自定义课/示例课恢复后才能删除，教务课恢复后也只能再隐藏
+                            Text(
+                                "· " + courseSourceLabel(course),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.weight(1f))
                             TextButton(onClick = { onRestoreCourse(course.id) }) { Text("恢复") }
                         }
                     }
+                    Text(
+                        "自定义课 / 示例课需先恢复，才能在课表里删除。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 HorizontalDivider()
@@ -236,5 +278,49 @@ fun SemesterSettingsDialog(
         ) {
             DatePicker(state = pickerState)
         }
+    }
+}
+
+/** 隐藏课程列表里的来源标注。 */
+private fun courseSourceLabel(course: CourseEntity): String = when (course.source) {
+    CourseEntity.SOURCE_IMPORT -> "教务"
+    CourseEntity.SOURCE_SAMPLE -> "示例"
+    else -> "自定义"
+}
+
+/** 通知是否被系统挡掉：应用级通知开关（含权限）被关，或「上课提醒」渠道被设为"关闭"。 */
+private fun notificationsBlocked(context: Context): Boolean {
+    if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return true
+    val channel = context.getSystemService(NotificationManager::class.java)
+        .getNotificationChannel(ClassReminderScheduler.CHANNEL_ID)
+    return channel != null && channel.importance == NotificationManager.IMPORTANCE_NONE
+}
+
+private fun openNotificationSettings(context: Context) {
+    // 隐式 Intent 一律兜住：个别 ROM / 精简系统没有这个设置页
+    runCatching {
+        context.startActivity(
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+}
+
+/** 诊断文案："已排 N 个提醒 · 最近一次：明天 07:45"。 */
+private fun reminderStatusText(info: ReminderScheduleInfo): String {
+    val next = info.nextTriggerAtMillis ?: return "当前没有需要提醒的课（未开学 / 假期中 / 本学期已结束）"
+    return "已排 ${info.scheduledCount} 个提醒 · 最近一次：${formatTrigger(next)}"
+}
+
+private fun formatTrigger(millis: Long): String {
+    val dt = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault())
+    val hhmm = "%02d:%02d".format(dt.hour, dt.minute)
+    val day = dt.toLocalDate()
+    val today = LocalDate.now()
+    return when (day) {
+        today -> "今天 $hhmm"
+        today.plusDays(1) -> "明天 $hhmm"
+        else -> "${day.monthValue}月${day.dayOfMonth}日 $hhmm"
     }
 }

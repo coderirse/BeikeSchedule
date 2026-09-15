@@ -1,8 +1,10 @@
 package com.caeamer.beikeschedule.data.pref
 
 import android.content.Context
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -10,7 +12,15 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-private val Context.dataStore by preferencesDataStore(name = "settings")
+/**
+ * 配置存储。corruptionHandler 必加：settings.preferences_pb 一旦损坏（写中断/存储写满/恢复异常），
+ * 默认实现会抛 CorruptionException 进入 collectAsState/stateIn 的收集协程 → 每次启动都崩且无法自愈，
+ * 用户只能清应用数据。兜底重置为默认配置：成绩库与课表库是独立的 Room 数据库，不受影响。
+ */
+private val Context.dataStore by preferencesDataStore(
+    name = "settings",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+)
 
 /** 学期与提醒等配置（DataStore）。 */
 class SettingsStore(private val context: Context) {
@@ -69,6 +79,7 @@ class SettingsStore(private val context: Context) {
         val WEIGHT_SEMESTER = stringPreferencesKey("weight_semester")
         val WEIGHT_EXCLUDED = stringPreferencesKey("weight_excluded")
         val HIDE_WEEKEND = booleanPreferencesKey("hide_weekend")
+        val HIDE_INACTIVE_COURSES = booleanPreferencesKey("hide_inactive_courses")
         val XFLBYQ_JSON = stringPreferencesKey("xflbyq_json")
         val BXKQK_JSON = stringPreferencesKey("bxkqk_json")
         val EXAM_REMINDER_CODES = stringPreferencesKey("exam_reminder_codes")
@@ -109,30 +120,20 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    /** 已排课程提醒闹钟的 requestCode 集合（逗号分隔），用于精确取消。 */
-    val reminderScheduledCodes: Flow<Set<Int>> = context.dataStore.data.map { p ->
-        p[Keys.REMINDER_CODES]?.takeIf { it.isNotBlank() }
-            ?.split(",")?.mapNotNull { it.toIntOrNull() }?.toSet()
-            ?: emptySet()
+    /** 已排课程提醒闹钟（requestCode + 触发时刻），用于精确取消与"已到点不动它"的判定。 */
+    val reminderScheduledAlarms: Flow<List<ScheduledAlarm>> =
+        context.dataStore.data.map { p -> AlarmCodec.decode(p[Keys.REMINDER_CODES]) }
+
+    suspend fun saveReminderScheduledAlarms(alarms: List<ScheduledAlarm>) {
+        context.dataStore.edit { p -> p[Keys.REMINDER_CODES] = AlarmCodec.encode(alarms) }
     }
 
-    suspend fun saveReminderScheduledCodes(codes: Set<Int>) {
-        context.dataStore.edit { p ->
-            p[Keys.REMINDER_CODES] = codes.joinToString(",")
-        }
-    }
+    /** 已排考试提醒闹钟（requestCode + 触发时刻），语义同上。 */
+    val examScheduledAlarms: Flow<List<ScheduledAlarm>> =
+        context.dataStore.data.map { p -> AlarmCodec.decode(p[Keys.EXAM_REMINDER_CODES]) }
 
-    /** 已排考试提醒闹钟的 requestCode 集合（逗号分隔），用于精确取消。 */
-    val examReminderScheduledCodes: Flow<Set<Int>> = context.dataStore.data.map { p ->
-        p[Keys.EXAM_REMINDER_CODES]?.takeIf { it.isNotBlank() }
-            ?.split(",")?.mapNotNull { it.toIntOrNull() }?.toSet()
-            ?: emptySet()
-    }
-
-    suspend fun saveExamReminderScheduledCodes(codes: Set<Int>) {
-        context.dataStore.edit { p ->
-            p[Keys.EXAM_REMINDER_CODES] = codes.joinToString(",")
-        }
+    suspend fun saveExamScheduledAlarms(alarms: List<ScheduledAlarm>) {
+        context.dataStore.edit { p -> p[Keys.EXAM_REMINDER_CODES] = AlarmCodec.encode(alarms) }
     }
 
     /** 学分类别要求（queryXflbyq 原始 JSON）与毕业总进度（queryBxkqk 原始 JSON）缓存。 */
@@ -213,6 +214,18 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setHideWeekend(hidden: Boolean) {
         context.dataStore.edit { p -> p[Keys.HIDE_WEEKEND] = hidden }
+    }
+
+    /**
+     * 课表是否隐藏"本周暂时不上"的课。
+     * 关（默认）：这些课以 30% alpha 淡化显示（单双周的另一半、还没到的调课周）；
+     * 开：直接不显示，网格更干净。
+     */
+    val hideInactiveCourses: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.HIDE_INACTIVE_COURSES] ?: false }
+
+    suspend fun setHideInactiveCourses(hidden: Boolean) {
+        context.dataStore.edit { p -> p[Keys.HIDE_INACTIVE_COURSES] = hidden }
     }
 
     private companion object {
