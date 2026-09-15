@@ -31,21 +31,30 @@ object GpaCalculator {
         else -> 0.0
     }
 
-    /** 同一门课只留一行：有补考/重修行取其中最高分，否则取正考最高分。 */
+    /**
+     * 同一门课只留一行：有补考/重修行取其中最高分，否则取正考最高分。
+     *
+     * 逻辑已抽到 [GradeRows.bestPerCourse]（加权成绩/未通过门数/学分进度共用同一口径，
+     * 此前只有 GPA 去重，另三条路径对原始行求和会重复计学分）。这里保留薄封装以免
+     * 改动现有调用点与测试。
+     */
     internal fun bestRowPerCourse(numericGrades: List<GradeEntity>): List<GradeEntity> =
-        numericGrades.groupBy { it.kcdm }.map { (_, rows) ->
-            val retakes = rows.filter { it.bkcx.isNotBlank() && it.bkcx != "正考" }
-            (retakes.ifEmpty { rows }).maxBy { it.numericScore!! }
-        }
+        GradeRows.bestPerCourse(numericGrades)
 
     /** 计算 4.0 制 GPA；无有效数据返回 null。 */
     fun calculate(grades: List<GradeEntity>): GpaResult? {
-        val numeric = grades.filter { it.numericScore != null }
+        val numeric = GradeRows.numericOnly(grades)
         if (numeric.isEmpty()) return null
         val rows = bestRowPerCourse(numeric)
-        val totalCredits = rows.sumOf { it.xf }
-        if (totalCredits <= 0.0) return null
-        val gpa = rows.sumOf { gradePoint(it.numericScore!!) * it.xf } / totalCredits
-        return GpaResult(gpa, totalCredits, rows.size)
+        // 只计入有正学分的课：0 学分课程不影响绩点，但会把"纳入 N 门"虚增
+        // （实测 fixture 里有 7 门 0 学分课：形势与政策、专业导论、心理健康等）
+        val scored = rows.mapNotNull { row -> row.numericScore?.let { row to it } }
+            .filter { (row, _) -> row.xf > 0.0 }
+        if (scored.isEmpty()) return null
+        val totalCredits = scored.sumOf { (row, _) -> row.xf }
+        if (totalCredits <= 0.0 || !totalCredits.isFinite()) return null
+        val gpa = scored.sumOf { (row, score) -> gradePoint(score) * row.xf } / totalCredits
+        if (!gpa.isFinite()) return null
+        return GpaResult(gpa, totalCredits, scored.size)
     }
 }

@@ -307,8 +307,13 @@ private fun GradesContent(
                     }
                 }
             }
-            items(grades, key = { it.id }) { grade ->
-                GradeRow(grade, hideScores = state.hideScores, onClick = { onGradeClick(grade) })
+            items(grades, key = { "${it.kcdm}@${it.xnxq}@${it.bkcx}" }) { grade ->
+                GradeRow(
+                    grade = grade,
+                    hideScores = state.hideScores,
+                    coursePassed = grade.kcdm in state.passedKcdm,
+                    onClick = { onGradeClick(grade) },
+                )
                 HorizontalDivider(
                     Modifier.padding(horizontal = 16.dp),
                     color = MaterialTheme.colorScheme.outlineVariant,
@@ -590,12 +595,13 @@ private fun CourseGradeDetailSheet(grade: GradeEntity, hideScores: Boolean, onDi
             }
             Spacer(Modifier.height(12.dp))
             if (grade.pm.isNotBlank() && grade.zrs.isNotBlank()) {
-                DetailRow("课程排名", "${grade.pm} / ${grade.zrs}")
+                // 排名与总人数属隐私信息，隐藏成绩时一并掩码
+                DetailRow("课程排名", if (hideScores) "***" else "${grade.pm} / ${grade.zrs}")
             }
             if (grade.khfs.isNotBlank()) DetailRow("考核方式", grade.khfs)
             DetailRow("课程性质", grade.kcxz)
             if (grade.kclb.isNotBlank()) DetailRow("课程类别", grade.kclb)
-            DetailRow("学分", "${fmt2(grade.xf)}")
+            DetailRow("学分", if (hideScores) "***" else "${fmt2(grade.xf)}")
             if (grade.bkcx.isNotBlank()) DetailRow("考试类型", grade.bkcx)
             if (grade.yxmc.isNotBlank()) DetailRow("开课学院", grade.yxmc)
             DetailRow("学期", grade.xnxqmc)
@@ -714,11 +720,17 @@ private fun ScoreCard(
                         if (state.excludedKcdm.isNotEmpty()) "（已排除 ${state.excludedKcdm.size} 门）" else ""
                 } else "没有可计算的必修课数字成绩"
             } else {
-                // GPA 为本地 4.0 制计算；教务网排名口径是平均学分绩，仍展示作参考
+                // GPA 为本地 4.0 制计算；教务网排名口径是平均学分绩，仍展示作参考。
+                // 排名与学分数同样属于隐私信息，隐藏成绩时一并掩码（此前只掩码了分数本身，
+                // 排名与"纳入 N 门 · 共 X 学分"仍会泄露）。
                 val g = state.localGpa
-                val rankText = state.gpa?.let { "专业排名 ${it.rank}/${it.totalStudents}（平均学分绩口径） · " } ?: ""
+                val rankText = state.gpa
+                    ?.takeIf { it.hasRank && !state.hideScores }
+                    ?.let { "专业排名 ${it.rank}/${it.totalStudents}（平均学分绩口径） · " }
+                    ?: ""
                 if (g != null) {
-                    "${rankText}满绩 4.0 · 纳入 ${g.courseCount} 门 · 共 ${fmt2(g.credits)} 学分"
+                    val detail = if (state.hideScores) "" else "满绩 4.0 · 纳入 ${g.courseCount} 门 · 共 ${fmt2(g.credits)} 学分"
+                    rankText + detail
                 } else "没有可计算的数字成绩"
             }
             Text(
@@ -784,7 +796,10 @@ private fun ScoreCard(
                                 Column(Modifier.weight(1f)) {
                                     Text(grade.kcmc, style = MaterialTheme.typography.bodySmall)
                                     Text(
-                                        "${grade.xnxqmc} · ${grade.xf}学分 · ${grade.zzcj}分",
+                                        // 分数必须与主数值/成绩行一样掩码：此处此前无条件打印原始分，
+                                        // 是隐私开关最明显的一处绕过（勾选列表展开即泄露全部必修课分数）。
+                                        "${grade.xnxqmc} · ${grade.xf}学分 · " +
+                                            if (state.hideScores) "***" else "${grade.zzcj}分",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
                                     )
@@ -798,8 +813,15 @@ private fun ScoreCard(
     }
 }
 
+/** 成绩单行：分数按 hideScores 掩码；挂科标红按"这门课最终是否通过"判定。 */
 @Composable
-private fun GradeRow(grade: GradeEntity, hideScores: Boolean, onClick: () -> Unit) {
+private fun GradeRow(
+    grade: GradeEntity,
+    hideScores: Boolean,
+    /** 该课最终是否已通过（补考/重修通过后为正考行也不该标红）。 */
+    coursePassed: Boolean,
+    onClick: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth()
             .clickable(onClick = onClick)
@@ -821,7 +843,11 @@ private fun GradeRow(grade: GradeEntity, hideScores: Boolean, onClick: () -> Uni
             if (hideScores) "***" else grade.zzcj,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
-            color = if (grade.isFailed && !hideScores) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            color = if (grade.isFailed && !coursePassed && !hideScores) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
         )
     }
 }

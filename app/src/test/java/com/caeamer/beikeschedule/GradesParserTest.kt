@@ -1,6 +1,7 @@
 package com.caeamer.beikeschedule.import.parser
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -99,6 +100,47 @@ class GradesParserTest {
         assertEquals(54, gpa.passedCourses)
         assertEquals(7, gpa.rank)
         assertEquals(166, gpa.totalStudents)
+    }
+
+    @Test
+    fun `解析GPA - 缺少专业排名时仍返回绩点`() {
+        // PM/ZRS 在学期初排名未生成、未排名专业、转专业首学期都可能缺失。
+        // 此前它们是必需字段，缺失会让整个 GpaInfo 变成 null，GPA 卡片整块显示"—"，
+        // 尽管 BL（平均学分绩）与 HDXF（已获学分）明明有值。
+        val gpa = GradesParser.parseGpa("""{"BL":3.85,"HDXF":96.0}""")
+        requireNotNull(gpa)
+        assertEquals(3.85, gpa.gpa, 0.001)
+        assertEquals(96.0, gpa.earnedCredits, 0.001)
+        assertNull(gpa.rank)
+        assertNull(gpa.totalStudents)
+        assertFalse("无排名时 hasRank 必须为 false", gpa.hasRank)
+    }
+
+    @Test
+    fun `解析GPA - 排名总人数为0时视为无排名`() {
+        val gpa = GradesParser.parseGpa("""{"BL":3.85,"HDXF":96.0,"TGKC":20,"PM":0,"ZRS":0}""")
+        requireNotNull(gpa)
+        assertFalse("总人数为 0 不应渲染成 0/0", gpa.hasRank)
+    }
+
+    @Test
+    fun `解析GPA - 缺少 BL 或 HDXF 仍返回 null`() {
+        // 这两个是展示 GPA 的必要信息，缺任一都无法呈现有效内容
+        assertNull(GradesParser.parseGpa("""{"HDXF":96.0,"PM":1,"ZRS":100}"""))
+        assertNull(GradesParser.parseGpa("""{"BL":3.85,"PM":1,"ZRS":100}"""))
+    }
+
+    @Test
+    fun `数字成绩 - 非有限值与越界值不参与计算`() {
+        // "NaN"/"Infinity" 能被 toDoubleOrNull 解析成功，但 NaN 的 <60 与 >=60 同时为 false，
+        // 会形成 isFailed/isPassed 双 false 的静默第三态并污染求和。
+        val base = GradesParser.parseGrades(loadFixture("grcjcx-all.json")).first()
+        assertNull(base.copy(zzcj = "NaN").numericScore)
+        assertNull(base.copy(zzcj = "Infinity").numericScore)
+        assertNull(base.copy(zzcj = "-Infinity").numericScore)
+        assertNull(base.copy(zzcj = "999").numericScore)
+        assertEquals(88.5, base.copy(zzcj = "88.5").numericScore!!, 0.001)
+        assertEquals(0.0, base.copy(zzcj = "0").numericScore!!, 0.001)
     }
 
     @Test
