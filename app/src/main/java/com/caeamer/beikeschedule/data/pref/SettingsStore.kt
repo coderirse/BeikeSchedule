@@ -79,6 +79,7 @@ class SettingsStore(private val context: Context) {
         val WEIGHT_SEMESTER = stringPreferencesKey("weight_semester")
         val WEIGHT_EXCLUDED = stringPreferencesKey("weight_excluded")
         val HIDE_WEEKEND = booleanPreferencesKey("hide_weekend")
+        val HIDE_INACTIVE_COURSES = booleanPreferencesKey("hide_inactive_courses")
         val XFLBYQ_JSON = stringPreferencesKey("xflbyq_json")
         val BXKQK_JSON = stringPreferencesKey("bxkqk_json")
         val EXAM_REMINDER_CODES = stringPreferencesKey("exam_reminder_codes")
@@ -213,6 +214,18 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setHideWeekend(hidden: Boolean) {
         context.dataStore.edit { p -> p[Keys.HIDE_WEEKEND] = hidden }
+    }
+
+    /**
+     * 课表是否隐藏"本周暂时不上"的课。
+     * 关（默认）：这些课以 30% alpha 淡化显示（单双周的另一半、还没到的调课周）；
+     * 开：直接不显示，网格更干净。
+     */
+    val hideInactiveCourses: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.HIDE_INACTIVE_COURSES] ?: false }
+
+    suspend fun setHideInactiveCourses(hidden: Boolean) {
+        context.dataStore.edit { p -> p[Keys.HIDE_INACTIVE_COURSES] = hidden }
     }
 
     private companion object {

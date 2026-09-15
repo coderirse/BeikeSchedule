@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -62,23 +63,31 @@ fun CourseDetailSheet(
             InfoText("周数：${WeekUtils.describe(course.weekBitmap)}")
 
             Spacer(Modifier.height(24.dp))
-            Row {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onEdit) {
-                    Icon(Icons.Default.Edit, null)
+                    Icon(Icons.Default.Edit, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("编辑")
                 }
                 Spacer(Modifier.weight(1f))
-                if (isImported) {
-                    // 教务导入课程：只能隐藏，不能删除
-                    TextButton(onClick = onHide) {
-                        Icon(Icons.Default.VisibilityOff, null, tint = MaterialTheme.colorScheme.error)
-                        Spacer(Modifier.width(4.dp))
-                        Text("隐藏", color = MaterialTheme.colorScheme.error)
-                    }
-                } else {
+                // 三类课程（教务导入 / 自定义 / 示例）都能隐藏：隐藏 = 课表不显示、也不再提醒，
+                // 可在「我的」→ 隐藏的课程里恢复。
+                TextButton(onClick = onHide) {
+                    Icon(
+                        Icons.Default.VisibilityOff, null, Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("隐藏", color = MaterialTheme.colorScheme.error)
+                }
+                // 教务导入课只能隐藏不能删除（下次导入会原样回来，删了没意义）；
+                // 自定义课与示例课保留删除。
+                if (!isImported) {
                     TextButton(onClick = onDelete) {
-                        Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
+                        Icon(
+                            Icons.Default.Delete, null, Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.error,
+                        )
                         Spacer(Modifier.width(4.dp))
                         Text(
                             if (isSample) "删除（示例）" else "删除",

@@ -98,6 +98,10 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
     val hideWeekend: StateFlow<Boolean> = repo.settings.hideWeekend
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
+    /** 「隐藏本周不上的课」：与「我的」Tab 里的开关共用同一个 DataStore 键，两边即时同步。 */
+    val hideInactiveCourses: StateFlow<Boolean> = repo.settings.hideInactiveCourses
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
     /** 提醒排期状态：已排上的未来闹钟数量与最近一次触发时刻（设置页 diagnostics 用）。 */
     val reminderSchedule: StateFlow<ReminderScheduleInfo> = repo.settings.reminderScheduledAlarms
         .map { alarms ->
@@ -109,6 +113,10 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setHideWeekend(hidden: Boolean) {
         viewModelScope.launch { repo.settings.setHideWeekend(hidden) }
+    }
+
+    fun setHideInactiveCourses(hidden: Boolean) {
+        viewModelScope.launch { repo.settings.setHideInactiveCourses(hidden) }
     }
 
     fun setReminder(enabled: Boolean, minutes: Int) {

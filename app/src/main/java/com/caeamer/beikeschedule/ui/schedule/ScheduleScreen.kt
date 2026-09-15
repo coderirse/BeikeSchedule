@@ -80,6 +80,7 @@ import com.caeamer.beikeschedule.model.CourseMerger
 import com.caeamer.beikeschedule.model.NextClass
 import com.caeamer.beikeschedule.model.SectionMap
 import com.caeamer.beikeschedule.model.SessionExpander
+import com.caeamer.beikeschedule.model.WeekLayout
 import com.caeamer.beikeschedule.model.WeekUtils
 import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.flow.flow
@@ -121,6 +122,7 @@ fun ScheduleScreen(
     val reminderEnabled by viewModel.reminderEnabled.collectAsState()
     val reminderMinutes by viewModel.reminderMinutes.collectAsState()
     val hideWeekend by viewModel.hideWeekend.collectAsState()
+    val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsState()
     val reminderSchedule by viewModel.reminderSchedule.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -324,6 +326,7 @@ fun ScheduleScreen(
                         pendingSlot = pendingSlot,
                         // 只在用户正看"今天所在教学周"时标记，翻到其他周不误导
                         nextClassId = nextClassId.takeIf { page + 1 == teachingWeekOf(state.semester, now.toLocalDate()) },
+                        hideInactiveCourses = hideInactiveCourses,
                         onSlotLongPress = { day, big -> pendingSlot = day to big },
                         onSlotClick = { day, big ->
                             if (pendingSlot == day to big) {
@@ -511,10 +514,6 @@ private fun DateRow(week: Int, semester: SettingsStore.SemesterConfig, today: Lo
 
 private val SECTION_COL_WIDTH = 36.dp
 
-/** 判断两门课的节次区间是否重叠。 */
-private fun sectionsOverlap(a: CourseEntity, b: CourseEntity): Boolean =
-    a.startSection <= b.endSection && b.startSection <= a.endSection
-
 /** 一周课表网格：左节次列 + N 天列，课程块按节次绝对定位；同周重叠课程并排窄列显示；空白格长按可添加课程。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -526,6 +525,8 @@ private fun WeekGrid(
     pendingSlot: Pair<Int, Int>?,
     /** 下一节课的卡片 id（null=不标记）；仅当本页正是今天所在教学周时由调用方传入。 */
     nextClassId: Long?,
+    /** 开启后不再显示"本周暂时不上"的淡化课（设置页开关）。 */
+    hideInactiveCourses: Boolean,
     onSlotLongPress: (day: Int, big: Int) -> Unit,
     onSlotClick: (day: Int, big: Int) -> Unit,
     onCourseClick: (CourseEntity) -> Unit,
@@ -555,25 +556,10 @@ private fun WeekGrid(
         }
         // N 天列（隐藏周末时为 5 天）
         days.forEach { day ->
-            // 冲突簇：仅"本周有课且节次重叠"的课程分簇并排窄列（含传递重叠，A-B-C 链式同簇）；
-            // 互不重叠的课程各自占满整列宽。非本周课程保持旧语义：只在与所有已显示课程
-            // 都不重叠的空位整宽淡化显示。
-            val dayLayout = remember(mergedCourses, day, week) {
-                val actives = mergedCourses.filter { it.dayOfWeek == day && it.hasClassOnWeek(week) }
-                    .sortedBy { it.startSection }
-                val clusters = mutableListOf<MutableList<CourseEntity>>()
-                actives.forEach { c ->
-                    val cluster = clusters.firstOrNull { cl -> cl.any { sectionsOverlap(it, c) } }
-                    if (cluster != null) cluster += c else clusters += mutableListOf(c)
-                }
-                val inactives = mergedCourses.filter { it.dayOfWeek == day && !it.hasClassOnWeek(week) }
-                    .fold(mutableListOf<CourseEntity>()) { shown, c ->
-                        val blocked = actives.any { sectionsOverlap(it, c) } ||
-                            shown.any { sectionsOverlap(it, c) }
-                        if (!blocked) shown += c
-                        shown
-                    }
-                DayLayout(clusters, inactives)
+            // 冲突簇（本周重叠 → 并排窄列）与非本周淡化课的分拣逻辑见 WeekLayout（纯函数，有单测）。
+            // 开启"隐藏本周不上的课"后 inactives 为空，网格只留本周真正要上的课。
+            val dayLayout = remember(mergedCourses, day, week, hideInactiveCourses) {
+                WeekLayout.layoutDay(mergedCourses, day, week, hideInactiveCourses)
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 // 空白格交互层（最底层）：长按出 +，点击 + 打开预填的添加课程框，点其他格取消
@@ -646,12 +632,6 @@ private fun WeekGrid(
         }
     }
 }
-
-/** 一天列的布局：activeConflicts = 本周冲突簇（簇内并排）；inactiveShown = 淡化展示的非本周课程。 */
-private data class DayLayout(
-    val clusters: List<List<CourseEntity>>,
-    val inactives: List<CourseEntity>,
-)
 
 @Composable
 private fun androidx.compose.foundation.layout.BoxScope.CourseCard(

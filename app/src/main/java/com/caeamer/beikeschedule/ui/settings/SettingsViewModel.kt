@@ -46,6 +46,14 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrDefault(""),
     )
 
+    /** 「隐藏本周不上的课」：与课表页共用同一个 DataStore 键，两边即时同步。 */
+    val hideInactiveCourses: StateFlow<Boolean> = settings.hideInactiveCourses
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setHideInactiveCourses(hidden: Boolean) {
+        viewModelScope.launch { settings.setHideInactiveCourses(hidden) }
+    }
+
     init {
         checkUpdate()
     }

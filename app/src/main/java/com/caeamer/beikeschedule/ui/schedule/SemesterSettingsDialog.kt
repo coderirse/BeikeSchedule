@@ -198,7 +198,7 @@ fun SemesterSettingsDialog(
 
                 HorizontalDivider()
 
-                // —— 隐藏课程（教务导入课程可隐藏，此处恢复）——
+                // —— 隐藏课程（三类课程都可隐藏，此处恢复）——
                 Text("隐藏的课程", style = MaterialTheme.typography.titleSmall)
                 if (hiddenCourses.isEmpty()) {
                     Text(
@@ -215,13 +215,25 @@ fun SemesterSettingsDialog(
                             Text(
                                 course.name,
                                 style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f, fill = false),
                                 maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
+                            // 来源标注：自定义课/示例课恢复后才能删除，教务课恢复后也只能再隐藏
+                            Text(
+                                "· " + courseSourceLabel(course),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.weight(1f))
                             TextButton(onClick = { onRestoreCourse(course.id) }) { Text("恢复") }
                         }
                     }
+                    Text(
+                        "自定义课 / 示例课需先恢复，才能在课表里删除。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 HorizontalDivider()
@@ -267,6 +279,13 @@ fun SemesterSettingsDialog(
             DatePicker(state = pickerState)
         }
     }
+}
+
+/** 隐藏课程列表里的来源标注。 */
+private fun courseSourceLabel(course: CourseEntity): String = when (course.source) {
+    CourseEntity.SOURCE_IMPORT -> "教务"
+    CourseEntity.SOURCE_SAMPLE -> "示例"
+    else -> "自定义"
 }
 
 /** 通知是否被系统挡掉：应用级通知开关（含权限）被关，或「上课提醒」渠道被设为"关闭"。 */

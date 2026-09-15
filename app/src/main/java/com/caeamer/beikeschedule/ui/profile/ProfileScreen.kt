@@ -29,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -62,6 +63,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 // 上面 6-17 行已 import 过 Column/Row/Spacer/fillMaxSize…，此处只保留 Box 与新增的 WindowInsets，
@@ -78,6 +80,7 @@ import com.caeamer.beikeschedule.ui.settings.UpdateState
 @Composable
 fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
     val themeMode by viewModel.themeMode.collectAsState()
+    val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsState()
     val update by viewModel.update.collectAsState()
     val studentProfile by viewModel.studentProfile.collectAsState()
     val appVersion by viewModel.appVersion.collectAsState()
@@ -297,6 +300,30 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                         "未找到可打开网页的应用",
                     )
                 },
+            )
+
+            // —— 课表显示 ——
+            Text(
+                "课表",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            SettingsItemRow(
+                icon = { Icon(Icons.Default.VisibilityOff, null, Modifier.size(20.dp)) },
+                title = "隐藏本周不上的课",
+                value = if (hideInactiveCourses) {
+                    "已开启：本周没有安排的课不再显示"
+                } else {
+                    "单双周的另一半、还没到的调课周会淡化显示"
+                },
+                trailing = {
+                    Switch(
+                        checked = hideInactiveCourses,
+                        onCheckedChange = { viewModel.setHideInactiveCourses(it) },
+                    )
+                },
+                onClick = { viewModel.setHideInactiveCourses(!hideInactiveCourses) },
             )
 
             // —— 主题 ——
