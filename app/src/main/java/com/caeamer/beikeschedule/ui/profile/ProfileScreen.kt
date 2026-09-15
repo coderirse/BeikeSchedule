@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -17,7 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -44,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -328,12 +330,14 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                     "单双周的另一半、还没到的调课周会淡化显示"
                 },
                 trailing = {
-                    Switch(
-                        checked = hideInactiveCourses,
-                        onCheckedChange = { viewModel.setHideInactiveCourses(it) },
-                    )
+                    // onCheckedChange = null：整个行是唯一的开关控件（见 SettingsItemRow 的
+                    // toggleable），Switch 只负责显示。否则 TalkBack 会把"行"和"Switch"
+                    // 报成两个独立控件，用户听到两个同名开关。
+                    Switch(checked = hideInactiveCourses, onCheckedChange = null)
                 },
                 onClick = { viewModel.setHideInactiveCourses(!hideInactiveCourses) },
+                toggleRole = true,
+                toggleValue = hideInactiveCourses,
             )
 
             // —— 主题 ——
@@ -488,6 +492,10 @@ private fun SettingsItemRow(
     icon: (@Composable () -> Unit)? = null,
     destructive: Boolean = false,
     onClick: (() -> Unit)? = null,
+    /** 该行代表一个开关：整行用 toggleable + Role.Switch 暴露，trailing 的 Switch 只做展示。 */
+    toggleRole: Boolean = false,
+    /** toggleRole = true 时的当前开关状态。 */
+    toggleValue: Boolean = false,
 ) {
     Card(
         Modifier
@@ -498,7 +506,19 @@ private fun SettingsItemRow(
         Row(
             Modifier
                 .fillMaxWidth()
-                .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+                .then(
+                    when {
+                        // 开关型行用 toggleable 而非 clickable：无障碍服务会把整行当作
+                        // 一个 Role.Switch 控件播报，而不是"可点区域 + 另一个开关"两个控件。
+                        onClick != null && toggleRole -> Modifier.toggleable(
+                            value = toggleValue,
+                            role = Role.Switch,
+                            onValueChange = { onClick() },
+                        )
+                        onClick != null -> Modifier.clickable(onClick = onClick)
+                        else -> Modifier
+                    },
+                )
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

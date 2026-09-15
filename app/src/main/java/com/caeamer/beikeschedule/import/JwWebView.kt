@@ -56,7 +56,7 @@ private const val PAGE_FIX_JS = """
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun JwWebView(
-    bridge: Any,
+    bridge: JwBridge,
     bridgeName: String,
     onMainPage: () -> Unit,
     onCreated: (WebView) -> Unit = {},
