@@ -21,6 +21,14 @@ sealed interface ImportUiState {
     /** 脚本已注入，正在抓取接口。 */
     data object Fetching : ImportUiState
 
+    /**
+     * 用户已确认，正在写库。
+     *
+     * 必须有这个中间态：确认按钮据此禁用，否则双击会启动两次并发导入
+     * （第二次会清空并重插第一次的行，与学期配置写入交错）。
+     */
+    data object Committing : ImportUiState
+
     /** 抓取成功，等待用户确认写入。 */
     data class Preview(
         val semesterName: String,
@@ -105,24 +113,44 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = ImportUiState.Browsing
     }
 
-    /** 确认导入：覆盖式写入课程与节次时间，写入学期配置与教学周日历，清除示例数据。 */
+    /**
+     * 确认导入：覆盖式写入课程与节次时间（含清除示例数据，单事务），再写学期配置。
+     *
+     * 三处之前的缺陷：
+     * 1. 课程写入与 clearSampleData 分属两个事务，中途被杀会留下"新课已写入、示例仍在"；
+     * 2. 整个流程没有 try/catch，任何异常（磁盘满、Room/DataStore IO 失败）都会逃出
+     *    viewModelScope.launch 直接崩进程，且 onDone() 不执行；
+     * 3. 状态在 onDone() 之前一直是 Preview，按钮不禁用 → 双击可并发跑两次导入。
+     *
+     * 现在：先置 [ImportUiState.Committing] 让按钮禁用并挡住重入，课程与学期配置各自
+     * 尽力写入，失败落到 Error 而不是崩溃。
+     */
     fun confirmImport(onDone: () -> Unit) {
-        val preview = _state.value as? ImportUiState.Preview ?: return
+        if (_state.value !is ImportUiState.Preview) return
+        val preview = _state.value as ImportUiState.Preview
+        _state.value = ImportUiState.Committing
         viewModelScope.launch {
-            repo.replaceImportedData(preview.courses, preview.sectionTimes)
-            repo.clearSampleData()
-            val previous = repo.settings.semester.first()
-            repo.settings.saveSemester(
-                previous.copy(
-                    xn = preview.xn,
-                    xq = preview.xq,
-                    name = preview.semesterName,
-                    firstMonday = preview.firstMonday,
-                    totalWeeks = preview.totalWeeks,
-                    weekMondays = preview.weekMondays,
+            try {
+                // 先写课程（单事务，含清除示例）；失败则学期配置不动，避免"新课配旧学期"
+                repo.commitImport(preview.courses, preview.sectionTimes)
+                val previous = repo.settings.semester.first()
+                repo.settings.saveSemester(
+                    previous.copy(
+                        xn = preview.xn,
+                        xq = preview.xq,
+                        name = preview.semesterName,
+                        firstMonday = preview.firstMonday,
+                        totalWeeks = preview.totalWeeks,
+                        weekMondays = preview.weekMondays,
+                    )
                 )
-            )
-            onDone()
+                onDone()
+            } catch (e: Exception) {
+                // 课程可能已写入、学期配置未写入：明确告诉用户发生了什么，而不是静默
+                _state.value = ImportUiState.Error(
+                    "保存失败：${e.message ?: e.javaClass.simpleName}。请重试；若反复失败，请重新抓取后再导入。",
+                )
+            }
         }
     }
 }

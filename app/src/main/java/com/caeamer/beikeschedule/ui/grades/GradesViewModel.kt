@@ -309,20 +309,23 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
                     GradesParser.parseStudentProfile(userJson, xsxxJson)?.let {
                         repo.settings.saveStudentProfile(it)
                     }
-                    // 考试安排（仅当前学期）
+                    // 考试安排（仅当前学期）。
+                    // **不能无条件覆盖**：jw_grades.js 对考试子请求失败会返回空串，
+                    // 而 parseExams("") 得到空列表，replaceExams 是 clear + insertAll ——
+                    // 一次子请求失败就会静默清空已有考试安排与考前提醒。
+                    // 成绩侧与学业进度侧都有守卫，唯独这里漏了。
                     val (semXn, semXq, _) = JwParser.parseCurrentSemester(semJson)
+                    val examsFromServer = examsJson.isNotBlank()
                     val exams = ExamsParser.parseExams(examsJson, semXn + semXq)
-                    repo.replaceExams(exams)
+                    if (examsFromServer) repo.replaceExams(exams)
                     // 学业进度缓存
                     if (xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()) {
                         repo.settings.saveCreditMeta(xflbyqJson, bxkqkJson)
                     }
-                    // 无论有没有考试都重排：reschedule 会先把该取消的取消掉，
-                    // 空列表就只是"全部取消"。旧实现写成 if (exams.isNotEmpty())，
-                    // 于是考试列表变空（学期结束、或某次考试子请求失败被清空）时，
-                    // 旧的"明天考试/即将考试"闹钟还带着过期地点和座位号继续弹。
-                    ExamReminderScheduler.reschedule(getApplication())
-                    error.value = null
+                    // 考试请求成功时无论如何都重排（空列表 = 全部取消，用于学期结束等场景）；
+                    // 请求失败时**不动**闹钟，否则会把仍然有效的考试提醒一并取消。
+                    if (examsFromServer) ExamReminderScheduler.reschedule(getApplication())
+                    error.value = if (examsFromServer) null else "考试安排获取失败，已保留上次数据"
                 }
             } catch (e: Exception) {
                 error.value = "解析失败：${e.message}"

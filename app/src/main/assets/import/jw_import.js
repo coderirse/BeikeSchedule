@@ -69,9 +69,15 @@
             ]).then(function (rs) {
                 var zcList = [];
                 try {
-                    zcList = (JSON.parse(rs[4]) || [])
-                        .map(function (e) { return e.ZC; })
-                        .filter(function (z) { return z >= 1 && z <= 90; });
+                    // queryzclist 返回**包装**结构 {content:[{ZC}]}（见 docs/JWXT_API.md），
+                    // 此前按裸数组解析 → `.map is not a function` 抛异常 → 被下面的 catch
+                    // 静默吞掉 → zcList 恒为空。后果是兜底路径退化成硬编码的 25 周顺序请求，
+                    // 且 totalWeeks 只能取校历长度。两种形态都兼容。
+                    var raw = JSON.parse(rs[4]);
+                    var arr = Array.isArray(raw) ? raw : ((raw && raw.content) || []);
+                    zcList = arr
+                        .map(function (e) { return e && e.ZC; })
+                        .filter(function (z) { return typeof z === 'number' && z >= 1 && z <= 90; });
                 } catch (e) { /* 周次列表异常时由校历自行推断 */ }
 
                 return calendarFromXiaoli(sem.XN, sem.XQ).then(function (weeks) {
@@ -86,6 +92,9 @@
                         16
                     );
                     var calendar = JSON.stringify({ totalWeeks: totalWeeks, weeks: weeks || [] });
+                    // 成功路径也必须复位重入标志：否则"手动抓取"按钮在首次成功后
+                    // 变成静默无操作的空按钮（jw_grades.js 一直在成功路径复位，此处是漏改）。
+                    window.__beikeRunning = false;
                     window.BeikeImport.onResult(semText, rs[0], rs[1], rs[2], rs[3], calendar);
                 });
             });

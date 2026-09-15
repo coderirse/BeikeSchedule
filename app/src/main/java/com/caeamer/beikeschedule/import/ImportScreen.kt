@@ -75,7 +75,16 @@ fun ImportScreen(
     DisposableEffect(Unit) { onDispose { onLightBackgroundVisible(false) } }
 
     val runScript: () -> Unit = {
-        webView?.evaluateJavascript(loadAssetScript(context, "import/jw_import.js"), null)
+        // 必须先进入 Fetching：否则抓取期间（兜底路径最多 25 次顺序请求）界面毫无反馈。
+        viewModel.onFetchStart()
+        // webView 为 null（onMainPage 早于 onCreated 触发）时静默失败会让用户卡在
+        // 登录页且没有任何提示可循。
+        val wv = webView
+        if (wv == null) {
+            viewModel.onFetchError("页面尚未就绪，请稍候再试")
+        } else {
+            wv.evaluateJavascript(loadAssetScript(context, "import/jw_import.js"), null)
+        }
     }
 
     Scaffold(
@@ -106,7 +115,9 @@ fun ImportScreen(
                                     else MaterialTheme.colorScheme.onSecondaryContainer,
                                     modifier = Modifier.weight(1f),
                                 )
-                                OutlinedButton(onClick = runScript) { Text("手动抓取") }
+                                OutlinedButton(onClick = runScript, enabled = state !is ImportUiState.Fetching) {
+                                    Text(if (state is ImportUiState.Fetching) "抓取中…" else "手动抓取")
+                                }
                             }
                         }
                         if (state is ImportUiState.Fetching || pageLoading) {
@@ -136,6 +147,18 @@ fun ImportScreen(
                     onConfirm = { viewModel.confirmImport(onDone) },
                     onBack = { viewModel.backToBrowsing() },
                 )
+
+                // 写库中：只显示进度，不提供任何可重入的入口（确认按钮已不可达）。
+                // WebView 已离开组合，登录会话仍在 CookieManager 里，无需重抓。
+                is ImportUiState.Committing -> Column(
+                    Modifier.fillMaxSize().padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(16.dp))
+                    Text("正在保存课表…", textAlign = TextAlign.Center)
+                }
 
                 is ImportUiState.Error -> Column(
                     Modifier.fillMaxSize().padding(32.dp),
@@ -185,7 +208,10 @@ private fun ImportPreview(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "确认后将覆盖已有的教务导入数据，并清除示例课表。",
+            // 要说清"保什么、丢什么"：隐藏状态会保留（重新导入不再把已隐藏课程复活），
+            // 但对导入课本身做过的修改（改名/改地点/改周次）会被教务新数据覆盖。
+            "确认后将用教务数据覆盖已有的教务导入课程（已隐藏的课程仍保持隐藏），并清除示例课表。" +
+                "你对导入课程做过的修改（课程名、地点、周次）会被教务数据覆盖。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -71,8 +71,10 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             repo.replaceGrades(emptyList())
             repo.replaceExams(emptyList())
             // 考试数据已清空 → 同步取消已排的考前提醒
-            // （否则成绩清完了，旧的"明天考试"闹钟还会带着地点/座位号弹出来）
-            ExamReminderScheduler.reschedule(getApplication())
+            // （否则成绩清完了，旧的"明天考试"闹钟还会带着地点/座位号弹出来）。
+            // cancelDueAlarms = true：用户显式清空，连"已到点但系统还没投递"的那条
+            // 也不要再弹；日常重排必须保持默认 false，否则会丢掉 Doze 下未投递的提醒。
+            ExamReminderScheduler.reschedule(getApplication(), cancelDueAlarms = true)
         }
     }
 

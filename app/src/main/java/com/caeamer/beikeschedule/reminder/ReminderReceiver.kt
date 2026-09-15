@@ -8,6 +8,7 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import com.caeamer.beikeschedule.MainActivity
 import com.caeamer.beikeschedule.R
+import com.caeamer.beikeschedule.model.CourseMerger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -49,8 +50,11 @@ class ReminderReceiver : BroadcastReceiver() {
 
         ClassReminderScheduler.ensureChannel(context)
         val name = intent.getStringExtra(ClassReminderScheduler.EXTRA_NAME).orEmpty()
-        val location = intent.getStringExtra(ClassReminderScheduler.EXTRA_LOCATION)
-            .orEmpty().replace(Regex("【[^】]*】"), "")
+        // 剥【校区】前缀并与 CourseMerger 共用同一规则；占位地点 "-"（含 "【校本部】-"）
+        // 一律当作"无地点"，否则通知里会出现一个裸 "-"。
+        val location = CourseMerger.stripCampusPrefix(
+            intent.getStringExtra(ClassReminderScheduler.EXTRA_LOCATION).orEmpty(),
+        ).takeIf { it.isNotEmpty() && it != "-" }.orEmpty()
         val timeText = intent.getStringExtra(ClassReminderScheduler.EXTRA_TIME_TEXT).orEmpty()
         val minutes = intent.getIntExtra(ClassReminderScheduler.EXTRA_MINUTES, 15)
 
