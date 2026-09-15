@@ -1,6 +1,7 @@
 package com.caeamer.beikeschedule
 
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
+import com.caeamer.beikeschedule.model.WeekResolver
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -46,6 +47,53 @@ class CurrentWeekTest {
         // 2026-09-09 是周三，应对齐到 09-07 周一
         val week = ScheduleRepository.currentWeek("2026-09-09", 20, LocalDate.of(2026, 9, 14))
         assertEquals(2, week)
+    }
+
+    @Test
+    fun `开学前 1 到 6 天必须返回 null - 不能被整除截断误判为第1周`() {
+        // 回归：ChronoUnit.DAYS.between 在开学前 1~6 天得到 -1..-6，
+        // 而 Int 除法向零截断使 -3 / 7 == 0，于是 0 + 1 == 1 返回"第 1 周"。
+        // 这条兜底路径（无官方校历时）曾让上课提醒在开学前 6 天就开始为第 1 周的课排期，
+        // 也让"下一节课"图钉提前点亮。
+        for (offset in 1..6) {
+            val beforeStart = LocalDate.of(2026, 9, 7).minusDays(offset.toLong())
+            assertNull(
+                "开学前 $offset 天（$beforeStart）不应被判定为第 1 周",
+                ScheduleRepository.currentWeek("2026-09-07", 20, beforeStart),
+            )
+        }
+    }
+
+    @Test
+    fun `开学前整整 7 天及更早同样返回 null`() {
+        assertNull(ScheduleRepository.currentWeek("2026-09-07", 20, LocalDate.of(2026, 8, 31)))
+        assertNull(ScheduleRepository.currentWeek("2026-09-07", 20, LocalDate.of(2026, 8, 24)))
+        assertNull(ScheduleRepository.currentWeek("2026-09-07", 20, LocalDate.of(2026, 1, 1)))
+    }
+
+    @Test
+    fun `WeekResolver 严格口径 开学前不排提醒`() {
+        // 与当前周推算同一套边界：WeekResolver 是提醒排期与"下一节课"图钉的唯一入口。
+        val semester = com.caeamer.beikeschedule.data.pref.SettingsStore.SemesterConfig(
+            xn = "2026-2027", xq = "1", name = "2026-2027-1",
+            firstMonday = "2026-09-07", totalWeeks = 20,
+        )
+        assertNull(WeekResolver.teachingWeekOf(semester, LocalDate.of(2026, 9, 4)))
+        assertEquals(1, WeekResolver.teachingWeekOf(semester, LocalDate.of(2026, 9, 7)))
+        assertEquals(2, WeekResolver.teachingWeekOf(semester, LocalDate.of(2026, 9, 14)))
+    }
+
+    @Test
+    fun `WeekResolver 显示口径 开学前仍定位到第1周但标记 beforeStart`() {
+        // 显示口径与严格口径的差别：未开学仍返回第 1 周便于默认定位，
+        // 顶栏文案据 beforeStart 显示"未开学"而不是"第 1 周"。
+        val semester = com.caeamer.beikeschedule.data.pref.SettingsStore.SemesterConfig(
+            xn = "2026-2027", xq = "1", name = "2026-2027-1",
+            firstMonday = "2026-09-07", totalWeeks = 20,
+        )
+        val loc = WeekResolver.locateWeek(semester, LocalDate.of(2026, 8, 28))
+        assertEquals(1, loc.week)
+        assertEquals(true, loc.beforeStart)
     }
 
     // —— 官方教学周日历 locateWeek ——

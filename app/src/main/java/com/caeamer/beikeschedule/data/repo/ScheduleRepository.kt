@@ -148,6 +148,14 @@ class ScheduleRepository(context: Context) {
          * 由第 1 周周一日期推算今天处于第几周；不在学期范围内返回 null。
          * firstMonday 格式 yyyy-MM-dd。
          */
+        /**
+         * 由第 1 周周一日期推算今天处于第几周；不在学期范围内返回 null。
+         * firstMonday 格式 yyyy-MM-dd。
+         *
+         * **开学前必须返回 null**：`ChronoUnit.DAYS.between` 在开学前 1~6 天得到 -1..-6，
+         * 而 Int 除法向零截断使 `-3 / 7 == 0`，于是 `0 + 1 == 1` 会返回"第 1 周"。
+         * 此前这条路径让上课提醒在开学前 6 天就开始为第 1 周的课排期。
+         */
         fun currentWeek(firstMonday: String, totalWeeks: Int, today: LocalDate = LocalDate.now()): Int? {
             if (firstMonday.isBlank()) return null
             val start = runCatching { LocalDate.parse(firstMonday) }.getOrNull() ?: return null
@@ -156,6 +164,7 @@ class ScheduleRepository(context: Context) {
             } else {
                 start.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
             }
+            if (today.isBefore(monday)) return null
             val week = (ChronoUnit.DAYS.between(monday, today) / 7 + 1).toInt()
             return if (week in 1..totalWeeks) week else null
         }

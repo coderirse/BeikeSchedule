@@ -10,6 +10,7 @@ import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.model.ReminderCourses
+import com.caeamer.beikeschedule.model.WeekResolver
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -154,13 +155,13 @@ object ClassReminderScheduler {
         return result
     }
 
-    /** 日期落在第几教学周；开学前/假期跳周/学期外都返回 null（那些天本来就没课）。 */
+    /**
+     * 日期落在第几教学周；开学前/假期跳周/学期外都返回 null（那些天本来就没课）。
+     * 统一走 [WeekResolver.teachingWeekOf]：此前这里有一份拷贝，兜底路径会在开学前
+     * 6 天误判成"第 1 周"并为那些天排提醒。
+     */
     private fun teachingWeekOf(semester: SettingsStore.SemesterConfig, date: LocalDate): Int? =
-        if (semester.weekMondays.isNotEmpty()) {
-            ScheduleRepository.teachingWeekOf(semester.weekMondays, date)
-        } else {
-            ScheduleRepository.currentWeek(semester.firstMonday, semester.totalWeeks, date)
-        }
+        WeekResolver.teachingWeekOf(semester, date)
 
     /**
      * 提醒的 requestCode = hash(课程 id + 日期)，落在 [0, REQUEST_CODE_RANGE)。

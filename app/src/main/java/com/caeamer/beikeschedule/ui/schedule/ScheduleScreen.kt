@@ -75,12 +75,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.local.SectionTimeEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
-import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.model.CourseMerger
 import com.caeamer.beikeschedule.model.NextClass
 import com.caeamer.beikeschedule.model.SectionMap
 import com.caeamer.beikeschedule.model.SessionExpander
 import com.caeamer.beikeschedule.model.WeekLayout
+import com.caeamer.beikeschedule.model.WeekResolver
 import com.caeamer.beikeschedule.model.WeekUtils
 import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.flow.flow
@@ -105,11 +105,7 @@ private const val SCROLLABLE_SHEET_MIN_ITEMS = 5
 
 /** 日期所属教学周（严格口径：开学前/假期跳周/学期后返回 null），与提醒排期同一套判定。 */
 private fun teachingWeekOf(semester: SettingsStore.SemesterConfig, date: LocalDate): Int? =
-    if (semester.weekMondays.isNotEmpty()) {
-        ScheduleRepository.teachingWeekOf(semester.weekMondays, date)
-    } else {
-        ScheduleRepository.currentWeek(semester.firstMonday, semester.totalWeeks, date)
-    }
+    WeekResolver.teachingWeekOf(semester, date)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -160,6 +156,15 @@ fun ScheduleScreen(
 
     val totalWeeks = state.semester.totalWeeks
     val visibleDays = if (hideWeekend) (1..5).toList() else (1..7).toList()
+
+    /**
+     * 取某张卡片对应的**全部存储行**（同课程名 + 同来源）。
+     *
+     * 卡片是 CourseMerger 的合并结果，只带基准行的 id；而教务单双周/调课拆行、
+     * 手动多时段课都有多行。隐藏/删除/编辑都必须按这个组来做。
+     */
+    fun groupOf(course: CourseEntity): List<CourseEntity> =
+        state.courses.filter { it.name == course.name && it.source == course.source }
     // 下一节课：仅今天（严格教学周内）尚未开始的最早一节；卡片 id 与合并后课程一致
     val nextClassId = remember(state.scheduledCourses, state.sectionTimes, now, state.semester) {
         NextClass.resolve(
@@ -170,7 +175,10 @@ fun ScheduleScreen(
         )?.courseId
     }
     val pagerState = rememberPagerState(
-        initialPage = (state.currentWeek ?: 1) - 1,
+        // 用 state.selectedWeek（已 coerce 进 1..totalWeeks）而非 currentWeek 作初值：
+        // 旋转屏幕重建本页时，用 currentWeek 会把正在看第 5 周的用户甩回第 8 周，
+        // 随后下面的 LaunchedEffect 又把 selectedWeek 覆盖成 8，用户的选择被无声丢弃。
+        initialPage = (state.selectedWeek - 1).coerceIn(0, (totalWeeks - 1).coerceAtLeast(0)),
         pageCount = { totalWeeks },
     )
 
@@ -178,9 +186,12 @@ fun ScheduleScreen(
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }.collect { viewModel.selectWeek(it + 1) }
     }
-    // 开学日期设置后（currentWeek 变化）跳到当前周
-    LaunchedEffect(state.currentWeek) {
-        state.currentWeek?.let { pagerState.scrollToPage(it - 1) }
+    // 选中周变化（含学期设置改动后重新定位）→ Pager 跟随。
+    // 此前只以 currentWeek 为键：DataStore 写入让 selectedWeek 变成当前周时 Pager 不动，
+    // 于是出现"顶栏显示第 8 周、网格里是第 1 周的卡片与日期"的失步。
+    LaunchedEffect(state.selectedWeek) {
+        val target = (state.selectedWeek - 1).coerceIn(0, (totalWeeks - 1).coerceAtLeast(0))
+        if (pagerState.currentPage != target) pagerState.scrollToPage(target)
     }
 
     // 暗色/浅色都用整屏渐变（深色版见 CourseColors.scheduleGradientDark），由 MainActivity 统一铺底，本页透明
@@ -353,17 +364,19 @@ fun ScheduleScreen(
             onEdit = {
                 detailCourse = null
                 // 多时段课程：加载同名同源的全部行（编辑框回显全部时段）
-                editCourseGroup = state.courses.filter {
-                    it.name == course.name && it.source == course.source
-                }.ifEmpty { listOf(course) }
+                editCourseGroup = groupOf(course).ifEmpty { listOf(course) }
                 showEditDialog = true
             },
+            // 隐藏/删除必须作用于**整组合并行**，不能只用卡片 id。
+            // 卡片来自 CourseMerger.mergeSameSlot，它的 id 是基准行的 id；教务单双周/
+            // 调课拆行与手动多时段课都有 N 行，只改一行会让卡片原样留在网格上——
+            // 用户看到的是"点了隐藏没反应"。
             onDelete = {
-                viewModel.deleteCourse(course.id)
+                viewModel.saveCourses(emptyList(), replaceIds = groupOf(course).map { it.id })
                 detailCourse = null
             },
             onHide = {
-                viewModel.setCourseHidden(course.id, true)
+                viewModel.setCoursesHidden(groupOf(course).map { it.id }, true)
                 detailCourse = null
             },
         )
