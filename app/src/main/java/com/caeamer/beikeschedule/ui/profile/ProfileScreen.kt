@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.Grade
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HowToReg
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
@@ -72,6 +73,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.R
 import com.caeamer.beikeschedule.data.pref.SettingsStore
+import com.caeamer.beikeschedule.import.clearJwSession
 import com.caeamer.beikeschedule.ui.settings.SettingsViewModel
 import com.caeamer.beikeschedule.ui.settings.UpdateState
 
@@ -87,6 +89,7 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
     val context = LocalContext.current
     var showUpdateDialog by remember { mutableStateOf(false) }
     var showClearCacheConfirm by remember { mutableStateOf(false) }
+    var showLogoutConfirm by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -253,9 +256,16 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
             SettingsItemRow(
                 icon = { Icon(Icons.Default.DeleteSweep, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error) },
                 title = "清除成绩缓存",
-                value = "删除本地成绩与 GPA",
+                value = "成绩 / GPA / 考试安排 / 学业进度",
                 destructive = true,
                 onClick = { showClearCacheConfirm = true },
+            )
+            SettingsItemRow(
+                icon = { Icon(Icons.Default.Logout, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error) },
+                title = "退出教务登录",
+                value = "清除本机保存的教务会话（不删除课表与成绩）",
+                destructive = true,
+                onClick = { showLogoutConfirm = true },
             )
 
             // —— 外部系统 ——（浏览器跳转；课程平台/实践平台地址待补后追加）
@@ -427,7 +437,15 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
         AlertDialog(
             onDismissRequest = { showClearCacheConfirm = false },
             title = { Text("清除成绩缓存") },
-            text = { Text("将删除本地的成绩与 GPA 数据，下次进入教务 Tab 需重新抓取。是否继续？") },
+            // 文案必须写全：clearGradesCache() 实际清掉的不止成绩与 GPA，
+            // 还包括考试安排与学业进度（学分类别要求/毕业总进度），并取消已排的考前提醒。
+            text = {
+                Text(
+                    "将删除本地的：成绩与 GPA、考试安排、学业进度（学分类别要求 / 毕业总进度），" +
+                        "并取消已排的考前提醒。\n\n" +
+                        "课表与隐藏设置不受影响。下次进入教务 Tab 需重新抓取。是否继续？",
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.clearGradesCache()
@@ -435,6 +453,28 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                 }) { Text("清除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { showClearCacheConfirm = false }) { Text("取消") } },
+        )
+    }
+
+    if (showLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("退出教务登录") },
+            text = {
+                Text(
+                    "将清除本机保存的教务系统登录状态（会话 Cookie 与网页存储），" +
+                        "下次导入或抓取成绩需要重新登录统一身份认证。\n\n" +
+                        "本地的课表与成绩数据不会被删除。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    clearJwSession(context)
+                    showLogoutConfirm = false
+                    Toast.makeText(context, "已退出教务登录", Toast.LENGTH_SHORT).show()
+                }) { Text("退出登录", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showLogoutConfirm = false }) { Text("取消") } },
         )
     }
 }
