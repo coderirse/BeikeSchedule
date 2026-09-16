@@ -76,6 +76,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.material.icons.extended)
     testImplementation(libs.junit)
+    // org.json 在 JVM 单测里是 Android SDK 的 stub（方法返回 null/抛异常），
+    // 解析器单测必须用真实实现替换它
+    testImplementation(libs.json)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
