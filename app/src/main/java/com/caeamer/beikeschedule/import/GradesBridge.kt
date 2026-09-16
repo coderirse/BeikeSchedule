@@ -17,8 +17,8 @@ class GradesBridge(
         xflbyqJson: String,
         bxkqkJson: String,
     ) -> Unit,
-    private val onFailure: (String) -> Unit,
-) {
+    override val onFailure: (String) -> Unit,
+) : JwBridge() {
     @JavascriptInterface
     fun onGradesResult(
         gpaJson: String,
@@ -31,10 +31,5 @@ class GradesBridge(
         bxkqkJson: String,
     ) {
         onResult(gpaJson, gradesJson, userJson, xsxxJson, semJson, examsJson, xflbyqJson, bxkqkJson)
-    }
-
-    @JavascriptInterface
-    fun onError(message: String) {
-        onFailure(message)
     }
 }

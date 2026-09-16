@@ -24,19 +24,55 @@ class CourseMergerTest {
 
     @Test
     fun `同名同段 - 周次并集`() {
-        // 真实场景：机电传动控制 1-6周 + 7周调课行 + 8周调课行（地点"-"）
+        // 真实场景：机电传动控制 1-6周 + 7周调课行 + 8周调课行。
+        // 地点用**真实数据形态** "【校本部】-"（不是裸 "-"）：
+        // 这一行的原实现判据是 `location != "-"`，而 "【校本部】-" 既非空白也不等于裸 "-"，
+        // 于是判据完全失效、卡片上显示了幽灵地点。旧测试用裸 "-" 作 fixture，
+        // 所以这个缺陷一直没被测出来——fixture 形态必须与真实数据一致。
         val merged = CourseMerger.mergeSameSlot(
             listOf(
                 course("机电传动控制", zc = "0111111000000000000000000000000000"),
-                course("机电传动控制", zc = "0000000100000000000000000000000000", location = "-"),
-                course("机电传动控制", zc = "0000000010000000000000000000000000", location = "-"),
+                course("机电传动控制", zc = "0000000100000000000000000000000000", location = "【校本部】-"),
+                course("机电传动控制", zc = "0000000010000000000000000000000000", location = "【校本部】-"),
             ),
         )
         assertEquals(1, merged.size)
         // 1-8 周都亮
         assertEquals("0111111110000000000000000000000000", merged[0].weekBitmap)
-        // 基准行保留完整地点，不取调课行的 "-"
+        // 基准行保留完整地点，不取调课行的 "【校本部】-"
         assertEquals("机械楼720", merged[0].location)
+    }
+
+    @Test
+    fun `调课行仅占位地点时 - 优先采用有真实地点的行`() {
+        // 首行是占位地点 "【校本部】-"，第二行才有真实地点：
+        // 判据必须能识别占位符，否则会把幽灵地点显示到卡片上。
+        val merged = CourseMerger.mergeSameSlot(
+            listOf(
+                course("某课", zc = "0111111000000000000000000000000000", location = "【校本部】-"),
+                course("某课", zc = "0000000100000000000000000000000000", location = "【校本部】实验楼301"),
+            ),
+        )
+        assertEquals(1, merged.size)
+        assertEquals("【校本部】实验楼301", merged[0].location)
+    }
+
+    @Test
+    fun `地点可用性判定 - 剥掉校区前缀后再比较`() {
+        assertEquals(true, CourseMerger.plausibleLocation("【校本部】机械楼720"))
+        assertEquals(true, CourseMerger.plausibleLocation("机械楼720"))
+        assertEquals(false, CourseMerger.plausibleLocation("【校本部】-"))
+        assertEquals(false, CourseMerger.plausibleLocation("-"))
+        assertEquals(false, CourseMerger.plausibleLocation("【校本部】"))
+        assertEquals(false, CourseMerger.plausibleLocation(""))
+        assertEquals(false, CourseMerger.plausibleLocation("【校本部】   "))
+    }
+
+    @Test
+    fun `剥校区前缀 - 通知与地点判定共用同一规则`() {
+        assertEquals("机械楼720", CourseMerger.stripCampusPrefix("【校本部】机械楼720"))
+        assertEquals("-", CourseMerger.stripCampusPrefix("【校本部】-"))
+        assertEquals("机械楼720", CourseMerger.stripCampusPrefix("机械楼720"))
     }
 
     @Test

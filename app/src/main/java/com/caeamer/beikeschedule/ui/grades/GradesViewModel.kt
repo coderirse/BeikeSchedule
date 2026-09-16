@@ -8,6 +8,7 @@ import com.caeamer.beikeschedule.data.local.GradeEntity
 import com.caeamer.beikeschedule.data.pref.ScorePrivacy
 import com.caeamer.beikeschedule.data.repo.CreditAggregator
 import com.caeamer.beikeschedule.data.repo.GpaCalculator
+import com.caeamer.beikeschedule.data.repo.GradeRows
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.data.repo.WeightedScoreCalculator
 import com.caeamer.beikeschedule.import.parser.CreditProgressParser
@@ -58,47 +59,86 @@ data class GradesUiState(
     /** 成绩隐私：加权/GPA 大数字与成绩行分数默认隐藏，点小眼睛切换显示（会话级，退后台即复位）。 */
     val hideScores: Boolean = true,
 ) {
-    /** 本地 4.0 制 GPA：全部有数字成绩的课程，补考/重修覆盖正考（教务网 BL 是平均学分绩/20 口径，不可用）。 */
-    val localGpa: GpaCalculator.GpaResult? get() = GpaCalculator.calculate(grades)
-    /** 按学期分组（学期名倒序，学期内按原始顺序）。 */
-    val grouped: List<Pair<String, List<GradeEntity>>>
-        get() = grades.groupBy { it.xnxqmc }.toSortedMap(compareByDescending { it }).map { (k, v) -> k to v }
+    /**
+     * 每门课收敛后的行（补考/重修覆盖正考，见 [GradeRows.bestPerCourse]）。
+     *
+     * 全部派生值都必须基于它，而不是原始 `grades`——否则同一门课的补考+正考两行会
+     * 被重复计入加权学分、未通过门数与学分类别进度。
+     *
+     * 用 `by lazy` 而非 `get()`：这些属性此前每次读取都重算，而组合期一次 `ScoreCard`
+     * 就会读 `weightedResult` 2 次、`weightEligible` 3 次、`localGpa` 3 次；更糟的是
+     * `failedBySemester` 在**每个学期分组项内部**被读（学期数 × 全量 filter+groupBy）。
+     * `LazyThreadSafetyMode.NONE`：实例只在主线程被 Compose 读取，无需同步开销。
+     */
+    private val bestRows: List<GradeEntity> by lazy(LazyThreadSafetyMode.NONE) {
+        GradeRows.bestPerCourse(grades)
+    }
 
-    /** 每学期挂科门数（学期名 → N）。 */
-    val failedBySemester: Map<String, Int>
-        get() = grades.filter { it.isFailed }.groupBy { it.xnxqmc }.mapValues { it.value.size }
+    /** 本地 4.0 制 GPA：全部有数字成绩的课程，补考/重修覆盖正考（教务网 BL 是平均学分绩/20 口径，不可用）。 */
+    val localGpa: GpaCalculator.GpaResult? by lazy(LazyThreadSafetyMode.NONE) {
+        GpaCalculator.calculate(bestRows)
+    }
+
+    /** 按学期分组（学期名倒序，学期内按原始顺序）。 */
+    val grouped: List<Pair<String, List<GradeEntity>>> by lazy(LazyThreadSafetyMode.NONE) {
+        grades.groupBy { it.xnxqmc }.toSortedMap(compareByDescending { it }).map { (k, v) -> k to v }
+    }
+
+    /**
+     * 每学期挂科门数（学期名 → N）。
+     *
+     * 按**收敛后的课程**计数而非原始行：补考通过后正考的挂科行仍留在成绩单里，
+     * 按行计数会让"N 门未通过"永不消失（与 docs/FEATURES_V1.1_DESIGN.md 的
+     * "补考通过后自然消失"相矛盾）。
+     */
+    val failedBySemester: Map<String, Int> by lazy(LazyThreadSafetyMode.NONE) {
+        bestRows.filter { it.isFailed }.groupBy { it.xnxqmc }.mapValues { it.value.size }
+    }
+
+    /**
+     * 补考/重修已通过的课程代码。
+     *
+     * 成绩列表仍按原始行渲染（用户需要看到"正考 55 / 补考 75"两行），但这些行的
+     * 挂科标红要按收敛结果决定，否则补考通过后正考行仍然标红。
+     */
+    val passedKcdm: Set<String> by lazy(LazyThreadSafetyMode.NONE) {
+        bestRows.filter { it.isPassed }.map { it.kcdm }.toSet()
+    }
 
     /** 本地按课程类别汇总的已通过学分（与教务网页口径一致）。 */
-    val localCategorySums: Map<String, Double>
-        get() = CreditAggregator.sumPassedByCategory(grades)
+    val localCategorySums: Map<String, Double> by lazy(LazyThreadSafetyMode.NONE) {
+        CreditAggregator.sumPassedByCategory(grades)
+    }
 
     /** 学分进度行：要求（接口）× 已完成（本地汇总）。 */
-    val creditRows: List<CreditRow>
-        get() {
-            val sums = localCategorySums
-            return creditCategories.map { CreditRow(it, CreditAggregator.completedCreditsFor(sums, it.kclbmc)) }
-        }
+    val creditRows: List<CreditRow> by lazy(LazyThreadSafetyMode.NONE) {
+        val sums = localCategorySums
+        creditCategories.map { CreditRow(it, CreditAggregator.completedCreditsFor(sums, it.kclbmc)) }
+    }
 
     /** 考试按日期升序（无日期的排最后，按原文排序）。 */
-    val examsSorted: List<ExamEntity>
-        get() = exams.sortedWith(
+    val examsSorted: List<ExamEntity> by lazy(LazyThreadSafetyMode.NONE) {
+        exams.sortedWith(
             compareByDescending<ExamEntity> { it.hasDate }
                 .thenBy { it.ksrq }
                 .thenBy { it.kssj }
                 .thenBy { it.kssjms },
         )
+    }
 
     /** 去重后的学期列表（用于筛选）。 */
-    val semesters: List<String> get() = grades.map { it.xnxqmc }.distinct().sortedDescending()
+    val semesters: List<String> by lazy(LazyThreadSafetyMode.NONE) {
+        grades.map { it.xnxqmc }.distinct().sortedDescending()
+    }
 
     /** 学年候选：按学年前4位聚合（只含 1/2 学期），小学期(-3)单独一组。 */
-    val schoolYears: List<String> get() {
+    val schoolYears: List<String> by lazy(LazyThreadSafetyMode.NONE) {
         val ys = grades.mapNotNull { g ->
-            val m = Regex("^(\\d{4}-\\d{4})-(\\d)$").find(g.xnxqmc)
+            val m = SEMESTER_NAME_REGEX.find(g.xnxqmc)
             if (m == null) null else m.groupValues[1] + "-" + m.groupValues[2]
         }.distinct()
         // 保留有 1/2 的学年，3 归到"小学期"
-        return buildList {
+        buildList {
             ys.filter { it.endsWith("-1") || it.endsWith("-2") }
                 .map { it.substringBeforeLast("-") }
                 .distinct()
@@ -109,11 +149,15 @@ data class GradesUiState(
     }
 
     /** 当前学年筛选下的学期候选（用于学期下拉；"全部学年"时列全部学期）。 */
-    val semestersOfSchoolYear: List<String>
-        get() {
-            if (schoolYearFilter.isBlank() || schoolYearFilter == "小学期") return semesters
-            return semesters.filter { it.startsWith(schoolYearFilter) && !it.endsWith("-3") }
+    val semestersOfSchoolYear: List<String> by lazy(LazyThreadSafetyMode.NONE) {
+        when {
+            schoolYearFilter.isBlank() -> semesters
+            // 小学期组只列小学期：此前返回全部学期，用户能选中普通学期，
+            // 选中后 matchesFilter 返回空 → 卡片显示"—"且没有任何解释。
+            schoolYearFilter == "小学期" -> semesters.filter { it.endsWith("-3") }
+            else -> semesters.filter { it.startsWith(schoolYearFilter) && !it.endsWith("-3") }
         }
+    }
 
     /** 当前筛选是否命中某条成绩（学年 + 学期 双重口径）。 */
     private fun matchesFilter(g: GradeEntity): Boolean {
@@ -129,27 +173,35 @@ data class GradesUiState(
         return true
     }
 
+    /** 当前筛选下、已按 kcdm 收敛的成绩行（加权与勾选列表共用，两者必须口径一致）。 */
+    private val filteredBestRows: List<GradeEntity> by lazy(LazyThreadSafetyMode.NONE) {
+        GradeRows.bestPerCourse(grades.filter { matchesFilter(it) })
+    }
+
     /** 加权成绩计算结果（当前筛选+勾选状态下）。 */
-    val weightedResult: WeightedScoreCalculator.WeightedResult?
-        get() {
-            val filtered = grades.filter { matchesFilter(it) }
-            val triples = filtered.map {
-                WeightedScoreCalculator.GradeTriple(xf = it.xf, score = it.numericScore, kcxz = it.kcxz)
-            }
-            val excludedIdx = filtered.mapIndexedNotNull { idx, g ->
-                if (g.kcdm in excludedKcdm) idx else null
-            }.toSet()
-            return WeightedScoreCalculator.calculate(triples, excludedIdx)
+    val weightedResult: WeightedScoreCalculator.WeightedResult? by lazy(LazyThreadSafetyMode.NONE) {
+        val triples = filteredBestRows.map {
+            WeightedScoreCalculator.GradeTriple(
+                kcdm = it.kcdm,
+                xf = it.xf,
+                score = it.numericScore,
+                kcxz = it.kcxz,
+            )
         }
+        WeightedScoreCalculator.calculate(triples, excludedKcdm)
+    }
 
     /** 当前筛选下参与加权计算的课程（UI 勾选列表用）。 */
-    val weightEligible: List<Pair<GradeEntity, Boolean>>
-        get() {
-            val filtered = grades.filter { matchesFilter(it) }
-            return filtered
-                .filter { it.kcxz == "必修" && it.numericScore != null }
-                .map { it to (it.kcdm !in excludedKcdm) }
-        }
+    val weightEligible: List<Pair<GradeEntity, Boolean>> by lazy(LazyThreadSafetyMode.NONE) {
+        filteredBestRows
+            .filter { it.kcxz == "必修" && it.numericScore != null && it.xf > 0.0 }
+            .map { it to (it.kcdm !in excludedKcdm) }
+    }
+
+    private companion object {
+        /** 学期名形如 2025-2026-2；用于聚合学年。只编译一次，不再每次调用重新编译。 */
+        val SEMESTER_NAME_REGEX = Regex("^(\\d{4}-\\d{4})-(\\d)$")
+    }
 }
 
 class GradesViewModel(app: Application) : AndroidViewModel(app) {
@@ -257,20 +309,23 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
                     GradesParser.parseStudentProfile(userJson, xsxxJson)?.let {
                         repo.settings.saveStudentProfile(it)
                     }
-                    // 考试安排（仅当前学期）
+                    // 考试安排（仅当前学期）。
+                    // **不能无条件覆盖**：jw_grades.js 对考试子请求失败会返回空串，
+                    // 而 parseExams("") 得到空列表，replaceExams 是 clear + insertAll ——
+                    // 一次子请求失败就会静默清空已有考试安排与考前提醒。
+                    // 成绩侧与学业进度侧都有守卫，唯独这里漏了。
                     val (semXn, semXq, _) = JwParser.parseCurrentSemester(semJson)
+                    val examsFromServer = examsJson.isNotBlank()
                     val exams = ExamsParser.parseExams(examsJson, semXn + semXq)
-                    repo.replaceExams(exams)
+                    if (examsFromServer) repo.replaceExams(exams)
                     // 学业进度缓存
                     if (xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()) {
                         repo.settings.saveCreditMeta(xflbyqJson, bxkqkJson)
                     }
-                    // 无论有没有考试都重排：reschedule 会先把该取消的取消掉，
-                    // 空列表就只是"全部取消"。旧实现写成 if (exams.isNotEmpty())，
-                    // 于是考试列表变空（学期结束、或某次考试子请求失败被清空）时，
-                    // 旧的"明天考试/即将考试"闹钟还带着过期地点和座位号继续弹。
-                    ExamReminderScheduler.reschedule(getApplication())
-                    error.value = null
+                    // 考试请求成功时无论如何都重排（空列表 = 全部取消，用于学期结束等场景）；
+                    // 请求失败时**不动**闹钟，否则会把仍然有效的考试提醒一并取消。
+                    if (examsFromServer) ExamReminderScheduler.reschedule(getApplication())
+                    error.value = if (examsFromServer) null else "考试安排获取失败，已保留上次数据"
                 }
             } catch (e: Exception) {
                 error.value = "解析失败：${e.message}"

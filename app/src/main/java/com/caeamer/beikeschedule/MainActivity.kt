@@ -29,6 +29,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -115,6 +116,10 @@ class MainActivity : ComponentActivity() {
      * 成绩隐私复位：App 退到后台（Home/切应用/锁屏/划掉后台）即把"显示成绩"复位为隐藏。
      * 前台内切换 Tab 不触发 onStop，因此显示状态在 App 内得以保持；
      * 旋转屏幕等配置变更会走 onStop 但不算退出，用 isChangingConfigurations 排除。
+     *
+     * 注意这只是**第二道防线**：最近任务（Recents）的缩略图取的是最后一帧已绘制画面，
+     * 而 Compose 在 onStop 之后不保证再绘帧，所以"点小眼睛显示分数 → 立刻按 Home"
+     * 的缩略图里分数仍然是可见的。第一道防线见 setContent 里的 setRecentsScreenshotEnabled。
      */
     override fun onStop() {
         super.onStop()
@@ -126,6 +131,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val settings = SettingsStore(applicationContext)
         setContent {
+            // 显示分数期间禁止把本 Activity 的画面放进最近任务缩略图。
+            // 用 LaunchedEffect 而非 collectAsState：只有这一个效果关心这个状态，
+            // 用 collectAsState 会让每次点小眼睛都重组整棵主题树。
+            LaunchedEffect(Unit) {
+                ScorePrivacy.hidden.collect { hidden ->
+                    setRecentsScreenshotEnabled(hidden)
+                }
+            }
             val themeMode by settings.themeMode.collectAsState(initial = SettingsStore.ThemeMode.SYSTEM)
             val darkTheme = when (themeMode) {
                 SettingsStore.ThemeMode.LIGHT -> false

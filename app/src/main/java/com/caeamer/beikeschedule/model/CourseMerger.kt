@@ -18,13 +18,32 @@ object CourseMerger {
 
     private fun merge(rows: List<CourseEntity>): CourseEntity {
         if (rows.size == 1) return rows[0]
-        // 基准行取地点信息最完整的（调课行地点常为"-"）
-        val base = rows.firstOrNull { it.location.isNotBlank() && it.location != "-" } ?: rows.first()
+        // 基准行取地点信息最完整的。
+        //
+        // 判据必须**剥掉【校区】前缀**再比较：真实教务数据的调课行地点是 "【校本部】-"
+        // （既不是空白也不等于裸 "-"），原先的 `!= "-"` 一行都拦不住，卡片上会显示
+        // 这个幽灵地点。测试原本用裸 "-" 作 fixture，所以缺陷一直没被发现。
+        val base = rows.firstOrNull { plausibleLocation(it.location) } ?: rows.first()
         return base.copy(
             teacher = rows.firstOrNull { it.teacher.isNotBlank() }?.teacher ?: base.teacher,
             weekBitmap = orBitmaps(rows.map { it.weekBitmap }),
         )
     }
+
+    /** 去掉【校区】前缀后仍有实际地点内容（非空、非占位符 "-"）。 */
+    internal fun plausibleLocation(location: String): Boolean {
+        val stripped = stripCampusPrefix(location)
+        return stripped.isNotEmpty() && stripped != "-"
+    }
+
+    /**
+     * 剥掉教务地点里的【校区】前缀（如 "【校本部】机械楼720" → "机械楼720"）。
+     *
+     * 通知文案与地点"可用性"判定共用同一套剥离规则：若只在通知里剥前缀，
+     * "【校本部】-" 会变成裸 "-" 显示给用户。
+     */
+    fun stripCampusPrefix(location: String): String =
+        location.replace(Regex("【[^】]*】"), "").trim()
 
     /** 周次位图按位或（长度不齐时取最长）。 */
     internal fun orBitmaps(bitmaps: List<String>): String {

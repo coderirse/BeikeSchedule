@@ -12,8 +12,8 @@ class JwImportBridge(
         weekDates: String,
         calendar: String,
     ) -> Unit,
-    private val onFailure: (String) -> Unit,
-) {
+    override val onFailure: (String) -> Unit,
+) : JwBridge() {
     @JavascriptInterface
     fun onResult(
         semester: String,
@@ -24,10 +24,5 @@ class JwImportBridge(
         calendar: String,
     ) {
         onSuccess(semester, published, courses, sections, weekDates, calendar)
-    }
-
-    @JavascriptInterface
-    fun onError(message: String) {
-        onFailure(message)
     }
 }

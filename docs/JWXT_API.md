@@ -37,7 +37,7 @@
 | 接口 | 方式/参数 | 响应 | 状态 |
 |---|---|---|---|
 | `/xszykb/querykbsffb` | POST form `xn,xq` | 裸 `"0"`=未发布 | ✅ |
-| `/xszykb/queryxszykbzong` | POST form `xn,xq` | 包装 `content:[...]` 总课表；字段 `RWH` 任务号、`KEY`（"xq2_jc1"=周2第1节；"bz"=备注行）、`SKSJ` 多行文本（名/师/周/【校区】地/节）、`ZC` 周位图（index=周次）、`XB` 色号（99999=无固定时间） | ✅ |
+| `/xszykb/queryxszykbzong` | POST form `xn,xq` | 包装 `content:[...]` 总课表；字段 `RWH` 任务号、`KEY`（"xq2_jc1"=周2第1节；"bz"=备注行）、`SKSJ` 多行文本（名/师/周/【校区】地/节）、`ZC` 周位图（**34 字符**，index=周次，索引 0 为占位符）、`XB` 色号（99999=无固定时间） | ✅ |
 | `/xszykb/queryxszykbzhou` | POST form | 单周课表（含备注） | 📝 |
 | `/component/queryKbjg` | POST form `xn,xq,pylx` | 包装 `content:[{xj,kssj,jssj}]` 节次时间（1..13 节） | ✅ |
 | `/xszykb/queryxszytjkb` | POST form | 推荐课表视图 | 📝 |

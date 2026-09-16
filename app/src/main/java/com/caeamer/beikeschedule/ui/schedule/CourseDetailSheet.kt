@@ -28,6 +28,9 @@ import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.local.SectionTimeEntity
 import com.caeamer.beikeschedule.model.WeekUtils
 
+/** 周一..周日的中文单字；下标 0 起。 */
+private const val WEEKDAY_NAMES = "一二三四五六日"
+
 /** 课程详情底部弹层：信息展示 + 编辑/删除（手动或示例）/隐藏（教务导入）入口。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,7 +61,10 @@ fun CourseDetailSheet(
                 val time = if (start != null && end != null) "（$start - $end）" else ""
                 val bigSection = com.caeamer.beikeschedule.model.SectionMap
                     .describeBigSections(course.startSection, course.endSection)
-                InfoText("周${"一二三四五六日"[course.dayOfWeek - 1]} $bigSection $time")
+                // getOrNull 而非直接下标：JwParser.parseDayOfWeek 的 ^xq(\d)_jc\d+$ 接受 1..9，
+                // 一条 xq8/xq9 的脏数据会让这里抛 IndexOutOfBoundsException 崩掉详情弹层。
+                val dayName = WEEKDAY_NAMES.getOrNull(course.dayOfWeek - 1) ?: "?"
+                InfoText("周$dayName $bigSection $time")
             }
             InfoText("周数：${WeekUtils.describe(course.weekBitmap)}")
 

@@ -8,6 +8,7 @@ import com.caeamer.beikeschedule.data.local.SectionTimeEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.JwParser
+import com.caeamer.beikeschedule.model.WeekResolver
 import com.caeamer.beikeschedule.reminder.ClassReminderScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -66,7 +67,15 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = ScheduleRepository(app)
 
-    private val selectedWeek = MutableStateFlow(1)
+    /**
+     * 用户选中的教学周；**null = 用户还没选过**（首次定位到当前周后置为具体值）。
+     *
+     * 不能用"selectedWeek == 1"当"还没选过"的哨兵：用户主动选第 1 周与尚未初始化
+     * 无法区分，而 `repo.settings.semester` 是 DataStore 流，任何一次设置写入
+     * （切主题、改提醒开关、切换隐藏周末）都会让它重新发射，于是下面的初始化逻辑
+     * 会把用户选的第 1 周改写成当前周——表现为"点一下设置开关，课表自己跳回本周"。
+     */
+    private val selectedWeek = MutableStateFlow<Int?>(null)
 
     val uiState: StateFlow<ScheduleUiState> = combine(
         repo.courses,
@@ -74,12 +83,14 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         repo.settings.semester,
         selectedWeek,
     ) { courses, sections, semester, week ->
-        val location = locateWeek(semester)
+        val location = WeekResolver.locateWeek(semester)
+        // 未选过时默认落在当前周（假期中即假期后第一个教学周），否则用用户的选择
+        val resolved = week ?: location.week ?: 1
         ScheduleUiState(
             courses = courses,
             sectionTimes = sections,
             semester = semester,
-            selectedWeek = week.coerceIn(1, semester.totalWeeks),
+            selectedWeek = resolved.coerceIn(1, semester.totalWeeks),
             currentWeek = location.week,
             inHoliday = location.isHoliday,
             nextWeekMonday = location.nextWeekMonday,
@@ -127,30 +138,15 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repo.settings.setThemeMode(mode) }
     }
 
-    /** 有官方教学周日历时用它定位（精确反映长假跳周），否则按开学日期推算。 */
-    private fun locateWeek(semester: SettingsStore.SemesterConfig): ScheduleRepository.Companion.WeekLocation =
-        if (semester.weekMondays.isNotEmpty()) {
-            ScheduleRepository.locateWeek(semester.weekMondays)
-        } else {
-            val week = ScheduleRepository.currentWeek(semester.firstMonday, semester.totalWeeks)
-            val start = runCatching { java.time.LocalDate.parse(semester.firstMonday) }.getOrNull()
-            val today = java.time.LocalDate.now()
-            ScheduleRepository.Companion.WeekLocation(
-                week = week,
-                isHoliday = false,
-                nextWeekMonday = null,
-                beforeStart = start != null && today.isBefore(start),
-                afterEnd = week == null && start != null &&
-                    today.isAfter(start.plusWeeks(semester.totalWeeks.toLong())),
-            )
-        }
-
     init {
-        // 初次进入默认选中当前周（假期时选中假期后第一个教学周）
+        // 初次进入默认选中当前周（假期时选中假期后第一个教学周）。
+        // selectedWeek 为 null 表示"用户还没选过"，只在这种情况下写入一次；
+        // 用 `== 1` 当哨兵会把用户主动选的第 1 周误认为未初始化（见 selectedWeek 注释）。
         viewModelScope.launch {
             repo.settings.semester.collect { semester ->
-                val cw = locateWeek(semester).week
-                if (cw != null && selectedWeek.value == 1) selectedWeek.value = cw
+                if (selectedWeek.value == null) {
+                    WeekResolver.locateWeek(semester).week?.let { selectedWeek.value = it }
+                }
             }
         }
         // 课程/学期/提醒设置任一变化 → 全量重排上课提醒闹钟。
@@ -206,6 +202,16 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
     /** 隐藏/恢复教务导入课程。 */
     fun setCourseHidden(id: Long, hidden: Boolean) {
         viewModelScope.launch { repo.setCourseHidden(id, hidden) }
+    }
+
+    /**
+     * 批量隐藏/恢复一组课程行（同一张卡片对应的全部存储行）。
+     *
+     * 单行的 [setCourseHidden] 只够处理"一行 = 一张卡"的简单课程；教务单双周/调课拆行
+     * 与手动多时段课都是多行合并成一张卡，只改一行会让卡片继续留在网格上。
+     */
+    fun setCoursesHidden(ids: List<Long>, hidden: Boolean) {
+        viewModelScope.launch { ids.forEach { repo.setCourseHidden(it, hidden) } }
     }
 
     fun deleteCourse(id: Long) {

@@ -69,7 +69,21 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "beike_schedule.db",
-                ).addMigrations(MIGRATE_1_2, MIGRATE_2_3, MIGRATE_3_4).build().also { instance = it }
+                )
+                    .addMigrations(MIGRATE_1_2, MIGRATE_2_3, MIGRATE_3_4)
+                    // 迁移失败的兜底保险丝。
+                    //
+                    // 用户从 v1 直升 v4 需要三条迁移全部成功；任何一条在真机上失败
+                    // （字段类型不符、磁盘写满、历史版本写坏过表结构），默认行为是抛
+                    // IllegalStateException → **启动即崩且无法自愈**，用户只能清应用数据。
+                    // 声明兜底后最坏情况是课表库被重建（用户重新导入一次），
+                    // 而不是 App 打不开。
+                    //
+                    // 注意这只兜「库结构无法迁移」，不兜「用户数据丢失」：
+                    // 迁移正常时数据完整保留，此声明不会被触发。
+                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    .build()
+                    .also { instance = it }
             }
     }
 }

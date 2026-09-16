@@ -42,15 +42,40 @@ class ScheduleRepository(context: Context) {
         examDao.insertAll(exams)
     }
 
-    /** 覆盖式写入教务导入结果：先删旧导入数据，再插入新数据与节次时间。单事务原子完成。 */
-    suspend fun replaceImportedData(
+    /**
+     * 确认导入的落库步骤：覆盖教务课程 + 节次时间（可选清除示例课表），**一个事务**。
+     *
+     * **保留用户的隐藏状态**：教务课程"只能隐藏不能删除"是产品承诺（用户会隐藏十几门
+     * 不关心的课让网格清爽），而本方法先全删再全插、新行的 `hidden` 取默认 false ——
+     * 此前每次重新导入都会把所有已隐藏课程原地复活，且没有任何提示。
+     *
+     * 匹配键用 (taskId, 课程名)：taskId（教务 RWH）单独不够——同一任务号会对应多行
+     * （单双周/调课拆行）。**导入课的数据本身仍以教务为准**（用户改过的名字/地点/周次
+     * 会被新数据覆盖），这是与用户确认过的口径；预览页需要说明这一点。
+     *
+     * 此前调用方把它和 clearSampleData 分两次调用，两次事务之间进程被杀会留下
+     * "新课程已写入、示例课仍在"的状态，`hasSample` 据此误判；现在合并为一个事务。
+     * 学期配置写在 DataStore（跨存储无法并入本事务），由调用方在其后单独写入。
+     *
+     * @param clearSample 是否同时清除示例课表（真实导入为 true；示例数据是一次性引导内容）
+     */
+    suspend fun commitImport(
         courses: List<CourseEntity>,
         sectionTimes: List<SectionTimeEntity>,
+        clearSample: Boolean = true,
     ) = db.withTransaction {
+        val hiddenBefore = courseDao.getBySource(CourseEntity.SOURCE_IMPORT)
+            .filter { it.hidden }
+            .map { it.taskId to it.name }
+            .toSet()
         courseDao.deleteBySource(CourseEntity.SOURCE_IMPORT)
-        courseDao.insertAll(assignImportColors(courses))
+        val restored = assignImportColors(courses).map { course ->
+            if ((course.taskId to course.name) in hiddenBefore) course.copy(hidden = true) else course
+        }
+        courseDao.insertAll(restored)
         sectionTimeDao.clear()
         sectionTimeDao.insertAll(sectionTimes)
+        if (clearSample) courseDao.deleteBySource(CourseEntity.SOURCE_SAMPLE)
     }
 
     /** 编辑替换：同一事务内删除旧行并插入展开后的新行，中途失败不会丢课。 */
@@ -148,6 +173,14 @@ class ScheduleRepository(context: Context) {
          * 由第 1 周周一日期推算今天处于第几周；不在学期范围内返回 null。
          * firstMonday 格式 yyyy-MM-dd。
          */
+        /**
+         * 由第 1 周周一日期推算今天处于第几周；不在学期范围内返回 null。
+         * firstMonday 格式 yyyy-MM-dd。
+         *
+         * **开学前必须返回 null**：`ChronoUnit.DAYS.between` 在开学前 1~6 天得到 -1..-6，
+         * 而 Int 除法向零截断使 `-3 / 7 == 0`，于是 `0 + 1 == 1` 会返回"第 1 周"。
+         * 此前这条路径让上课提醒在开学前 6 天就开始为第 1 周的课排期。
+         */
         fun currentWeek(firstMonday: String, totalWeeks: Int, today: LocalDate = LocalDate.now()): Int? {
             if (firstMonday.isBlank()) return null
             val start = runCatching { LocalDate.parse(firstMonday) }.getOrNull() ?: return null
@@ -156,6 +189,7 @@ class ScheduleRepository(context: Context) {
             } else {
                 start.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
             }
+            if (today.isBefore(monday)) return null
             val week = (ChronoUnit.DAYS.between(monday, today) / 7 + 1).toInt()
             return if (week in 1..totalWeeks) week else null
         }

@@ -154,33 +154,44 @@ fun CourseEditDialog(
 
                 // —— 课程颜色 ——
                 Text("课程颜色", style = MaterialTheme.typography.titleSmall)
-                Row(
+                // 用 FlowRow 换行而非固定 Row：10 个 32dp 圆点 + 9 个 8dp 间距 = 392dp 固有宽度，
+                // 而 M3 AlertDialog 在 360dp 手机上的内容区只有约 250-310dp ——
+                // 原先约 4 个颜色被裁掉且无法触及（既看不到也点不到）。
+                FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     COLOR_INDEX_RANGE.forEach { idx ->
                         val (bg, fg) = CourseColors.of(idx)
                         val selected = idx == selectedColor
                         Box(
                             modifier = Modifier
-                                .size(32.dp)
+                                // 触摸目标 40dp（原 32dp 低于 48dp/40dp 的可点区域建议下限）
+                                .size(40.dp)
                                 .clip(CircleShape)
-                                .background(bg)
-                                .border(
-                                    width = if (selected) 2.dp else 0.dp,
-                                    color = if (selected) fg else Color.Transparent,
-                                    shape = CircleShape,
-                                )
                                 .clickable { selectedColor = idx },
                             contentAlignment = Alignment.Center,
                         ) {
-                            if (selected) {
-                                Icon(
-                                    Icons.Default.Check,
-                                    contentDescription = null,
-                                    tint = fg,
-                                    modifier = Modifier.size(16.dp),
-                                )
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .background(bg)
+                                    .border(
+                                        width = if (selected) 2.dp else 0.dp,
+                                        color = if (selected) fg else Color.Transparent,
+                                        shape = CircleShape,
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (selected) {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = "已选颜色 $idx",
+                                        tint = fg,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
                             }
                         }
                     }

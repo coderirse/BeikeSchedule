@@ -48,8 +48,19 @@ object ExamReminderScheduler {
         val titlePrefix: String,
     )
 
-    /** 考试数据变化/开机/每日脉冲时调用：按最新数据全量重排。 */
-    suspend fun reschedule(context: Context) {
+    /**
+     * 考试数据变化/开机/每日脉冲时调用：按最新数据全量重排。
+     *
+     * @param cancelDueAlarms 为 true 时连"已到点但系统还没投递"的闹钟也一并取消。
+     *   只用于**用户显式清空考试数据**的场景（清除成绩缓存）：那时用户明确要求别再提醒，
+     *   "再弹最后一次带过期地点与座位号的考试提醒"才是 bug。
+     *   其余情况（日常重排、脉冲、开机）必须保持 false，否则会丢掉 Doze 下尚未投递的提醒。
+     *
+     *   此前本方法没有这个参数，而 [ReminderAlarmScheduler.apply] 的默认值是 false，
+     *   于是"清空考试数据"后那条已到点的考试闹钟仍会弹出——与上课提醒（那边传了
+     *   `!enabled`）的行为不一致。
+     */
+    suspend fun reschedule(context: Context, cancelDueAlarms: Boolean = false) {
         val repo = ScheduleRepository(context)
         val settings = repo.settings
 
@@ -71,6 +82,7 @@ object ExamReminderScheduler {
                     pendingIntent = pendingIntent(context, p),
                 )
             },
+            cancelDueAlarms = cancelDueAlarms,
             persist = { settings.saveExamScheduledAlarms(it) },
         )
     }

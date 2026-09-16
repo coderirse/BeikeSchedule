@@ -15,15 +15,23 @@ data class GradeEntity(
     val kclb: String,      // 课程类别：通识课程/实验/专业核心…
     val xf: Double,        // 学分
     val zzcj: String,      // 总评成绩（原始字符串，含非数字如"优"/"良"）
-    val bkcx: String,      // 正考/补考
+    val bkcx: String,      // 考试类型：正考 / 补考 / 重修（见 GpaCalculatorTest 的用例）
     val yxmc: String,      // 开课学院
     val sffx: Boolean,     // 是否辅修
     val pm: String = "",   // 该课排名（原始字符串，""=无/等级制）
     val zrs: String = "",  // 该课程总人数
     val khfs: String = "", // 考核方式（考试/考查）
 ) {
-    /** 数字成绩；非数字成绩（等级制）返回 null。 */
-    val numericScore: Double? get() = zzcj.toDoubleOrNull()
+    /**
+     * 数字成绩；非数字成绩（等级制）返回 null。
+     *
+     * 必须同时限定有限性与合理区间：`"NaN"` / `"Infinity"` 能被 `toDoubleOrNull` 解析成功，
+     * 而 IEEE 比较语义下 `NaN < 60` 与 `NaN >= 60` **同时为 false** —— 于是这样的行
+     * `isFailed` 与 `isPassed` 都是 false，成为一个静默的第三态，还会污染 GPA/加权求和。
+     * 区间上界 150 用于挡住明显的脏数据（百分制不存在 >150 的总评）。
+     */
+    val numericScore: Double?
+        get() = zzcj.toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..150.0 }
 
     /** 是否不及格（仅对数字成绩判定；等级制不标红）。 */
     val isFailed: Boolean get() = (numericScore?.let { it < 60 } == true)
