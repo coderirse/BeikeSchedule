@@ -244,6 +244,8 @@ class SettingsStore(private val context: Context) {
      * 教务 Tab 上次停留的分段下标（0=无课教室 1=成绩 2=考试）。
      *
      * 默认 0：用户明确要求"默认打开教务是无课教室"。
+     * 键名 `free_room_tab_index` 是历史遗留（该分段当时只有无课教室），
+     * 实际存的是**整个教务 Tab** 的分段，不是无课教室自己的状态。
      */
     val gradesTabIndex: Flow<Int> =
         context.dataStore.data.map { it[Keys.FREE_ROOM_TAB_INDEX] ?: 0 }

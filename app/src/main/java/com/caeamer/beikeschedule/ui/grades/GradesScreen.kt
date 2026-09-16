@@ -57,6 +57,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -122,7 +123,9 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("教务", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    if (!state.showWebView) {
+                    // 「重新抓取」是成绩/考试段自己的动作：显示在无课教室段会误导用户
+                    // （点了之后抓取并不会开始，因为 WebView 只属于成绩/考试段）
+                    if (!state.showWebView && state.section != GradesSection.FREE_ROOM) {
                         IconButton(onClick = { showRefreshConfirm = true }) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新成绩与考试")
                         }
@@ -149,81 +152,43 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
             // 成绩抓取用的 WebView 只在成绩/考试段显示。
             // 它会在首次进入（无历史成绩）时由 ViewModel 自动置起；而默认段现在是
             // 无课教室，若不限段就会出现"打开教务弹出登录页"盖住空教室页面的错乱。
-            val gradeSectionActive = state.section != GradesSection.FREE_ROOM
-            if (state.showWebView && gradeSectionActive) {
-                WebViewFetch(
-                    fetching = state.fetching,
-                    onFetchStart = { viewModel.onFetchStart() },
-                    onResult = { gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk ->
-                        viewModel.onFetchResult(gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk)
-                    },
-                    onError = { viewModel.onFetchError(it) },
-                )
-            } else if (gradeSectionActive && state.grades.isEmpty() && state.exams.isEmpty()) {
-                Column(
-                    Modifier.fillMaxSize().padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Text("还没有成绩数据", style = MaterialTheme.typography.titleLarge)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "登录教务系统即可自动获取成绩、GPA 与考试安排",
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            //
+            // 分段控件必须在**所有**分支之上（此前只在最后一个 else 里，导致抓取页
+            // 和"还没有成绩数据"页都没有切换入口：进得去、出不来，而段位是持久化的，
+            // 重启后仍会被送回登录页）。
+            Column(Modifier.fillMaxSize()) {
+                SectionTabs(section = state.section, onSelect = viewModel::setSection)
+
+                val fetchingPane = state.showWebView && state.section != GradesSection.FREE_ROOM
+                when {
+                    fetchingPane -> WebViewFetch(
+                        fetching = state.fetching,
+                        onFetchStart = { viewModel.onFetchStart() },
+                        onCancel = { viewModel.cancelFetch() },
+                        onResult = { gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk ->
+                            viewModel.onFetchResult(gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk)
+                        },
+                        onError = { viewModel.onFetchError(it) },
                     )
-                    Spacer(Modifier.height(16.dp))
-                    if (state.error != null) {
-                        Text(
-                            state.error!!,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                        )
-                        Spacer(Modifier.height(16.dp))
-                    }
-                    Button(onClick = { viewModel.startRefresh() }) { Text("去获取") }
-                }
-            } else {
-                Column(Modifier.fillMaxSize()) {
-                    // 分段切换：无课教室 | 成绩 | 考试
-                    // 无课教室排第一且作为默认段：用户明确要求"打开教务先看到无课教室"，
-                    // 成绩使用率低，放首位会让人每次都要切。
-                    SingleChoiceSegmentedButtonRow(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    ) {
-                        SegmentedButton(
-                            selected = state.section == GradesSection.FREE_ROOM,
-                            onClick = { viewModel.setSection(GradesSection.FREE_ROOM) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
-                        ) { Text("无课教室", style = MaterialTheme.typography.labelLarge) }
-                        SegmentedButton(
-                            selected = state.section == GradesSection.SCORES,
-                            onClick = { viewModel.setSection(GradesSection.SCORES) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
-                        ) { Text("成绩", style = MaterialTheme.typography.labelLarge) }
-                        SegmentedButton(
-                            selected = state.section == GradesSection.EXAMS,
-                            onClick = { viewModel.setSection(GradesSection.EXAMS) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
-                        ) { Text("考试", style = MaterialTheme.typography.labelLarge) }
-                    }
-                    when (state.section) {
-                        // 无课教室的数据来自校外平台，与教务会话无关，独立成页
-                        GradesSection.FREE_ROOM -> FreeRoomScreen()
-                        GradesSection.EXAMS -> ExamListContent(state.examsSorted)
-                        GradesSection.SCORES -> GradesContent(
-                            state = state,
-                            onModeChange = { viewModel.setScoreMode(it) },
-                            onSchoolYearFilter = { viewModel.setSchoolYearFilter(it) },
-                            onSemesterFilter = { viewModel.setSemesterFilter(it) },
-                            onToggleCourse = { viewModel.toggleExcluded(it) },
-                            onErrorDismiss = { viewModel.dismissError() },
-                            onGradeClick = { detailGrade = it },
-                            onToggleHideScores = { viewModel.toggleHideScores() },
-                        )
-                    }
+
+                    // 无课教室的数据来自校外平台，与教务会话无关，独立成页
+                    GradesSection.FREE_ROOM == state.section -> FreeRoomScreen()
+
+                    GradesSection.EXAMS == state.section -> ExamListContent(state.examsSorted)
+
+                    state.grades.isEmpty() && state.exams.isEmpty() ->
+                        NoGradesYet(error = state.error, onFetch = viewModel::startRefresh)
+
+                    else -> GradesContent(
+                        state = state,
+                        onModeChange = { viewModel.setScoreMode(it) },
+                        onSchoolYearFilter = { viewModel.setSchoolYearFilter(it) },
+                        onSemesterFilter = { viewModel.setSemesterFilter(it) },
+                        onToggleCourse = { viewModel.toggleExcluded(it) },
+                        onErrorDismiss = { viewModel.dismissError() },
+                        onGradeClick = { detailGrade = it },
+                        onToggleHideScores = { viewModel.toggleHideScores() },
+                    )
                 }
             }
         }
@@ -234,11 +199,70 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
     }
 }
 
+/**
+ * 教务 Tab 的分段切换：无课教室 | 成绩 | 考试。
+ *
+ * 必须在所有内容分支之上渲染（包括抓取 WebView 与空态），否则用户会失去切换能力。
+ */
+@Composable
+private fun SectionTabs(section: GradesSection, onSelect: (GradesSection) -> Unit) {
+    SingleChoiceSegmentedButtonRow(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+    ) {
+        SegmentedButton(
+            selected = section == GradesSection.FREE_ROOM,
+            onClick = { onSelect(GradesSection.FREE_ROOM) },
+            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
+        ) { Text("无课教室", style = MaterialTheme.typography.labelLarge) }
+        SegmentedButton(
+            selected = section == GradesSection.SCORES,
+            onClick = { onSelect(GradesSection.SCORES) },
+            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
+        ) { Text("成绩", style = MaterialTheme.typography.labelLarge) }
+        SegmentedButton(
+            selected = section == GradesSection.EXAMS,
+            onClick = { onSelect(GradesSection.EXAMS) },
+            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
+        ) { Text("考试", style = MaterialTheme.typography.labelLarge) }
+    }
+}
+
+/** 成绩/考试都为空时的引导页（分段控件在它上方，因此随时能切回无课教室）。 */
+@Composable
+private fun NoGradesYet(error: String?, onFetch: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("还没有成绩数据", style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "登录教务系统即可自动获取成绩、GPA 与考试安排",
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        if (error != null) {
+            Text(
+                error,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(16.dp))
+        }
+        Button(onClick = onFetch) { Text("去获取") }
+    }
+}
+
 /** WebView 登录 + 自动抓取。 */
 @Composable
 private fun WebViewFetch(
     fetching: Boolean,
     onFetchStart: () -> Unit,
+    onCancel: () -> Unit,
     onResult: (String, String, String, String, String, String, String, String) -> Unit,
     onError: (String) -> Unit,
 ) {
@@ -254,13 +278,20 @@ private fun WebViewFetch(
 
     Column(Modifier.fillMaxSize()) {
         Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
-            Text(
-                pageError ?: "登录教务系统后将自动获取成绩、考试与学业进度",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (pageError != null) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            )
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    pageError ?: "登录教务系统后将自动获取成绩、考试与学业进度",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (pageError != null) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                )
+                // 取消出口：不想现在登录、或进错了段位时，不必杀进程
+                TextButton(onClick = onCancel) { Text("取消") }
+            }
         }
         if (fetching || pageLoading) {
             LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -359,7 +390,9 @@ private fun GradesContent(
 /** 学分修读进度折叠卡：毕业总进度 + 分类别"要求（教务）vs 已完成（本地成绩汇总）"。 */
 @Composable
 private fun CreditProgressCard(state: GradesUiState) {
-    var expanded by remember { mutableStateOf(false) }
+    // rememberSaveable：LazyColumn 的 item 滚出屏幕会被销毁，普通 remember 会把
+    // 用户刚展开的卡片又收回（滑到底再滑回来就"自己合上了"）
+    var expanded by rememberSaveable { mutableStateOf(false) }
     val progress = state.gradProgress
 
     Card(
@@ -647,7 +680,8 @@ private fun ScoreCard(
     onToggleCourse: (String) -> Unit,
     onToggleHideScores: () -> Unit,
 ) {
-    var showCourseSelector by remember { mutableStateOf(false) }
+    // 同上：用 rememberSaveable 防止滚出屏幕后被重置
+    var showCourseSelector by rememberSaveable { mutableStateOf(false) }
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -844,11 +878,19 @@ private fun GradeRow(
     ) {
         Column(Modifier.weight(1f)) {
             Text(grade.kcmc, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-            val rankText = if (grade.pm.isNotBlank() && grade.zrs.isNotBlank()) " · 排名 ${grade.pm}/${grade.zrs}" else ""
+            // 排名与学分同样属于隐私信息：详情弹层（课程排名/学分）、GPA 卡片、勾选列表
+            // 都随小眼睛掩码，唯独这里此前漏了 —— 点了隐藏后分数变成 ***，
+            // 每行却仍然明写"排名 12/120 · 4.0学分"。
+            val rankText = if (!hideScores && grade.pm.isNotBlank() && grade.zrs.isNotBlank()) {
+                " · 排名 ${grade.pm}/${grade.zrs}"
+            } else {
+                ""
+            }
+            val creditText = if (hideScores) "" else " · ${grade.xf}学分"
             Text(
                 listOf(grade.kcxz, grade.kclb, if (grade.bkcx.isNotBlank() && grade.bkcx != "正考") grade.bkcx else null)
                     .filterNotNull().filter { it.isNotBlank() }
-                    .joinToString(" · ") + " · ${grade.xf}学分" + rankText,
+                    .joinToString(" · ") + creditText + rankText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

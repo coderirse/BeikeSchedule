@@ -2,9 +2,72 @@ package com.caeamer.beikeschedule.data.remote
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.BufferedReader
+import java.net.ConnectException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
+
+/**
+ * 一次已签名的调用所需的上下文。
+ *
+ * @param csrkKey 服务端下发的签名密钥（见 [SmartClassCrypto]）
+ * @param timeMillis 用于签名的时间戳（**必须是服务器时间**，见 [SmartClassKeyProvider.signingTimeMillis]）
+ */
+data class SignedRequest(
+    val csrkKey: String,
+    val timeMillis: Long,
+)
+
+/**
+ * 无课教室的数据源。
+ *
+ * 抽成接口的目的只有一个：让 [com.caeamer.beikeschedule.data.repo.FreeRoomRepository]
+ * 的"签名被拒 → 丢弃缓存 → 重试一次"这条自愈路径可以被单测覆盖
+ * （它曾经因为漏了一个接口而整条不可达，见 `FreeRoomRepositoryTest`）。
+ */
+interface SmartClassDataSource {
+    /** 取 `/config.json` 原文里的 `domainConfig`（加密的 key 段）。无需签名。 */
+    suspend fun fetchDomainConfig(): String?
+
+    /**
+     * 取服务器时间（毫秒），用于校正本机时钟。
+     *
+     * 实现走 `/config.json` 的 HTTP `Date` 响应头：该请求**不需要签名**，
+     * 因此不存在"要签名才能校时、要校时才能签名"的鸡生蛋问题。
+     * 失败返回 null（调用方保留上一次的偏移量）。
+     */
+    suspend fun serverDateMillis(): Long?
+
+    /**
+     * 备用的校时接口 `/Home/GettimeDif`；失败返回 null。
+     *
+     * 站点自己的前端也是这么用的（2026-09 在 `Classroom.aspx` 的内联脚本里确认）：
+     * ```js
+     * $.ajax({ url: getcsrf('/Home/GettimeDif'), success: function (data) {
+     *     localStorage.setItem("TimeDif", parseInt(data) - new Date().getTime()) } })
+     * ```
+     * 即返回**绝对毫秒时间戳**（不是时间差），校验 `> 1e12` 因此是正确且有必要的。
+     */
+    suspend fun serverTimeMillis(signed: SignedRequest): Long?
+
+    /** 教学楼列表。 */
+    suspend fun listBuildings(signed: SignedRequest): Result<List<SmartClassParser.Building>>
+
+    /** 节次类型列表。 */
+    suspend fun listNodeTypes(signed: SignedRequest): Result<List<SmartClassParser.NodeType>>
+
+    /** 某栋楼、某种节次划分下的空教室（`nodeId` 传空串 = 全部时段）。 */
+    suspend fun freeClassRooms(
+        signed: SignedRequest,
+        buildingId: String,
+        cycleTypeId: String,
+        nodeId: String = "",
+    ): Result<List<SmartClassParser.RoomSlot>>
+}
 
 /**
  * 贝壳教学平台（smartclass）无课教室接口。
@@ -15,57 +78,51 @@ import java.net.URL
  * **所有请求都要签名**（见 [SmartClassCrypto]），签名用服务器时间而非本机时间。
  * 签名参数由调用方通过 [SignedRequest] 注入，避免本类去管 key 的获取与缓存。
  */
-class SmartClassApi(private val baseUrl: String = DEFAULT_BASE_URL) {
-
-    /** 一次已签名的调用所需的上下文。 */
-    data class SignedRequest(
-        val csrkKey: String,
-        val timeMillis: Long,
-    )
+class SmartClassApi(private val baseUrl: String = DEFAULT_BASE_URL) : SmartClassDataSource {
 
     /**
      * 取 `/config.json` 原文（含加密的 `domainConfig`）。
      * 该接口**不需要签名**（实测：无 token 也能取到）。
      */
-    suspend fun fetchDomainConfig(): String? = request(
+    override suspend fun fetchDomainConfig(): String? = request(
         signed = null,
         path = "/config.json",
         method = "GET",
     ).body?.let { body ->
         runCatching {
-            org.json.JSONObject(body).optString("domainConfig").takeIf { it.isNotBlank() }
+            JSONObject(body).optString("domainConfig").takeIf { it.isNotBlank() }
         }.getOrNull()
     }
 
-    /**
-     * 取服务器当前毫秒时间，用于校正本机时钟；失败返回 null。
-     * 该接口需要签名（实测：不带 token 返回"验证不通过"），所以必须用一个 key 先签——
-     * 调用方在拿到 key 之前可以先不校正，拿到后再调。
-     */
-    suspend fun serverTimeMillis(signed: SignedRequest? = null): Long? {
-        if (signed == null) return null
+    /** 服务器当前时间（毫秒）：取 `/config.json` 的 `Date` 响应头，无需签名。 */
+    override suspend fun serverDateMillis(): Long? =
+        request(signed = null, path = "/config.json", method = "GET").dateMillis?.takeIf { it > 0L }
+
+    /** 服务器当前毫秒时间（备用校时接口）；失败返回 null。 */
+    override suspend fun serverTimeMillis(signed: SignedRequest): Long? {
         val body = request(signed, "/Home/GettimeDif", "GET").body ?: return null
         return body.trim().toLongOrNull()?.takeIf { it > 1_000_000_000_000L }
     }
 
     /** 教学楼列表。 */
-    suspend fun listBuildings(signed: SignedRequest): Result<List<SmartClassParser.Building>> =
+    override suspend fun listBuildings(signed: SignedRequest): Result<List<SmartClassParser.Building>> =
         fetch(signed, "/general/api/open/building/listBuildings", "GET") { SmartClassParser.parseBuildings(it) }
 
     /** 节次类型列表。 */
-    suspend fun listNodeTypes(signed: SignedRequest): Result<List<SmartClassParser.NodeType>> =
+    override suspend fun listNodeTypes(signed: SignedRequest): Result<List<SmartClassParser.NodeType>> =
         fetch(signed, "/general/api/open/teachingCycle/listNodeTypes", "GET") { SmartClassParser.parseNodeTypes(it) }
 
     /**
      * 某栋楼、某种节次划分下的空教室。
      *
-     * @param nodeId 传空串表示"全部时段"（实测：传单个 nodeId 只返回该时段）
+     * @param nodeId 传空串表示"全部时段"（实测：传单个 nodeId 只返回该时段；
+     *   站点自己的前端也是 `nodeId: nodeID == -1 ? '' : nodeID`）
      */
-    suspend fun freeClassRooms(
+    override suspend fun freeClassRooms(
         signed: SignedRequest,
         buildingId: String,
         cycleTypeId: String,
-        nodeId: String = "",
+        nodeId: String,
     ): Result<List<SmartClassParser.RoomSlot>> = fetch(
         signed,
         "/general/api/classroom/freeClassRooms",
@@ -73,7 +130,17 @@ class SmartClassApi(private val baseUrl: String = DEFAULT_BASE_URL) {
         buildJsonBody(buildingId, cycleTypeId, nodeId),
     ) { SmartClassParser.parseRoomSlots(it) }
 
-    /** 统一的"取数据 + 解析"包装；解析为空或 code!=0 都算失败并带上服务端消息。 */
+    /**
+     * 统一的"取数据 + 解析"包装。
+     *
+     * 失败有三种来源，**都必须变成 failure**：
+     * 1. 传输层异常（DNS/超时/TLS）→ 按类型给人话；
+     * 2. HTTP 状态码非 2xx → 带状态码报错（网关维护页、WAF 挑战页都走这里）；
+     * 3. body 不是合法 JSON 或 `code != 0` → 带服务端消息报错。
+     *
+     * 此前 2 与 3 会被静默当成"查询成功但结果为空"，用户看到的是
+     * "当前没有查询到无课教室"这种**貌似正常但错误**的结论。
+     */
     private suspend fun <T> fetch(
         signed: SignedRequest,
         path: String,
@@ -82,14 +149,28 @@ class SmartClassApi(private val baseUrl: String = DEFAULT_BASE_URL) {
         parse: (String) -> List<T>,
     ): Result<List<T>> {
         val res = request(signed, path, method, body)
-        val text = res.body ?: return Result.failure(SmartClassException("网络请求失败"))
+        if (res.code < 0) {
+            return Result.failure(SmartClassException(networkMessage(res.error), cause = res.error))
+        }
+        if (res.code !in 200..299) {
+            return Result.failure(
+                SmartClassException(
+                    httpMessage(res.code),
+                    tokenRejected = SmartClassCrypto.isTokenRejected(res.body.orEmpty()),
+                    cause = res.error,
+                ),
+            )
+        }
+        val text = res.body ?: return Result.failure(SmartClassException("响应为空，请稍后重试"))
         SmartClassParser.errorMessage(text)?.let {
-            return Result.failure(SmartClassException(it, tokenRejected = SmartClassCrypto.isTokenRejected(text)))
+            return Result.failure(
+                SmartClassException(it, tokenRejected = SmartClassCrypto.isTokenRejected(text)),
+            )
         }
         return Result.success(parse(text))
     }
 
-    private data class RawResponse(val code: Int, val body: String?)
+    private data class RawResponse(val code: Int, val body: String?, val dateMillis: Long? = null, val error: Exception? = null)
 
     private suspend fun request(
         signed: SignedRequest?,
@@ -114,15 +195,34 @@ class SmartClassApi(private val baseUrl: String = DEFAULT_BASE_URL) {
             }
             body?.let { conn.outputStream.use { os -> os.write(it.toByteArray(Charsets.UTF_8)) } }
             val code = conn.responseCode
+            // 服务器时间基准：Date 头在响应码可读之后、断开之前取
+            val dateMillis = conn.getHeaderFieldDate("Date", 0L)
             // 4xx/5xx 时错误详情在 errorStream 里；只读 inputStream 会拿到 null 而丢失原因
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val text = stream?.bufferedReader()?.use(BufferedReader::readText)
-            RawResponse(code, text)
+            RawResponse(code, text, dateMillis)
         } catch (e: Exception) {
-            RawResponse(-1, null)
+            // 异常对象必须带出去：调用方要按类型给"网络不可用/超时"这类可行动提示
+            RawResponse(-1, null, null, e)
         } finally {
             conn?.disconnect()
         }
+    }
+
+    /** 把传输层异常翻成用户能行动的中文；不再是统一的"网络请求失败"。 */
+    private fun networkMessage(e: Exception?): String = when (e) {
+        is UnknownHostException -> "网络不可用，请检查网络连接后重试"
+        is SocketTimeoutException -> "连接超时，请稍后重试"
+        is ConnectException -> "无法连接到服务器，请稍后重试"
+        is SSLException -> "安全连接失败，请稍后重试"
+        null -> "网络请求失败，请稍后重试"
+        else -> "网络请求失败，请稍后重试"
+    }
+
+    private fun httpMessage(code: Int): String = when {
+        code >= 500 -> "服务暂时不可用（HTTP $code），请稍后重试"
+        code == 404 -> "接口不存在（HTTP 404），可能是平台改版，请检查 App 更新"
+        else -> "请求被拒绝（HTTP $code）"
     }
 
     /** 手工拼 JSON 请求体：字段固定三个且都是字符串，为它引序列化库不划算。 */
@@ -168,8 +268,10 @@ class SmartClassApi(private val baseUrl: String = DEFAULT_BASE_URL) {
  * @param tokenRejected 是否为"签名被拒"（`csrf key validate error`）。
  *   上层据此决定要不要丢弃缓存的 `csrkKey` 并重试一次 —— 这通常意味着服务端
  *   轮换了 key，重取即可自愈；把它和普通网络错误混在一起会让用户看到无意义的报错。
+ * @param cause 原始异常（网络/解析），用于日志定位；面向用户的文案在 message 里。
  */
 class SmartClassException(
     override val message: String,
     val tokenRejected: Boolean = false,
-) : Exception(message)
+    cause: Throwable? = null,
+) : Exception(message, cause)

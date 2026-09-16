@@ -75,11 +75,19 @@ object SmartClassParser {
         (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
     }.getOrNull()
 
-    /** 服务端返回的错误消息（成功或无法解析时返回 null）。 */
+    /**
+     * 服务端返回的错误消息（成功时返回 null）。
+     *
+     * **无法解析为 JSON 时返回"响应格式异常"而不是 null**：null 的语义是"这是一个
+     * code==0 的成功响应"，把解析失败也归到 null 会让网关维护页、WAF 挑战页、
+     * 校园网认证门户的 HTML 被当成"成功但没有数据"，最终在界面上显示
+     * "当前没有查询到无课教室"——一个貌似正常但错误的结论。调用方（`SmartClassApi.fetch`）
+     * 依赖"非 null 即失败"这一约定。
+     */
     fun errorMessage(body: String): String? = runCatching {
         val root = JSONObject(body)
         if (root.optInt("code", -1) == 0) null else root.optString("msg").ifBlank { "未知错误" }
-    }.getOrNull()
+    }.getOrElse { "响应格式异常，请稍后重试" }
 
     /** 解析教学楼列表。 */
     fun parseBuildings(body: String): List<Building> =

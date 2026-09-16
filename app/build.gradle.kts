@@ -49,6 +49,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    testOptions {
+        unitTests {
+            // 单测跑在 JVM 上，android.jar 里的方法默认是抛异常的 stub。
+            // 让未实现的系统方法返回默认值，使 android.util.Log 之类的调用
+            // 不会把纯逻辑单测打挂（解析器另有真 org.json 实现，见 dependencies）
+            isReturnDefaultValues = true
+        }
+    }
     buildFeatures {
         compose = true
     }

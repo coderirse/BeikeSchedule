@@ -1,6 +1,7 @@
 package com.caeamer.beikeschedule.data.remote
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -150,6 +151,18 @@ class SmartClassParserTest {
     @Test
     fun `成功响应没有错误消息`() {
         assertNull(SmartClassParser.errorMessage("""{"code":0,"msg":"success","data":[]}"""))
+    }
+
+    @Test
+    fun `非 JSON 响应必须算失败 - 不能当成空结果`() {
+        // 网关维护页/WAF 挑战页/校园网认证门户会以 HTTP 200 返回 HTML。
+        // 若这里返回 null，SmartClassApi.fetch 会把它当成"成功但结果为空"，
+        // 界面显示"当前没有查询到无课教室"——一个貌似正常但错误的结论。
+        for (bad in listOf("", "not json", "<html><body>502 Bad Gateway</body></html>", "[]", "null")) {
+            assertNotNull("输入=$bad 必须判为失败", SmartClassParser.errorMessage(bad))
+        }
+        // JSON 但没有 code 字段：同样不是成功响应
+        assertNotNull(SmartClassParser.errorMessage("""{"foo":1}"""))
     }
 
     @Test

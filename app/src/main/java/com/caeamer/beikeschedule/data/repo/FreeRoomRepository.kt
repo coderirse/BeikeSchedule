@@ -1,8 +1,12 @@
 package com.caeamer.beikeschedule.data.repo
 
+import android.util.Log
+import com.caeamer.beikeschedule.data.remote.SignedRequest
 import com.caeamer.beikeschedule.data.remote.SmartClassApi
+import com.caeamer.beikeschedule.data.remote.SmartClassDataSource
 import com.caeamer.beikeschedule.data.remote.SmartClassException
 import com.caeamer.beikeschedule.data.remote.SmartClassKeyProvider
+import com.caeamer.beikeschedule.data.remote.SmartClassKeySource
 import com.caeamer.beikeschedule.data.remote.SmartClassParser
 import com.caeamer.beikeschedule.model.RoomNameOrder
 
@@ -15,11 +19,15 @@ import com.caeamer.beikeschedule.model.RoomNameOrder
  *
  * `csrkKey` 由服务端下发且可轮换。轮换后请求会返回 `csrf key validate error`。
  * 此时唯一正确的做法是**丢弃缓存的 key 并重取一次**——这对用户完全透明，
- * 而不是弹一个"签名错误"让用户莫名其妙。所以这里每个接口都做一次重试。
+ * 而不是弹一个"签名错误"让用户莫名其妙。
+ *
+ * **每个接口都必须走 [withSignedRetry]**：曾经只有 [loadFreeRooms] 走了，
+ * 而 [loadMeta] 的 `listBuildings` 是整条链路的第一个请求，轮换后失败在这里 ——
+ * 自愈代码因此永远不可达，用户只能清应用数据恢复。见 `FreeRoomRepositoryTest`。
  */
 class FreeRoomRepository(
-    private val keyProvider: SmartClassKeyProvider,
-    private val api: SmartClassApi = SmartClassApi(),
+    private val keyProvider: SmartClassKeySource,
+    private val api: SmartClassDataSource = SmartClassApi(),
 ) {
 
     /**
@@ -27,11 +35,11 @@ class FreeRoomRepository(
      * （后续每次签名都要用）。
      */
     suspend fun loadMeta(): FreeRoomResult {
-        keyProvider.syncClockOrSkip()
-        val signedReq = signed()
-        val buildings = api.listBuildings(signedReq).getOrElse { throw it }
+        // 校时失败不是硬依赖：多数设备时钟是准的，用本机时间签名成功率依然很高
+        runCatching { keyProvider.syncClock() }
+        val buildings = withSignedRetry { signed -> api.listBuildings(signed) }
         // 节次类型失败不致命：没有它也能展示楼栋，只是点进去查不到（会在查询时报错）
-        val nodeTypes = api.listNodeTypes(signedReq).getOrDefault(emptyList())
+        val nodeTypes = runCatching { withSignedRetry { signed -> api.listNodeTypes(signed) } }.getOrDefault(emptyList())
         cycleTypeId = pickCycleType(nodeTypes)
         return FreeRoomResult(buildings, nodeTypes)
     }
@@ -53,13 +61,15 @@ class FreeRoomRepository(
      * 查询某栋楼的空教室。
      *
      * @param buildingId 楼栋 ID
+     * @throws SmartClassException 取不到节次类型，或接口失败（含 HTTP 状态异常）
      */
     suspend fun loadFreeRooms(buildingId: String): List<SmartClassParser.RoomSlot> {
         // 缓存未命中（未调 loadMeta 或那次失败）时才补一次
-        val cycleId = cycleTypeId ?: withSignedRetry { signed -> api.listNodeTypes(signed) }
-            .let { pickCycleType(it) }
-            ?.also { cycleTypeId = it }
-            ?: return emptyList()
+        val cycleId = cycleTypeId
+            ?: pickCycleType(runCatching { withSignedRetry { signed -> api.listNodeTypes(signed) } }.getOrDefault(emptyList()))
+                ?.also { cycleTypeId = it }
+            // 取不到节次类型必须报错：静默返回空列表会被界面表达成"没有空教室"
+            ?: throw SmartClassException("没有获取到节次类型，请稍后重试")
         val slots = withSignedRetry { signed ->
             api.freeClassRooms(signed, buildingId = buildingId, cycleTypeId = cycleId)
         }
@@ -83,10 +93,13 @@ class FreeRoomRepository(
      * 只重试一次：重试仍失败说明不是 key 过期（可能是服务端故障），
      * 继续重试只会拖慢用户的等待。
      */
-    private suspend fun <T> withSignedRetry(call: suspend (SmartClassApi.SignedRequest) -> Result<T>): T {
+    private suspend fun <T> withSignedRetry(call: suspend (SignedRequest) -> Result<T>): T {
         val first = call(signed())
         val ex = first.exceptionOrNull()
         if (ex is SmartClassException && ex.tokenRejected) {
+            // 留一条日志：这条路径代表"服务端轮换了 csrkKey 且本地缓存已过期"，
+            // 排查线上问题时是最关键的线索（用户侧只会看到一句"暂时查不到空教室"）
+            Log.w(TAG, "签名被拒，丢弃缓存的 csrkKey 后重试一次", ex)
             keyProvider.invalidate()
             val second = call(signed(forceRefresh = true))
             return second.getOrElse { throw it }
@@ -94,18 +107,12 @@ class FreeRoomRepository(
         return first.getOrElse { throw it }
     }
 
-    private suspend fun signed(forceRefresh: Boolean = false) = SmartClassApi.SignedRequest(
+    private suspend fun signed(forceRefresh: Boolean = false) = SignedRequest(
         csrkKey = keyProvider.csrkKey(forceRefresh),
         timeMillis = keyProvider.signingTimeMillis(),
     )
-}
 
-/**
- * 校正服务器时钟；失败不抛异常。
- *
- * 时间校正失败**不应该**让功能不可用：多数设备时钟是准的，用本机时间签名的成功率
- * 依然很高；把它做成硬失败反而会让"网络抖动"变成"整个页面打不开"。
- */
-private suspend fun SmartClassKeyProvider.syncClockOrSkip() {
-    runCatching { syncClock() }
+    private companion object {
+        const val TAG = "FreeRoomRepository"
+    }
 }

@@ -280,7 +280,13 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
             gradProgress = CreditProgressParser.parseProgress(creditJson.second),
             hideScores = info.hideScores,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), GradesUiState())
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        // 初值必须与偏好的默认段一致（无课教室）：否则冷启动进教务的最前面几帧
+        // 会按"成绩段 + 无数据"渲染一屏"还没有成绩数据"，然后才跳回无课教室
+        GradesUiState(section = GradesSection.FREE_ROOM),
+    )
 
     init {
         viewModelScope.launch {
@@ -357,9 +363,24 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         error.value = "抓取失败：$message"
     }
 
+    /**
+     * 开始一次成绩抓取。
+     *
+     * 必须同时把分段切到成绩：抓取用的 WebView 只属于成绩/考试段，
+     * 停在无课教室段时 `showWebView = true` 不会有任何可见效果
+     * （WebView 不组合、脚本不注入、请求根本不会发出），
+     * 用户却会看到确认框说"将进入教务系统重新抓取"。
+     */
     fun startRefresh() {
         error.value = null
         showWebView.value = true
+        viewModelScope.launch { repo.settings.setGradesTabIndex(GradesSection.SCORES.ordinal) }
+    }
+
+    /** 放弃本次抓取（退出全屏登录页），回到分段内容。 */
+    fun cancelFetch() {
+        showWebView.value = false
+        fetching.value = false
     }
 
     fun dismissError() {
