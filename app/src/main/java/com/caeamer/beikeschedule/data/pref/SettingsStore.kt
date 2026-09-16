@@ -83,6 +83,8 @@ class SettingsStore(private val context: Context) {
         val XFLBYQ_JSON = stringPreferencesKey("xflbyq_json")
         val BXKQK_JSON = stringPreferencesKey("bxkqk_json")
         val EXAM_REMINDER_CODES = stringPreferencesKey("exam_reminder_codes")
+        val FREE_ROOM_BUILDING = stringPreferencesKey("free_room_building")
+        val FREE_ROOM_TAB_INDEX = intPreferencesKey("free_room_tab_index")
     }
 
     val semester: Flow<SemesterConfig> = context.dataStore.data.map { p ->
@@ -226,6 +228,28 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setHideInactiveCourses(hidden: Boolean) {
         context.dataStore.edit { p -> p[Keys.HIDE_INACTIVE_COURSES] = hidden }
+    }
+
+    // —— 无课教室 ——
+
+    /** 上次查看的楼栋 ID（空 = 用接口返回的第一栋）。 */
+    val freeRoomBuilding: Flow<String> =
+        context.dataStore.data.map { it[Keys.FREE_ROOM_BUILDING] ?: "" }
+
+    suspend fun setFreeRoomBuilding(buildingId: String) {
+        context.dataStore.edit { p -> p[Keys.FREE_ROOM_BUILDING] = buildingId }
+    }
+
+    /**
+     * 教务 Tab 上次停留的分段下标（0=无课教室 1=成绩 2=考试）。
+     *
+     * 默认 0：用户明确要求"默认打开教务是无课教室"。
+     */
+    val gradesTabIndex: Flow<Int> =
+        context.dataStore.data.map { it[Keys.FREE_ROOM_TAB_INDEX] ?: 0 }
+
+    suspend fun setGradesTabIndex(index: Int) {
+        context.dataStore.edit { p -> p[Keys.FREE_ROOM_TAB_INDEX] = index }
     }
 
     private companion object {
