@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.caeamer.beikeschedule.ui.freeroom.FreeRoomScreen
 import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.local.GradeEntity
 import com.caeamer.beikeschedule.data.repo.GpaCalculator
@@ -145,7 +146,11 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                     dismissButton = { TextButton(onClick = { showRefreshConfirm = false }) { Text("取消") } },
                 )
             }
-            if (state.showWebView) {
+            // 成绩抓取用的 WebView 只在成绩/考试段显示。
+            // 它会在首次进入（无历史成绩）时由 ViewModel 自动置起；而默认段现在是
+            // 无课教室，若不限段就会出现"打开教务弹出登录页"盖住空教室页面的错乱。
+            val gradeSectionActive = state.section != GradesSection.FREE_ROOM
+            if (state.showWebView && gradeSectionActive) {
                 WebViewFetch(
                     fetching = state.fetching,
                     onFetchStart = { viewModel.onFetchStart() },
@@ -154,7 +159,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                     },
                     onError = { viewModel.onFetchError(it) },
                 )
-            } else if (state.grades.isEmpty() && state.exams.isEmpty()) {
+            } else if (gradeSectionActive && state.grades.isEmpty() && state.exams.isEmpty()) {
                 Column(
                     Modifier.fillMaxSize().padding(32.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -182,22 +187,31 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
-                    // 分段切换：成绩 | 考试
+                    // 分段切换：无课教室 | 成绩 | 考试
+                    // 无课教室排第一且作为默认段：用户明确要求"打开教务先看到无课教室"，
+                    // 成绩使用率低，放首位会让人每次都要切。
                     SingleChoiceSegmentedButtonRow(
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                     ) {
                         SegmentedButton(
+                            selected = state.section == GradesSection.FREE_ROOM,
+                            onClick = { viewModel.setSection(GradesSection.FREE_ROOM) },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
+                        ) { Text("无课教室", style = MaterialTheme.typography.labelLarge) }
+                        SegmentedButton(
                             selected = state.section == GradesSection.SCORES,
                             onClick = { viewModel.setSection(GradesSection.SCORES) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
                         ) { Text("成绩", style = MaterialTheme.typography.labelLarge) }
                         SegmentedButton(
                             selected = state.section == GradesSection.EXAMS,
                             onClick = { viewModel.setSection(GradesSection.EXAMS) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
                         ) { Text("考试", style = MaterialTheme.typography.labelLarge) }
                     }
                     when (state.section) {
+                        // 无课教室的数据来自校外平台，与教务会话无关，独立成页
+                        GradesSection.FREE_ROOM -> FreeRoomScreen()
                         GradesSection.EXAMS -> ExamListContent(state.examsSorted)
                         GradesSection.SCORES -> GradesContent(
                             state = state,

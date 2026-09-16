@@ -19,19 +19,26 @@ import com.caeamer.beikeschedule.import.parser.GradesParser
 import com.caeamer.beikeschedule.import.parser.GpaInfo
 import com.caeamer.beikeschedule.import.parser.JwParser
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** 成绩展示模式：加权（默认，只看必修数字成绩）/ GPA（教务官方值）。 */
 enum class ScoreMode { WEIGHTED, GPA }
 
-/** 教务 Tab 分段：成绩 / 考试。 */
-enum class GradesSection { SCORES, EXAMS }
+/**
+ * 教务 Tab 的分段。
+ *
+ * 顺序即界面顺序，`ordinal` 直接用于持久化：**0=无课教室（默认）**、1=成绩、2=考试。
+ * 用户明确要求"默认打开教务是无课教室"——成绩使用率不高，放第一位会让人每次都要切。
+ */
+enum class GradesSection { FREE_ROOM, SCORES, EXAMS }
 
 /** 学分进度行：类别要求（接口）+ 本地已完成（成绩汇总）。 */
 data class CreditRow(val category: CreditCategory, val completed: Double)
@@ -211,11 +218,19 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
     private val fetching = MutableStateFlow(false)
     private val gpaFromCache = MutableStateFlow<GpaInfo?>(null)
     private val error = MutableStateFlow<String?>(null)
-    private val section = MutableStateFlow(GradesSection.SCORES)
     private val scoreMode = MutableStateFlow(ScoreMode.WEIGHTED)
     private val semesterFilter = MutableStateFlow("")
     private val schoolYearFilter = MutableStateFlow("")
     private val excludedKcdm = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * 当前分段：从 DataStore 读取（"记住上次选择"），默认无课教室。
+     * 用 ordinal 存整数，枚举顺序变化时旧值会落到相邻分段——因为这三个分段
+     * 顺序是产品决定且短期不会变，用字符串名反而更脆（改类名就丢偏好）。
+     */
+    private val section: Flow<GradesSection> = repo.settings.gradesTabIndex.map { index ->
+        GradesSection.entries.getOrElse(index) { GradesSection.FREE_ROOM }
+    }
 
     /** 会被 combine 合并的本地 UI 偏好（gpa 必须在流内，否则刷新后有 GPA 不刷新的竞态）。 */
     private data class UiPrefs(
@@ -351,8 +366,9 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         error.value = null
     }
 
+    /** 切换分段并记住（跨重启保留）。 */
     fun setSection(section: GradesSection) {
-        this.section.value = section
+        viewModelScope.launch { repo.settings.setGradesTabIndex(section.ordinal) }
     }
 
     /** 成绩隐私开关：点击小眼睛切换显示/隐藏（会话级，退到后台自动复位隐藏）。 */
