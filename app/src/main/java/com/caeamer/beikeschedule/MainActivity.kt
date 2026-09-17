@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.caeamer.beikeschedule.data.pref.AppSession
 import com.caeamer.beikeschedule.data.pref.ScorePrivacy
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.import.ImportScreen
@@ -113,17 +114,21 @@ private fun TabItem(
 class MainActivity : ComponentActivity() {
 
     /**
-     * 成绩隐私复位：App 退到后台（Home/切应用/锁屏/划掉后台）即把"显示成绩"复位为隐藏。
-     * 前台内切换 Tab 不触发 onStop，因此显示状态在 App 内得以保持；
-     * 旋转屏幕等配置变更会走 onStop 但不算退出，用 isChangingConfigurations 排除。
+     * 成绩隐私复位 + 课表定位复位：App 退到后台（Home/切应用/锁屏/划掉后台）即生效。
+     * 前台内切换 Tab 不触发 onStop，因此成绩显示状态、课表上手动翻到的周次在 App 内得以保持。
      *
-     * 注意这只是**第二道防线**：最近任务（Recents）的缩略图取的是最后一帧已绘制画面，
+     * 注意这只是成绩隐私的**第二道防线**：最近任务（Recents）的缩略图取的是最后一帧已绘制画面，
      * 而 Compose 在 onStop 之后不保证再绘帧，所以"点小眼睛显示分数 → 立刻按 Home"
      * 的缩略图里分数仍然是可见的。第一道防线见 setContent 里的 setRecentsScreenshotEnabled。
      */
     override fun onStop() {
         super.onStop()
-        if (!isChangingConfigurations) ScorePrivacy.hide()
+        if (!isChangingConfigurations) {
+            ScorePrivacy.hide()
+            // 下一次进入视为新的前台会话：课表重新定位到当前周
+            // （用户手动翻的周次不落盘，退出即作废，见 AppSession 注释）
+            AppSession.markBackgrounded()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

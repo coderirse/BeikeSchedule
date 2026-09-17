@@ -161,6 +161,43 @@ class CurrentWeekTest {
         assertEquals(false, loc.afterEnd)
     }
 
+    // —— 未手动选周时的默认落位 defaultWeek（首屏 / 每次重进 App 重新定位用）——
+
+    @Test
+    fun `默认落位 教学周内即当前周`() {
+        val semester = com.caeamer.beikeschedule.data.pref.SettingsStore.SemesterConfig(
+            xn = "2026-2027", xq = "1", name = "2026-2027-1",
+            firstMonday = "2026-09-07", totalWeeks = 20,
+        )
+        assertEquals(3, WeekResolver.defaultWeek(WeekResolver.locateWeek(semester, LocalDate.of(2026, 9, 23)), 20))
+    }
+
+    @Test
+    fun `默认落位 假期中落到假期后第一个教学周`() {
+        // 2026-10-01 在被跳过的国庆周里，locateWeek 给出 week=4
+        val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 10, 1))
+        assertEquals(4, WeekResolver.defaultWeek(loc, 20))
+    }
+
+    @Test
+    fun `默认落位 未开学落到第1周`() {
+        val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 8, 28))
+        assertEquals(1, WeekResolver.defaultWeek(loc, 20))
+    }
+
+    @Test
+    fun `默认落位 已放假落到最后一周而不是第1周`() {
+        // 回归：学期结束后 week=null，此前兜底成第 1 周，放假期间翻课表每次重进都被拽回开头
+        val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 11, 5))
+        assertEquals(20, WeekResolver.defaultWeek(loc, 20))
+    }
+
+    @Test
+    fun `默认落位 总周数异常时不越界`() {
+        val loc = ScheduleRepository.locateWeek(realCalendar, LocalDate.of(2026, 11, 5))
+        assertEquals(1, WeekResolver.defaultWeek(loc, 0))
+    }
+
     // —— 严格教学周判定 teachingWeekOf（提醒排期用）——
 
     @Test

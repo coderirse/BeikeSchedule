@@ -83,6 +83,7 @@ import com.caeamer.beikeschedule.model.WeekLayout
 import com.caeamer.beikeschedule.model.WeekResolver
 import com.caeamer.beikeschedule.model.WeekUtils
 import com.caeamer.beikeschedule.ui.theme.CourseColors
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -184,11 +185,20 @@ fun ScheduleScreen(
 
     // Pager 滑动 → 同步选中周
     LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.currentPage }.collect { viewModel.selectWeek(it + 1) }
+        snapshotFlow { pagerState.currentPage }
+            // 丢掉首帧：那是 rememberPagerState 的初始页（0），不是用户的滑动结果。
+            // 直接回写会把"首次定位当前周"覆盖成第 1 周——DataStore 异步读盘必然晚于这一帧，
+            // 于是每次启动课表都停在第 1 页，且写完后 selectedWeek 非空、定位永不发生。
+            .drop(1)
+            .collect { viewModel.selectWeek(it + 1) }
     }
     // 选中周变化（含学期设置改动后重新定位）→ Pager 跟随。
     // 此前只以 currentWeek 为键：DataStore 写入让 selectedWeek 变成当前周时 Pager 不动，
     // 于是出现"顶栏显示第 8 周、网格里是第 1 周的卡片与日期"的失步。
+    //
+    // 重新进入 App（新前台会话）时 ViewModel 会把 selectedWeek 打回当前周，走的就是这条路径。
+    // 这里刻意用 scrollToPage 瞬间落位而非 animateScrollToPage：重进 App 应该第一眼就是本周，
+    // 而不是让用户看着它从第 1 周一路滑到第 16 周。
     LaunchedEffect(state.selectedWeek) {
         val target = (state.selectedWeek - 1).coerceIn(0, (totalWeeks - 1).coerceAtLeast(0))
         if (pagerState.currentPage != target) pagerState.scrollToPage(target)
