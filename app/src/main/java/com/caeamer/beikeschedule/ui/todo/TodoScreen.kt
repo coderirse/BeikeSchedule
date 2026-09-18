@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,11 +38,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,7 +56,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.TodoEntity
 import com.caeamer.beikeschedule.ui.schedule.DropdownField
@@ -429,21 +424,35 @@ private fun TodoFormSheet(
         }
     }
 
-    // 时间选择：M3 TimePicker（与 DatePicker 同为实验 API，风格与应用主题一致；
-    // 不用系统 TimePickerDialog —— 它跟随系统主题，会出现"应用浅色 + 弹窗深色"的割裂）
+    // 时间选择：iOS 风格双列滚轮（时/分，24 小时制），拖动吸附 + 点选居中。
+    // 此前用 M3 时钟控件，用户明确要求改为图示的双列滚轮样式。
     if (showTimePicker) {
-        val timeState = rememberTimePickerState(
-            initialHour = time.hour,
-            initialMinute = time.minute,
-            is24Hour = true,
-        )
+        var selHour by rememberSaveable { mutableStateOf(time.hour) }
+        var selMinute by rememberSaveable { mutableStateOf(time.minute) }
         AlertDialog(
             onDismissRequest = { showTimePicker = false },
             title = { Text("选择时间") },
-            text = { TimePicker(state = timeState) },
+            text = {
+                Row(Modifier.fillMaxWidth()) {
+                    WheelColumn(
+                        items = (0..23).map { String.format(java.util.Locale.US, "%02d", it) },
+                        initialIndex = selHour,
+                        onCenterChange = { selHour = it },
+                        suffix = "时",
+                        modifier = Modifier.weight(1f),
+                    )
+                    WheelColumn(
+                        items = (0..59).map { String.format(java.util.Locale.US, "%02d", it) },
+                        initialIndex = selMinute,
+                        onCenterChange = { selMinute = it },
+                        suffix = "分",
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    timeText = LocalTime.of(timeState.hour, timeState.minute).format(TIME_FMT)
+                    timeText = String.format(java.util.Locale.US, "%02d:%02d", selHour, selMinute)
                     showTimePicker = false
                 }) { Text("确定") }
             },
@@ -534,8 +543,8 @@ private fun ColorSelector(selected: Int, onSelect: (Int) -> Unit) {
 }
 
 /**
- * 提前分钟的 1..120 滚轮选择：单列可滚列表，打开时定位到当前值，
- * 点选高亮、确定回填。单列布局简单可靠（此前的三列拼位方案在窄屏上挤爆）。
+ * 提前分钟的 1..120 滚轮选择：与时间选择同款 iOS 风格滚轮（拖动吸附 + 点选居中，
+ * 选中项放大提亮带"分钟"后缀），打开时定位到当前值。
  */
 @Composable
 private fun MinutesWheel(value: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
@@ -545,39 +554,17 @@ private fun MinutesWheel(value: Int, onSelect: (Int) -> Unit, modifier: Modifier
     }
     if (show) {
         var selected by rememberSaveable { mutableStateOf(value.coerceIn(1, 120)) }
-        val listState = rememberLazyListState()
-        // 打开时滚到当前值（值从 1 起，index = 值 − 1），当前项居中
-        LaunchedEffect(Unit) {
-            listState.scrollToItem(
-                (selected - 1 - 3).coerceAtLeast(0),
-            )
-        }
         AlertDialog(
             onDismissRequest = { show = false },
             title = { Text("提前分钟") },
             text = {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(320.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    items((1..120).toList()) { n ->
-                        val isSel = n == selected
-                        Text(
-                            if (isSel) "▶ $n 分钟" else "$n 分钟",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { selected = n }
-                                .padding(vertical = 10.dp),
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                }
+                WheelColumn(
+                    items = (1..120).map { it.toString() },
+                    initialIndex = selected - 1,
+                    onCenterChange = { selected = it + 1 },
+                    suffix = "分钟",
+                    modifier = Modifier.fillMaxWidth(),
+                )
             },
             confirmButton = {
                 TextButton(onClick = {
