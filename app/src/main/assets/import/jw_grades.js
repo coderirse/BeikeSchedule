@@ -15,7 +15,10 @@
             headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
             body: new URLSearchParams(params).toString(),
             credentials: 'same-origin'
-        }).then(function (r) { return r.text(); });
+        }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status); // 会话过期/5xx 时 text 是 HTML，显式报状态更可读
+            return r.text();
+        });
     }
 
     function postJson(url, body) {
@@ -24,7 +27,10 @@
             headers: { 'Content-Type': 'application/json;charset=UTF-8' },
             body: JSON.stringify(body),
             credentials: 'same-origin'
-        }).then(function (r) { return r.text(); });
+        }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        });
     }
 
     /** 学业进度：getXss 取培养方案标识 → 并发查学分类别要求 + 毕业总进度；失败回退空串不阻塞成绩。 */

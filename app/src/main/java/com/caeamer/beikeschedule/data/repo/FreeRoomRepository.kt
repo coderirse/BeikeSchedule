@@ -35,11 +35,23 @@ class FreeRoomRepository(
      * （后续每次签名都要用）。
      */
     suspend fun loadMeta(): FreeRoomResult {
-        // 校时失败不是硬依赖：多数设备时钟是准的，用本机时间签名成功率依然很高
-        runCatching { keyProvider.syncClock() }
+        // 校时失败不是硬依赖：多数设备时钟是准的，用本机时间签名成功率依然很高。
+        // 取消异常必须放行：runCatching 会把它当普通失败吞掉，破坏结构化取消。
+        try {
+            keyProvider.syncClock()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
         val buildings = withSignedRetry { signed -> api.listBuildings(signed) }
         // 节次类型失败不致命：没有它也能展示楼栋，只是点进去查不到（会在查询时报错）
-        val nodeTypes = runCatching { withSignedRetry { signed -> api.listNodeTypes(signed) } }.getOrDefault(emptyList())
+        val nodeTypes = try {
+            withSignedRetry { signed -> api.listNodeTypes(signed) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyList()
+        }
         cycleTypeId = pickCycleType(nodeTypes)
         return FreeRoomResult(buildings, nodeTypes)
     }
@@ -64,10 +76,18 @@ class FreeRoomRepository(
      * @throws SmartClassException 取不到节次类型，或接口失败（含 HTTP 状态异常）
      */
     suspend fun loadFreeRooms(buildingId: String): List<SmartClassParser.RoomSlot> {
-        // 缓存未命中（未调 loadMeta 或那次失败）时才补一次
+        // 缓存未命中（未调 loadMeta 或那次失败）时才补一次；取消异常放行（理由同 loadMeta）
         val cycleId = cycleTypeId
-            ?: pickCycleType(runCatching { withSignedRetry { signed -> api.listNodeTypes(signed) } }.getOrDefault(emptyList()))
-                ?.also { cycleTypeId = it }
+            ?: run {
+                val types = try {
+                    withSignedRetry { signed -> api.listNodeTypes(signed) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    emptyList()
+                }
+                pickCycleType(types)
+            }?.also { cycleTypeId = it }
             // 取不到节次类型必须报错：静默返回空列表会被界面表达成"没有空教室"
             ?: throw SmartClassException("没有获取到节次类型，请稍后重试")
         val slots = withSignedRetry { signed ->

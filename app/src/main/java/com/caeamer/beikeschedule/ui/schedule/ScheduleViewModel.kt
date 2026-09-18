@@ -154,18 +154,21 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             AppSession.epoch.collect { selectedWeek.value = null }
         }
-        // 课程/学期/提醒设置任一变化 → 全量重排上课提醒闹钟。
+        // 课程/节次/学期/提醒设置任一变化 → 全量重排上课提醒闹钟。
         // 必须按值去重：reschedule() 内部会把已排 requestCode 写回 DataStore(REMINDER_CODES)，
-        // 而下面三个设置流都源自同一个 DataStore.data，写任何键都会让它们重新发射（map 不去重），
+        // 而下面几个设置流都源自同一个 DataStore.data，写任何键都会让它们重新发射（map 不去重），
         // 不去重就会形成「重排→写 codes→重新发射→重排」的自激循环，闹钟被反复取消重设。
+        // 节次时间必须在键里：重新导入只改节次不改课程时，ReminderKey 不含它会被去重抑制，
+        // 当天提醒仍按旧时刻触发（此前只靠次日脉冲自愈）。节次表无 DataStore 回写，无自激风险。
         viewModelScope.launch {
             combine(
                 repo.courses,
+                repo.sectionTimes,
                 repo.settings.semester,
                 repo.settings.reminderEnabled,
                 repo.settings.reminderMinutes,
-            ) { courses, semester, enabled, minutes ->
-                ReminderKey(courses, semester, enabled, minutes)
+            ) { courses, sections, semester, enabled, minutes ->
+                ReminderKey(courses, sections, semester, enabled, minutes)
             }.distinctUntilChanged().collect {
                 ClassReminderScheduler.reschedule(getApplication())
             }
@@ -175,6 +178,7 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
     /** 重排触发条件的值快照：用于过滤 DataStore 的无关键写入（见 init 注释）。 */
     private data class ReminderKey(
         val courses: List<CourseEntity>,
+        val sectionTimes: List<SectionTimeEntity>,
         val semester: SettingsStore.SemesterConfig,
         val enabled: Boolean,
         val minutes: Int,

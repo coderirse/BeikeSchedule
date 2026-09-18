@@ -123,6 +123,25 @@ class TodoPlannerTest {
     }
 
     @Test
+    fun `今天已打卡 当天提醒不再排 未来日仍排`() {
+        val todo = daily(time = "08:00", minutes = 10) // 触发于 07:50
+        val now = LocalDateTime.of(2026, 9, 17, 0, 0)
+        // 最后打卡日期=今天 → isDoneToday=true
+        val done = todo.copy(lastDoneDate = "2026-09-17")
+        val triggers = TodoPlanner.upcomingReminders(done, thu, 2, now)
+        // 今天的不排，只剩明天 07:50
+        assertEquals(listOf(LocalDateTime.of(2026, 9, 18, 7, 50)), triggers)
+    }
+
+    @Test
+    fun `今天未打卡 当天提醒照排`() {
+        val todo = daily(time = "08:00", minutes = 10)
+        val now = LocalDateTime.of(2026, 9, 17, 0, 0)
+        val triggers = TodoPlanner.upcomingReminders(todo, thu, 1, now) // 仅今天
+        assertEquals(listOf(LocalDateTime.of(2026, 9, 17, 7, 50)), triggers)
+    }
+
+    @Test
     fun `重复事项的跨天提醒各自独立`() {
         val todo = daily(time = "08:00", minutes = 10)
         val now = LocalDateTime.of(2026, 9, 17, 0, 0)

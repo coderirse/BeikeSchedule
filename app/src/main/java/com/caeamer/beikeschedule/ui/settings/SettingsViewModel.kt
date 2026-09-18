@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.HttpURLConnection
@@ -94,8 +95,11 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrNull()
             ?: return@withContext UpdateState.Failed("无法读取本机版本号")
 
+        // disconnect 必须在 finally：此前只有成功路径会断开，非 200 早退与异常路径
+        // 都泄漏连接直到 GC（弱网下表现为后续请求排队变慢）。
+        var conn: HttpURLConnection? = null
         try {
-            val conn = URL(RELEASES_API).openConnection() as HttpURLConnection
+            conn = URL(RELEASES_API).openConnection() as HttpURLConnection
             conn.connectTimeout = 10_000
             conn.readTimeout = 10_000
             conn.setRequestProperty("Accept", "application/vnd.github+json")
@@ -104,10 +108,11 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                 return@withContext UpdateState.Failed("GitHub 请求失败（HTTP ${conn.responseCode}）")
             }
             val body = conn.inputStream.bufferedReader().use { it.readText() }
-            conn.disconnect()
             val obj = Json.parseToJsonElement(body).jsonObject
             val tag = obj["tag_name"]?.jsonPrimitive?.content ?: return@withContext UpdateState.Failed("响应缺少版本号")
-            val notes = obj["body"]?.jsonPrimitive?.content.orEmpty().take(300)
+            // body 可能是 JSON null：jsonPrimitive.content 对字面量 null 会返回字符串 "null"，
+            // 直接进更新说明会显示"null"。显式判空。
+            val notes = obj["body"]?.takeIf { it !is JsonNull }?.jsonPrimitive?.content.orEmpty().take(300)
             val url = obj["html_url"]?.jsonPrimitive?.content ?: REPO_URL
             when {
                 GradesParser.compareVersions(tag, installed) > 0 ->
@@ -115,7 +120,10 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                 else -> UpdateState.UpToDate
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             UpdateState.Failed("检查失败：${e.message}")
+        } finally {
+            conn?.disconnect()
         }
     }
 

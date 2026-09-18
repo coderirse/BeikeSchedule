@@ -62,9 +62,13 @@ fun ImportScreen(
     // 预览/错误态返回 → 回到 WebView 重新抓取；浏览/抓取态返回 → 退出整个导入流程。
     // 本页是 Launcher Activity 里的一个 composable 分支（不是独立 Activity），
     // 不拦返回键的话系统返回会直接 finish 掉 Activity，登录会话与预览一起丢。
+    //
+    // Committing 态必须吞掉返回：confirmImport 完成后还会回调 onDone()，
+    // 这里放行就是"宿主先离开一次、协程跑完再离开一次"的双触发。
     BackHandler {
         when (state) {
             is ImportUiState.Preview, is ImportUiState.Error -> viewModel.backToBrowsing()
+            is ImportUiState.Committing -> Unit
             else -> onDone()
         }
     }
@@ -92,7 +96,8 @@ fun ImportScreen(
             TopAppBar(
                 title = { Text("从教务系统导入") },
                 navigationIcon = {
-                    IconButton(onClick = onDone) {
+                    // 与 BackHandler 同理：Committing 中退出会双触发 onDone()，禁用出口
+                    IconButton(onClick = onDone, enabled = state !is ImportUiState.Committing) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },

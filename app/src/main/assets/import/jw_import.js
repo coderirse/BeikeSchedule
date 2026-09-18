@@ -20,7 +20,12 @@
             }, headers || {}),
             body: new URLSearchParams(params).toString(),
             credentials: 'same-origin'
-        }).then(function (r) { return r.text(); });
+        }).then(function (r) {
+            // 会话过期被 302 到登录页、接口 5xx 时 r.text() 会拿到 HTML，
+            // 下游 JSON.parse 报英文错直接铺到中文界面。显式抛 HTTP 状态更可读。
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        });
     }
 
     /** 校历接口 → 统一周历结构；失败返回 null（由调用方兜底）。 */

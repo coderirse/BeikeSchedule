@@ -39,10 +39,15 @@ object ClassReminderScheduler {
     private const val SCHEDULE_DAYS = 8
 
     /**
-     * 上课提醒的 requestCode 空间上界，与考试提醒（8_000_000 段）和每日脉冲（9_000_000）隔离。
-     * 顺带让"通知 ID = requestCode"在两类提醒之间也不会撞车。
+     * 上课提醒的 requestCode 空间 [0, 7M)，与日程提醒（[7M,8M)）、考试提醒（8M 段）
+     * 和每日脉冲（9M）完全隔离。
+     * 顺带让"通知 ID = requestCode"在三类提醒之间也不会撞车。
+     *
+     * 历史注：曾用 [0,8M)，与日程段 [7M,8M) 有 1/8 重叠——闹钟因 action 不同互不干扰，
+     * 但通知 ID（=裸 requestCode）跨类同码时会互相覆盖。改小后旧码经下次重排自愈
+     * （记录里未来旧码不在新计划内会被取消，再按新码重设）。
      */
-    private const val REQUEST_CODE_RANGE = 8_000_000
+    private const val REQUEST_CODE_RANGE = 7_000_000
 
     /**
      * 重排串行化：reschedule 会被 App 打开、每日脉冲、开机广播等多处并发触发。

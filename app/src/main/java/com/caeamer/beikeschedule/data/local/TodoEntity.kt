@@ -2,6 +2,7 @@ package com.caeamer.beikeschedule.data.local
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import kotlinx.serialization.Serializable
 
 /**
  * 个人日程事项（用户手动创建，本地持久化，与教务/课程数据完全独立）。
@@ -12,7 +13,11 @@ import androidx.room.PrimaryKey
  * - [REPEAT_ONCE]：只在 [date] 这一天出现。
  *
  * 时间是单个时间点（HH:mm），列表按时间点排序。提醒提前量按事项自定义。
+ *
+ * @Serializable：仅供日程表单的 rememberSaveable Saver 做进程内快照（旋转屏幕不丢编辑中状态），
+ * 不落盘、不参与网络传输。
  */
+@Serializable
 @Entity(tableName = "todo")
 data class TodoEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
