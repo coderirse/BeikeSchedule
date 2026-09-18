@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [CourseEntity::class, SectionTimeEntity::class, GradeEntity::class, ExamEntity::class],
-    version = 4,
+    entities = [CourseEntity::class, SectionTimeEntity::class, GradeEntity::class, ExamEntity::class, TodoEntity::class],
+    version = 5,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -18,6 +18,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sectionTimeDao(): SectionTimeDao
     abstract fun gradeDao(): GradeDao
     abstract fun examDao(): ExamDao
+    abstract fun todoDao(): TodoDao
 
     companion object {
         /** v1 → v2：新增 grade 表（课程/节次数据原样保留）。 */
@@ -60,6 +61,23 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v4 → v5：新增 todo 表（个人日程，原有课程/成绩/考试数据原样保留）。 */
+        private val MIGRATE_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `todo` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`title` TEXT NOT NULL, `note` TEXT NOT NULL DEFAULT '', " +
+                        "`repeatMode` INTEGER NOT NULL DEFAULT 0, " +
+                        "`weekdays` TEXT NOT NULL DEFAULT '0111110', " +
+                        "`date` TEXT NOT NULL DEFAULT '', `time` TEXT NOT NULL, " +
+                        "`remindMinutes` INTEGER NOT NULL DEFAULT 15, " +
+                        "`colorIndex` INTEGER NOT NULL DEFAULT 0, " +
+                        "`lastDoneDate` TEXT NOT NULL DEFAULT '')",
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -70,7 +88,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "beike_schedule.db",
                 )
-                    .addMigrations(MIGRATE_1_2, MIGRATE_2_3, MIGRATE_3_4)
+                    .addMigrations(MIGRATE_1_2, MIGRATE_2_3, MIGRATE_3_4, MIGRATE_4_5)
                     // 迁移失败的兜底保险丝。
                     //
                     // 用户从 v1 直升 v4 需要三条迁移全部成功；任何一条在真机上失败

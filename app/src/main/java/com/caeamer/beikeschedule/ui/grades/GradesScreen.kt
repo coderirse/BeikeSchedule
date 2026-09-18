@@ -1,4 +1,4 @@
-package com.caeamer.beikeschedule.ui.grades
+﻿package com.caeamer.beikeschedule.ui.grades
 
 import android.webkit.WebView
 import androidx.compose.foundation.background
@@ -82,6 +82,7 @@ import com.caeamer.beikeschedule.import.GradesBridge
 import com.caeamer.beikeschedule.import.JwWebView
 import com.caeamer.beikeschedule.import.loadAssetScript
 import com.caeamer.beikeschedule.ui.schedule.DropdownField
+import com.caeamer.beikeschedule.ui.todo.TodoScreen
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -123,9 +124,12 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("教务", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    // 「重新抓取」是成绩/考试段自己的动作：显示在无课教室段会误导用户
+                    // 「重新抓取」是成绩/考试段自己的动作：显示在无课教室/日程段会误导用户
                     // （点了之后抓取并不会开始，因为 WebView 只属于成绩/考试段）
-                    if (!state.showWebView && state.section != GradesSection.FREE_ROOM) {
+                    if (!state.showWebView &&
+                        state.section != GradesSection.FREE_ROOM &&
+                        state.section != GradesSection.TODO
+                    ) {
                         IconButton(onClick = { showRefreshConfirm = true }) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新成绩与考试")
                         }
@@ -159,7 +163,8 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
             Column(Modifier.fillMaxSize()) {
                 SectionTabs(section = state.section, onSelect = viewModel::setSection)
 
-                val fetchingPane = state.showWebView && state.section != GradesSection.FREE_ROOM
+                val fetchingPane = state.showWebView &&
+                    (state.section == GradesSection.SCORES || state.section == GradesSection.EXAMS)
                 when {
                     fetchingPane -> WebViewFetch(
                         fetching = state.fetching,
@@ -173,6 +178,9 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
 
                     // 无课教室的数据来自校外平台，与教务会话无关，独立成页
                     GradesSection.FREE_ROOM == state.section -> FreeRoomScreen()
+
+                    // 日程来自本地 Room，与教务会话无关
+                    GradesSection.TODO == state.section -> TodoScreen()
 
                     GradesSection.EXAMS == state.section -> ExamListContent(state.examsSorted)
 
@@ -200,7 +208,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
 }
 
 /**
- * 教务 Tab 的分段切换：无课教室 | 成绩 | 考试。
+ * 教务 Tab 的分段切换：无课教室 | 日程 | 成绩 | 考试。
  *
  * 必须在所有内容分支之上渲染（包括抓取 WebView 与空态），否则用户会失去切换能力。
  */
@@ -212,18 +220,23 @@ private fun SectionTabs(section: GradesSection, onSelect: (GradesSection) -> Uni
         SegmentedButton(
             selected = section == GradesSection.FREE_ROOM,
             onClick = { onSelect(GradesSection.FREE_ROOM) },
-            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3),
-        ) { Text("无课教室", style = MaterialTheme.typography.labelLarge) }
+            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 4),
+        ) { Text("无课教室", style = MaterialTheme.typography.labelSmall) }
+        SegmentedButton(
+            selected = section == GradesSection.TODO,
+            onClick = { onSelect(GradesSection.TODO) },
+            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 4),
+        ) { Text("日程", style = MaterialTheme.typography.labelSmall) }
         SegmentedButton(
             selected = section == GradesSection.SCORES,
             onClick = { onSelect(GradesSection.SCORES) },
-            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3),
-        ) { Text("成绩", style = MaterialTheme.typography.labelLarge) }
+            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 4),
+        ) { Text("成绩", style = MaterialTheme.typography.labelSmall) }
         SegmentedButton(
             selected = section == GradesSection.EXAMS,
             onClick = { onSelect(GradesSection.EXAMS) },
-            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3),
-        ) { Text("考试", style = MaterialTheme.typography.labelLarge) }
+            shape = SegmentedButtonDefaults.itemShape(index = 3, count = 4),
+        ) { Text("考试", style = MaterialTheme.typography.labelSmall) }
     }
 }
 

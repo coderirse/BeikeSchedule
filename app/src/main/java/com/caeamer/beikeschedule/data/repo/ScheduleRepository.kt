@@ -7,6 +7,7 @@ import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.local.GradeEntity
 import com.caeamer.beikeschedule.data.local.SectionTimeEntity
+import com.caeamer.beikeschedule.data.local.TodoEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.flow.Flow
@@ -23,12 +24,14 @@ class ScheduleRepository(context: Context) {
     private val sectionTimeDao = db.sectionTimeDao()
     private val gradeDao = db.gradeDao()
     private val examDao = db.examDao()
+    private val todoDao = db.todoDao()
     val settings = SettingsStore(context)
 
     val courses: Flow<List<CourseEntity>> = courseDao.observeAll()
     val sectionTimes: Flow<List<SectionTimeEntity>> = sectionTimeDao.observeAll()
     val grades: Flow<List<GradeEntity>> = gradeDao.observeAll()
     val exams: Flow<List<ExamEntity>> = examDao.observeAll()
+    val todos: Flow<List<TodoEntity>> = todoDao.observeAll()
 
     /** 覆盖式写入成绩（全量刷新语义）。单事务保证不会出现"清空后未写入"的中间态。 */
     suspend fun replaceGrades(grades: List<GradeEntity>) = db.withTransaction {
@@ -103,6 +106,20 @@ class ScheduleRepository(context: Context) {
 
     /** 删除一门课的指定 id（手动课程删除；编辑替换旧行时也用它）。 */
     suspend fun deleteCourse(id: Long) = courseDao.deleteById(id)
+
+    // —— 日程 ——
+
+    /** 新增或更新一条日程（id=0 为新增，Room 自增生主键）。 */
+    suspend fun upsertTodo(todo: TodoEntity) = todoDao.upsert(todo)
+
+    /** 删除一条日程。 */
+    suspend fun deleteTodo(id: Long) = todoDao.deleteById(id)
+
+    /** 打卡 / 取消打卡：只更新"最近完成日期"，重复任务次日自然复活。 */
+    suspend fun setTodoDone(id: Long, doneDate: String) {
+        val todo = todoDao.getById(id) ?: return
+        todoDao.upsert(todo.copy(lastDoneDate = doneDate))
+    }
 
     /** 隐藏/恢复教务导入课程（隐藏 = 不显示但保留；手动/示例删除用 deleteCourse）。 */
     suspend fun setCourseHidden(id: Long, hidden: Boolean) = courseDao.setHidden(id, hidden)

@@ -83,6 +83,7 @@ class SettingsStore(private val context: Context) {
         val XFLBYQ_JSON = stringPreferencesKey("xflbyq_json")
         val BXKQK_JSON = stringPreferencesKey("bxkqk_json")
         val EXAM_REMINDER_CODES = stringPreferencesKey("exam_reminder_codes")
+        val TODO_REMINDER_CODES = stringPreferencesKey("todo_reminder_codes")
         val FREE_ROOM_BUILDING = stringPreferencesKey("free_room_building")
         val FREE_ROOM_TAB_INDEX = intPreferencesKey("free_room_tab_index")
     }
@@ -136,6 +137,14 @@ class SettingsStore(private val context: Context) {
 
     suspend fun saveExamScheduledAlarms(alarms: List<ScheduledAlarm>) {
         context.dataStore.edit { p -> p[Keys.EXAM_REMINDER_CODES] = AlarmCodec.encode(alarms) }
+    }
+
+    /** 已排日程提醒闹钟（requestCode + 触发时刻），语义同上。 */
+    val todoScheduledAlarms: Flow<List<ScheduledAlarm>> =
+        context.dataStore.data.map { p -> AlarmCodec.decode(p[Keys.TODO_REMINDER_CODES]) }
+
+    suspend fun saveTodoScheduledAlarms(alarms: List<ScheduledAlarm>) {
+        context.dataStore.edit { p -> p[Keys.TODO_REMINDER_CODES] = AlarmCodec.encode(alarms) }
     }
 
     /** 学分类别要求（queryXflbyq 原始 JSON）与毕业总进度（queryBxkqk 原始 JSON）缓存。 */

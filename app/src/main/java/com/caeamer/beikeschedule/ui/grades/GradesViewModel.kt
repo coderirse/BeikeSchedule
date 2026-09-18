@@ -19,11 +19,13 @@ import com.caeamer.beikeschedule.import.parser.GradesParser
 import com.caeamer.beikeschedule.import.parser.GpaInfo
 import com.caeamer.beikeschedule.import.parser.JwParser
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
+import com.caeamer.beikeschedule.reminder.TodoReminderScheduler
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -35,10 +37,13 @@ enum class ScoreMode { WEIGHTED, GPA }
 /**
  * 教务 Tab 的分段。
  *
- * 顺序即界面顺序，`ordinal` 直接用于持久化：**0=无课教室（默认）**、1=成绩、2=考试。
+ * 顺序即界面顺序，`ordinal` 直接用于持久化：**0=无课教室（默认）**、1=日程、2=成绩、3=考试。
  * 用户明确要求"默认打开教务是无课教室"——成绩使用率不高，放第一位会让人每次都要切。
+ *
+ * 注意：枚举顺序即持久化序号。本次在成绩前插入"日程"，老用户存的旧序号（1=成绩/2=考试）
+ * 升级后会一次性落到相邻分段，之后正常；因分段是低频偏好且立刻可改回，不做序号映射迁移。
  */
-enum class GradesSection { FREE_ROOM, SCORES, EXAMS }
+enum class GradesSection { FREE_ROOM, TODO, SCORES, EXAMS }
 
 /** 学分进度行：类别要求（接口）+ 本地已完成（成绩汇总）。 */
 data class CreditRow(val category: CreditCategory, val completed: Double)
@@ -295,6 +300,13 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
             if (repo.grades.first().isEmpty() && repo.settings.gradesFetchedAt.first() == 0L) {
                 showWebView.value = true
             }
+        }
+        // todo 表任何变更（新增/编辑/删除/打卡）→ 全量重排日程提醒。
+        // 与上课提醒同理按值去重：reschedule 内部会把已排 requestCode 写回 DataStore(TODO_REMINDER_CODES)，
+        // 而本收集器源自同一 dataStore.data，不去重会形成「重排→写 codes→重发→重排」自激循环。
+        viewModelScope.launch {
+            repo.todos.distinctUntilChangedBy { it }
+                .collect { TodoReminderScheduler.reschedule(getApplication()) }
         }
     }
 
