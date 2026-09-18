@@ -137,3 +137,42 @@ list 字段（权威来源：列定义 JS `/pub/gly/ksgl/cxtj/XskscxByXhColumn-*
 | `queryxszykbzong-2026-2027-1.json` | 总课表 |
 | `queryKbjg-section-times.json` | 节次时间 |
 | `queryRlZcSj-week1-dates.json` | 第 1 周日期 |
+
+## 9. 附录：贝壳教学平台（smartclass）无课教室接口
+
+> 与上面 1~8 节的**教务系统（byyt）无关**，是另一个站点：`https://ustb.smartclass.cn`，
+> 对应页面 `/ustb/ClassRoom.aspx`（"今日无课教室"）。本节于 2026-09 对照站点自身前端
+> 与真实响应核实，勿再重新扒站。
+
+### 9.1 接口一览
+
+| 接口 | 方法 | 用途 |
+|---|---|---|
+| `/config.json` | GET | 站点配置；`domainConfig` 字段是**加密的签名密钥段**，`csrkTime`（300000 = 5 分钟）是 token 有效窗口。**不需要签名** |
+| `/Home/GettimeDif` | GET | 服务器当前时间，**绝对毫秒时间戳**（不是时间差）。需要签名 |
+| `/general/api/open/building/listBuildings` | GET | 楼栋列表 `[{id,name}]` |
+| `/general/api/open/teachingCycle/listNodeTypes` | GET | 节次类型 `[{id,name}]`，实测有"默认节次"（6 大节）与"小节次"（12 小节） |
+| `/general/api/classroom/freeClassRooms` | POST | 空教室。体 `{buildingId, cycleTypeId, nodeId}`，`nodeId` 传空串=全部时段 |
+
+响应统一为 `{"code":0,"msg":"success","data":[…]}`；`code != 0` 时 `msg` 即错误原因。
+`freeClassRooms` 的 `data` 为 `[{nodeId,nodeName,startTime,endTime,classroomItems:[{classroomId,classroomName,noSeatRate,seatCount}]}]`，
+`startTime/endTime` 的日期部分是固定占位 `2000-01-01`，**只取时分**；
+`noSeatRate` 可能为 `null`（无数据），必须与 `0`（真的 0% 空座）区分。
+
+### 9.2 请求签名（`csrkToken`）
+
+- 算法：AES-256-CBC/PKCS7 解密 `/config.json` 的 `domainConfig`（hex）得到明文配置，取其中的 `csrkKey`。
+- token：把**毫秒时间戳的每一位数字**当作下标去 `csrkKey` 里取字符（13 位时间戳 → 13 字符 token）。
+- 时间戳必须落在服务端的 `[现在, 现在+csrkTime]` 窗口内，且**必须用服务器时间**（设备时钟快 3 分钟就会全量失败）。
+  站点自己的取法是 `TimeDif = parseInt(/Home/GettimeDif 响应) - Date.now()`；
+  App 改用 `/config.json` 的 HTTP `Date` 响应头（该请求不需要签名，没有"先有鸡还是先有蛋"的问题）。
+- 服务端密钥会**轮换**：轮换后请求返回 `csrf key validate error`，正确做法是丢弃本地缓存的 key、
+  重新拉 `/config.json` 后重试一次（**每个接口都要**这么做，只覆盖一半会让自愈整条失效）。
+- 实现与单测：`data/remote/SmartClassCrypto.kt`、`SmartClassKeyProvider.kt`、`SmartClassApi.kt`，
+  fixture 见 `app/src/test/resources/smartclass-config.json`。
+
+### 9.3 其他
+
+- 站点页面上的"全天 / 上午 / 下午 / 晚上"筛选是同一份数据的界面分组，接口没有对应的日期或半天参数：
+  **只能查"今天"**。App 因此在页面顶部明示"今天 · 更新时间"，并把已结束的时段淡化。
+- 站点会在本地存储里放 `csrkDate` 版本号，版本变化时清空 `csrkKey` 重新拉取——与 App 的"密钥被拒即重取"同源。

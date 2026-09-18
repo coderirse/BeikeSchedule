@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.local.SectionTimeEntity
+import com.caeamer.beikeschedule.data.pref.AppSession
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.JwParser
@@ -68,7 +69,10 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = ScheduleRepository(app)
 
     /**
-     * 用户选中的教学周；**null = 用户还没选过**（首次定位到当前周后置为具体值）。
+     * 用户选中的教学周；**null = 还没选过 / 需要重新定位到当前周**。
+     *
+     * 每个前台会话（首次冷启动，或退出 App 后再进入）都会被打回 null，
+     * 于是重新解析为当前周；App 内切 Tab 回来、旋转屏幕都不会打回，用户的选择得以保留。
      *
      * 不能用"selectedWeek == 1"当"还没选过"的哨兵：用户主动选第 1 周与尚未初始化
      * 无法区分，而 `repo.settings.semester` 是 DataStore 流，任何一次设置写入
@@ -84,8 +88,8 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         selectedWeek,
     ) { courses, sections, semester, week ->
         val location = WeekResolver.locateWeek(semester)
-        // 未选过时默认落在当前周（假期中即假期后第一个教学周），否则用用户的选择
-        val resolved = week ?: location.week ?: 1
+        // 未选过时（首次启动 / 重新进入 App）按 WeekResolver.defaultWeek 落位，否则用用户的选择
+        val resolved = week ?: WeekResolver.defaultWeek(location, semester.totalWeeks)
         ScheduleUiState(
             courses = courses,
             sectionTimes = sections,
@@ -139,15 +143,16 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        // 初次进入默认选中当前周（假期时选中假期后第一个教学周）。
-        // selectedWeek 为 null 表示"用户还没选过"，只在这种情况下写入一次；
-        // 用 `== 1` 当哨兵会把用户主动选的第 1 周误认为未初始化（见 selectedWeek 注释）。
+        // 每个前台会话（含首次冷启动）都把选中周打回"未选"，由 uiState 重新解析为当前周。
+        // 冷启动 epoch 从 0 开始、StateFlow 立即发射，因此首次启动同样走这条路径。
+        //
+        // 之前这里是"collect semester，且 selectedWeek 为 null 时写入当前周"，有两个毛病：
+        //   1. 只能覆盖冷启动，App 挂后台再回来不会重新定位；
+        //   2. 它要等 DataStore 异步读盘，必然晚于 Pager 的第一帧回写
+        //      （见 ScheduleScreen 里的 drop(1)），于是每次启动都被初始页 0
+        //      抢先写成"第 1 周"，且写完后非空，定位永远不再发生。
         viewModelScope.launch {
-            repo.settings.semester.collect { semester ->
-                if (selectedWeek.value == null) {
-                    WeekResolver.locateWeek(semester).week?.let { selectedWeek.value = it }
-                }
-            }
+            AppSession.epoch.collect { selectedWeek.value = null }
         }
         // 课程/学期/提醒设置任一变化 → 全量重排上课提醒闹钟。
         // 必须按值去重：reschedule() 内部会把已排 requestCode 写回 DataStore(REMINDER_CODES)，

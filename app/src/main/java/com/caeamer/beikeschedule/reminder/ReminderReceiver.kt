@@ -26,6 +26,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 showClassNotification(context, intent)
             }
             ExamReminderScheduler.ACTION_EXAM_REMIND -> showExamNotification(context, intent)
+            TodoReminderScheduler.ACTION_TODO_REMIND -> showTodoNotification(context, intent)
             ClassReminderScheduler.ACTION_DAILY_PULSE -> rescheduleAsync(context)
         }
     }
@@ -38,6 +39,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 runCatching {
                     ClassReminderScheduler.reschedule(context.applicationContext)
                     ExamReminderScheduler.reschedule(context.applicationContext)
+                    TodoReminderScheduler.reschedule(context.applicationContext)
                 }
             } finally {
                 pending.finish()
@@ -92,6 +94,27 @@ class ReminderReceiver : BroadcastReceiver() {
             .build()
         context.getSystemService(NotificationManager::class.java)
             .notify(notificationId(intent, fallbackSeed = name), notification)
+    }
+
+    private fun showTodoNotification(context: Context, intent: Intent) {
+        if (notificationPermissionDenied(context)) return
+
+        TodoReminderScheduler.ensureChannel(context)
+        val title = intent.getStringExtra(TodoReminderScheduler.EXTRA_TITLE).orEmpty()
+        val timeText = intent.getStringExtra(TodoReminderScheduler.EXTRA_TIME_TEXT).orEmpty()
+        val minutes = intent.getIntExtra(TodoReminderScheduler.EXTRA_MINUTES, 15)
+
+        val content = listOf("计划 $timeText", "$minutes 分钟后开始").joinToString(" · ")
+        val notification = NotificationCompat.Builder(context, TodoReminderScheduler.CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("日程提醒：$title")
+            .setContentText(content)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(content))
+            .setContentIntent(openAppIntent(context))
+            .setAutoCancel(true)
+            .build()
+        context.getSystemService(NotificationManager::class.java)
+            .notify(notificationId(intent, fallbackSeed = title), notification)
     }
 
     /**

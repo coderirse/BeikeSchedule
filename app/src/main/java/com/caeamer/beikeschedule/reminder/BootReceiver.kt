@@ -18,6 +18,7 @@ class BootReceiver : BroadcastReceiver() {
                 runCatching {
                     ClassReminderScheduler.reschedule(context.applicationContext)
                     ExamReminderScheduler.reschedule(context.applicationContext)
+                    TodoReminderScheduler.reschedule(context.applicationContext)
                 }
             } finally {
                 pending.finish()

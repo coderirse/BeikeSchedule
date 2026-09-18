@@ -19,19 +19,31 @@ import com.caeamer.beikeschedule.import.parser.GradesParser
 import com.caeamer.beikeschedule.import.parser.GpaInfo
 import com.caeamer.beikeschedule.import.parser.JwParser
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
+import com.caeamer.beikeschedule.reminder.TodoReminderScheduler
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** 成绩展示模式：加权（默认，只看必修数字成绩）/ GPA（教务官方值）。 */
 enum class ScoreMode { WEIGHTED, GPA }
 
-/** 教务 Tab 分段：成绩 / 考试。 */
-enum class GradesSection { SCORES, EXAMS }
+/**
+ * 教务 Tab 的分段。
+ *
+ * 顺序即界面顺序，`ordinal` 直接用于持久化：**0=无课教室（默认）**、1=日程、2=成绩、3=考试。
+ * 用户明确要求"默认打开教务是无课教室"——成绩使用率不高，放第一位会让人每次都要切。
+ *
+ * 注意：枚举顺序即持久化序号。本次在成绩前插入"日程"，老用户存的旧序号（1=成绩/2=考试）
+ * 升级后会一次性落到相邻分段，之后正常；因分段是低频偏好且立刻可改回，不做序号映射迁移。
+ */
+enum class GradesSection { FREE_ROOM, TODO, SCORES, EXAMS }
 
 /** 学分进度行：类别要求（接口）+ 本地已完成（成绩汇总）。 */
 data class CreditRow(val category: CreditCategory, val completed: Double)
@@ -211,11 +223,19 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
     private val fetching = MutableStateFlow(false)
     private val gpaFromCache = MutableStateFlow<GpaInfo?>(null)
     private val error = MutableStateFlow<String?>(null)
-    private val section = MutableStateFlow(GradesSection.SCORES)
     private val scoreMode = MutableStateFlow(ScoreMode.WEIGHTED)
     private val semesterFilter = MutableStateFlow("")
     private val schoolYearFilter = MutableStateFlow("")
     private val excludedKcdm = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * 当前分段：从 DataStore 读取（"记住上次选择"），默认无课教室。
+     * 用 ordinal 存整数，枚举顺序变化时旧值会落到相邻分段——因为这三个分段
+     * 顺序是产品决定且短期不会变，用字符串名反而更脆（改类名就丢偏好）。
+     */
+    private val section: Flow<GradesSection> = repo.settings.gradesTabIndex.map { index ->
+        GradesSection.entries.getOrElse(index) { GradesSection.FREE_ROOM }
+    }
 
     /** 会被 combine 合并的本地 UI 偏好（gpa 必须在流内，否则刷新后有 GPA 不刷新的竞态）。 */
     private data class UiPrefs(
@@ -265,7 +285,13 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
             gradProgress = CreditProgressParser.parseProgress(creditJson.second),
             hideScores = info.hideScores,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), GradesUiState())
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        // 初值必须与偏好的默认段一致（无课教室）：否则冷启动进教务的最前面几帧
+        // 会按"成绩段 + 无数据"渲染一屏"还没有成绩数据"，然后才跳回无课教室
+        GradesUiState(section = GradesSection.FREE_ROOM),
+    )
 
     init {
         viewModelScope.launch {
@@ -274,6 +300,13 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
             if (repo.grades.first().isEmpty() && repo.settings.gradesFetchedAt.first() == 0L) {
                 showWebView.value = true
             }
+        }
+        // todo 表任何变更（新增/编辑/删除/打卡）→ 全量重排日程提醒。
+        // 与上课提醒同理按值去重：reschedule 内部会把已排 requestCode 写回 DataStore(TODO_REMINDER_CODES)，
+        // 而本收集器源自同一 dataStore.data，不去重会形成「重排→写 codes→重发→重排」自激循环。
+        viewModelScope.launch {
+            repo.todos.distinctUntilChangedBy { it }
+                .collect { TodoReminderScheduler.reschedule(getApplication()) }
         }
     }
 
@@ -342,17 +375,33 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         error.value = "抓取失败：$message"
     }
 
+    /**
+     * 开始一次成绩抓取。
+     *
+     * 必须同时把分段切到成绩：抓取用的 WebView 只属于成绩/考试段，
+     * 停在无课教室段时 `showWebView = true` 不会有任何可见效果
+     * （WebView 不组合、脚本不注入、请求根本不会发出），
+     * 用户却会看到确认框说"将进入教务系统重新抓取"。
+     */
     fun startRefresh() {
         error.value = null
         showWebView.value = true
+        viewModelScope.launch { repo.settings.setGradesTabIndex(GradesSection.SCORES.ordinal) }
+    }
+
+    /** 放弃本次抓取（退出全屏登录页），回到分段内容。 */
+    fun cancelFetch() {
+        showWebView.value = false
+        fetching.value = false
     }
 
     fun dismissError() {
         error.value = null
     }
 
+    /** 切换分段并记住（跨重启保留）。 */
     fun setSection(section: GradesSection) {
-        this.section.value = section
+        viewModelScope.launch { repo.settings.setGradesTabIndex(section.ordinal) }
     }
 
     /** 成绩隐私开关：点击小眼睛切换显示/隐藏（会话级，退到后台自动复位隐藏）。 */

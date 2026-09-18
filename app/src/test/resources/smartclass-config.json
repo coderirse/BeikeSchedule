@@ -1,0 +1,64 @@
+﻿{
+  "domainConfig": "be1331a128c48b145edde041c04e91743b0968648a97c836ddd1b5c5f5b6636b2c7f143c5d5854492e6d607b81c73fb13a6b02e32b43399b06b8971c9e453f2cc45ad2bd317b45854efbadb994a3606e130740498bdb257214fe208b9d7b23562ca432afad07ad95f9e9c336efe3b13c972ec9f6e239b0f51c46ce831888113e969a7adc1d9546da3bbb11a872dd8e9aad643b18d32239a1f91cc77e923d7f46c66639059033961fbf060c3bedb8ce6d489ff2fb463e2283f9becaaccb24bd1f3e273dce5b08fc94c2a46df23e2c394465e56cfd04f0e0745018fe88daf3df03990aca0ebd5d406103fc873d1853d4bdc1a9aea2fdbb6af67aa16f526ac07c6ceb3917d98624de4c28f590409e01a5a182cda3e90e9407d11806e2f88a311b296993b621c832690cf79a82c459182b188f350f66be9b385e9d6620c5984a31d098c73a8faee9fe57151be7d5b0360e7161cdcb4964d6f8cf72e298ba7a4a7dd0f5ea90375fef242e281277dba7f130d01582594c45665a61d3a765849d73b7837175a8892acfa89d71aee41a5d77ffef1c9415f1df3029e57b1399023a29baf4a6c0d0ff3c7d5ca23be70ceff9ea67e4b6bfc28afc1591f2371bfd74a3477df518d7bc2b1e8f3db6f21246cdc25a806ef99c07116bb1ef1555e0b7620aede8177a68140083770bc31fc3847c1d88a2c92d809cce69dd5e284c28a812e2bb4e134cec15de189dbe4b40d833e20e52cc0bce45d45c227ccdc1ecc5941826ab67ce6afce2f40eab48d82c035bc7d54d533b4f99bbcd46b7438e7272bfa39f382643b0b4bad8da39fecd6c5b42b88c91f871f83c0ccd9b31facc21cd2df335f1b507ef703f585f4d28e6621fbbe224ede7b2e4694adb9b55024c96cda64f5e5ec163d32a8687879dc38f607249740a0b54997c8744bb2f03229c548122c77f9328aa7cb922312c4b0b5564ec65749b0f7f2a7cc1122f7e40b4de0cde6f336bea683e7c3e5e2947f98f47ce79add9f9e5e9799f40e80e616ac2c1bdae80bc7d8f9424377b15024f7975ccb79b23eea90640dbb2330affad2e99bbfe639c5ea5bb81370470f2413b8790d0e6adba1872a6fcb6e2d00528bb197b386535591e7c96ed4b490336a52cd77734e201663c51b4cf33eebc19a9b9790696a3d5f01420a6f82b5f4b170482ca4aededb6db1ab449b71e85173430cde8103e4bc8f245a3296b803b004d1281141273050e99dec2cc25e4b7861843589d1d7b0f14ff58b8b5ed45a0d5a77db0f878a05a45ce7c55da3954105be1ba4349e076130b6b1daddb203d650fc8db40b52ac341184ba9b147876fe830b1e407bd3ffb9f1019562dc32faf",
+  "attendanceSource": "Java",
+  "location": "standard",
+  "csrkTime": 300000,
+  "standard": [
+    {
+      "imgUrls": "/static/images/indexNavIcon1.png",
+      "imgDescribe": "推荐",
+      "More": "",
+      "boxShadow": ""
+    },
+    {
+      "imgUrls": "/static/images/indexNavIcon2.png",
+      "imgDescribe": "直播",
+      "More": "../LiveList/main",
+      "boxShadow": ""
+    },
+    {
+      "imgUrls": "/static/images/indexNavIcon3.png",
+      "imgDescribe": "回放",
+      "More": "../VideoList/main",
+      "boxShadow": ""
+    },
+    {
+      "imgUrls": "/static/images/indexNavIcon4.png",
+      "imgDescribe": "",
+      "More": "",
+      "boxShadow": ""
+    }
+  ],
+  "examine": [
+    {
+      "imgUrls": "/static/images/indexNavIcon1.png",
+      "imgDescribe": "推荐",
+      "More": "",
+      "boxShadow": ""
+    },
+    {
+      "imgUrls": "/static/images/indexNavIcon2.png",
+      "imgDescribe": "录播",
+      "More": "../LiveList/main",
+      "boxShadow": ""
+    },
+    {
+      "imgUrls": "/static/images/indexNavIcon3.png",
+      "imgDescribe": "回放",
+      "More": "../VideoList/main",
+      "boxShadow": ""
+    },
+    {
+      "imgUrls": "/static/images/indexNavIcon4.png",
+      "imgDescribe": "",
+      "More": "",
+      "boxShadow": ""
+    }
+  ],
+  "liveInfo": {
+    "liveName": [ "直播", "录播" ],
+    "signUpMsg": [ "正在进行", "上课中" ],
+    "liveMsg": [ "正在直播", "上课中" ]
+  },
+  "videoInfo": { "VideoName": [ "点播", "回放" ] }
+}

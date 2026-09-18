@@ -44,6 +44,21 @@ object WeekResolver {
      * null（严格口径：开学前无课）翻译回"显示为第 1 周"，否则无校历时顶栏会退化成
      * 既非"未开学"也非周次的空档。
      */
+    /**
+     * 用户**没有手动选周**时的默认落位（首屏、以及每次重新进入 App 重新定位时用）。
+     *
+     * - 教学周内 / 假期中：[ScheduleRepository.Companion.WeekLocation.week] 即目标
+     *   （假期中它已经是假期后第一个教学周）；
+     * - 已放假（`week == null` 且 `afterEnd`）：落到**最后一周**。放假期间翻课表不该
+     *   每次重进都被拽回第 1 周——学期都结束了，"第 1 周"对使用者毫无意义；
+     * - 其余（未开学、或还没设置学期）：第 1 周。
+     */
+    fun defaultWeek(
+        location: ScheduleRepository.Companion.WeekLocation,
+        totalWeeks: Int,
+    ): Int = (location.week ?: if (location.afterEnd) totalWeeks else 1)
+        .coerceIn(1, totalWeeks.coerceAtLeast(1))
+
     fun locateWeek(
         semester: SettingsStore.SemesterConfig,
         today: LocalDate = LocalDate.now(),

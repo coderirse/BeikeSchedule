@@ -23,8 +23,8 @@ android {
         applicationId = "com.caeamer.beikeschedule"
         minSdk = 34
         targetSdk = 37
-        versionCode = 31
-        versionName = "1.1.12"
+        versionCode = 37
+        versionName = "1.2.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -49,6 +49,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    testOptions {
+        unitTests {
+            // 单测跑在 JVM 上，android.jar 里的方法默认是抛异常的 stub。
+            // 让未实现的系统方法返回默认值，使 android.util.Log 之类的调用
+            // 不会把纯逻辑单测打挂（解析器另有真 org.json 实现，见 dependencies）
+            isReturnDefaultValues = true
+        }
+    }
     buildFeatures {
         compose = true
     }
@@ -68,6 +76,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
@@ -76,6 +85,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.material.icons.extended)
     testImplementation(libs.junit)
+    // org.json 在 JVM 单测里是 Android SDK 的 stub（方法返回 null/抛异常），
+    // 解析器单测必须用真实实现替换它
+    testImplementation(libs.json)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

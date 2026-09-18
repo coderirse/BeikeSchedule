@@ -83,6 +83,9 @@ class SettingsStore(private val context: Context) {
         val XFLBYQ_JSON = stringPreferencesKey("xflbyq_json")
         val BXKQK_JSON = stringPreferencesKey("bxkqk_json")
         val EXAM_REMINDER_CODES = stringPreferencesKey("exam_reminder_codes")
+        val TODO_REMINDER_CODES = stringPreferencesKey("todo_reminder_codes")
+        val FREE_ROOM_BUILDING = stringPreferencesKey("free_room_building")
+        val FREE_ROOM_TAB_INDEX = intPreferencesKey("free_room_tab_index")
     }
 
     val semester: Flow<SemesterConfig> = context.dataStore.data.map { p ->
@@ -134,6 +137,14 @@ class SettingsStore(private val context: Context) {
 
     suspend fun saveExamScheduledAlarms(alarms: List<ScheduledAlarm>) {
         context.dataStore.edit { p -> p[Keys.EXAM_REMINDER_CODES] = AlarmCodec.encode(alarms) }
+    }
+
+    /** 已排日程提醒闹钟（requestCode + 触发时刻），语义同上。 */
+    val todoScheduledAlarms: Flow<List<ScheduledAlarm>> =
+        context.dataStore.data.map { p -> AlarmCodec.decode(p[Keys.TODO_REMINDER_CODES]) }
+
+    suspend fun saveTodoScheduledAlarms(alarms: List<ScheduledAlarm>) {
+        context.dataStore.edit { p -> p[Keys.TODO_REMINDER_CODES] = AlarmCodec.encode(alarms) }
     }
 
     /** 学分类别要求（queryXflbyq 原始 JSON）与毕业总进度（queryBxkqk 原始 JSON）缓存。 */
@@ -226,6 +237,30 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setHideInactiveCourses(hidden: Boolean) {
         context.dataStore.edit { p -> p[Keys.HIDE_INACTIVE_COURSES] = hidden }
+    }
+
+    // —— 无课教室 ——
+
+    /** 上次查看的楼栋 ID（空 = 用接口返回的第一栋）。 */
+    val freeRoomBuilding: Flow<String> =
+        context.dataStore.data.map { it[Keys.FREE_ROOM_BUILDING] ?: "" }
+
+    suspend fun setFreeRoomBuilding(buildingId: String) {
+        context.dataStore.edit { p -> p[Keys.FREE_ROOM_BUILDING] = buildingId }
+    }
+
+    /**
+     * 教务 Tab 上次停留的分段下标（0=无课教室 1=成绩 2=考试）。
+     *
+     * 默认 0：用户明确要求"默认打开教务是无课教室"。
+     * 键名 `free_room_tab_index` 是历史遗留（该分段当时只有无课教室），
+     * 实际存的是**整个教务 Tab** 的分段，不是无课教室自己的状态。
+     */
+    val gradesTabIndex: Flow<Int> =
+        context.dataStore.data.map { it[Keys.FREE_ROOM_TAB_INDEX] ?: 0 }
+
+    suspend fun setGradesTabIndex(index: Int) {
+        context.dataStore.edit { p -> p[Keys.FREE_ROOM_TAB_INDEX] = index }
     }
 
     private companion object {
