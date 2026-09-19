@@ -32,6 +32,13 @@ internal object ReminderAlarmScheduler {
 
     const val EXTRA_REQUEST_CODE = "requestCode"
 
+    /**
+     * 已到点闹钟在记录里的保留时长。
+     * 6 小时足以覆盖 Doze 维护窗口导致的投递延迟；超过它说明这条提醒已经过了投递窗口，
+     * 从记录里移除（避免记录无界增长，也避免误取消早已弹过的旧码）。
+     */
+    private const val DUE_RECORD_GRACE_MS = 6 * 60 * 60 * 1000L
+
     /** 本轮要排的一条闹钟（已构造好 PendingIntent 与触发时刻）。 */
     data class PlannedAlarm(
         val requestCode: Int,
@@ -46,16 +53,21 @@ internal object ReminderAlarmScheduler {
      * @param nowMillis 当前时刻
      * @param cancelDueAlarms 为 true 时连"已到点"的也一起取消 —— 只用于用户主动关闭提醒的场景：
      *   那时用户明确要求别提醒，"再弹最后一次"才是 bug；其余情况已到点的必须留给系统投递。
+     * @param forceCancelCodes 定向取消集合：即便已到点也要取消。用于"用户明确表达了不要这条提醒"
+     *   的语义（如今天已打卡的日程），比 cancelDueAlarms 窄，不会误伤同批其他待投递提醒。
      */
     internal fun alarmsToCancel(
         recorded: List<ScheduledAlarm>,
         plannedCodes: Set<Int>,
         nowMillis: Long,
         cancelDueAlarms: Boolean = false,
+        forceCancelCodes: Set<Int> = emptySet(),
     ): List<ScheduledAlarm> = recorded.filter { alarm ->
         when {
             // 用户主动关闭提醒 → 全部取消（含已到点的）
             cancelDueAlarms -> true
+            // 定向取消（打卡/明确不要这条）→ 即便已到点也取消
+            alarm.requestCode in forceCancelCodes -> true
             // 旧格式记录没有触发时刻：仍在本轮计划里的先留着（紧接着会被重新设置覆盖，
             // setExact 对同 requestCode 是替换语义），只有确实不再需要的才取消。
             alarm.triggerAtMillis == null -> alarm.requestCode !in plannedCodes
@@ -75,6 +87,7 @@ internal object ReminderAlarmScheduler {
         recorded: List<ScheduledAlarm>,
         planned: List<PlannedAlarm>,
         cancelDueAlarms: Boolean = false,
+        forceCancelCodes: Set<Int> = emptySet(),
         persist: suspend (List<ScheduledAlarm>) -> Unit,
     ) {
         val now = System.currentTimeMillis()
@@ -82,7 +95,7 @@ internal object ReminderAlarmScheduler {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
 
         withContext(NonCancellable) {
-            alarmsToCancel(recorded, plannedCodes, now, cancelDueAlarms).forEach { stale ->
+            alarmsToCancel(recorded, plannedCodes, now, cancelDueAlarms, forceCancelCodes).forEach { stale ->
                 PendingIntent.getBroadcast(
                     context, stale.requestCode,
                     Intent(context, ReminderReceiver::class.java).setAction(action),
@@ -90,10 +103,18 @@ internal object ReminderAlarmScheduler {
                 )?.let { alarmManager.cancel(it) }
             }
             planned.forEach { setAlarm(alarmManager, it.triggerAtMillis, it.pendingIntent) }
-            // 记录里只保留本轮真正排上的闹钟；已到点的那批不再记录
-            // （它们要么已经弹过、PendingIntent 已被系统回收，要么马上会被投递，
-            //   两种情况都不该再被取消）
-            persist(planned.map { ScheduledAlarm(it.requestCode, it.triggerAtMillis) })
+            // 记录 = 本轮排上的 + **已到点但还在宽限期内**的旧闹钟。
+            //
+            // 已到点的那批一律不动（交给系统投递，见 alarmsToCancel），但记录不能马上丢：
+            // 记录是后续取消的唯一线索，丢了之后"用户打卡/明确关掉提醒"就再也取消不到
+            // 那条正在 Doze 队列里的闹钟。超出宽限期（投递窗口已过）才真正移除。
+            val plannedRecords = planned.map { ScheduledAlarm(it.requestCode, it.triggerAtMillis) }
+            val dueKept = recorded.filter { old ->
+                old.triggerAtMillis != null &&
+                    old.triggerAtMillis <= now &&
+                    old.triggerAtMillis > now - DUE_RECORD_GRACE_MS
+            }
+            persist((plannedRecords + dueKept).distinctBy { it.requestCode })
         }
     }
 

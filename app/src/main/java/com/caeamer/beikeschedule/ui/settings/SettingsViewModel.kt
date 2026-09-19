@@ -7,6 +7,7 @@ import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.GradesParser
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -75,7 +76,9 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             // （否则成绩清完了，旧的"明天考试"闹钟还会带着地点/座位号弹出来）。
             // cancelDueAlarms = true：用户显式清空，连"已到点但系统还没投递"的那条
             // 也不要再弹；日常重排必须保持默认 false，否则会丢掉 Doze 下未投递的提醒。
-            ExamReminderScheduler.reschedule(getApplication(), cancelDueAlarms = true)
+            // runCatching：重排异常逃出 viewModelScope 会崩进程，这里只允许"本轮不重排"。
+            runCatching { ExamReminderScheduler.reschedule(getApplication(), cancelDueAlarms = true) }
+                .onFailure { e -> if (e is CancellationException) throw e }
         }
     }
 

@@ -30,7 +30,7 @@ data class TodoEntity(
     val date: String = "",
     /** HH:mm 计划时间点。 */
     val time: String,
-    /** 提前提醒分钟数（0 = 到点才提醒）。 */
+    /** 提前提醒分钟数（UI 现为 1..120；0 表示到点才提醒，当前界面不产出该值）。 */
     val remindMinutes: Int = 15,
     /** 色板下标（与课程共用 CourseColors.basePalette）。 */
     val colorIndex: Int = 0,

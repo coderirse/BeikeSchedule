@@ -90,12 +90,21 @@ object SmartClassParser {
     }.getOrElse { "响应格式异常，请稍后重试" }
 
     /** 解析教学楼列表。 */
-    fun parseBuildings(body: String): List<Building> =
-        dataArray(body).orEmpty().mapNotNull { o ->
+    fun parseBuildings(body: String): List<Building> {
+        val data = dataArray(body).orEmpty()
+        val list = data.mapNotNull { o ->
             val id = o.optString("id")
             val name = o.optString("name")
             if (id.isBlank() || name.isBlank()) null else Building(id, name)
         }
+        // 元素级一致性校验：data 里有条目却一条都没解析出来 → 服务端字段形态变了。
+        // 返回空列表会被界面翻译成"没有获取到教学楼列表"（尚可）或"没有空教室"（误导），
+        // 抛错才能走明确的失败路径。见 parseRoomSlots 的同款注释。
+        if (data.isNotEmpty() && list.isEmpty()) {
+            throw SmartClassException("教学楼列表格式异常（服务端字段可能已调整）")
+        }
+        return list
+    }
 
     /** 解析节次类型列表。 */
     fun parseNodeTypes(body: String): List<NodeType> =
@@ -111,8 +120,9 @@ object SmartClassParser {
      * 跳过没有教室的时段：实测某些时段 `classroomItems` 为空数组，
      * 展示一个空标题只会让页面变长而没有信息量。
      */
-    fun parseRoomSlots(body: String): List<RoomSlot> =
-        dataArray(body).orEmpty().mapNotNull { o ->
+    fun parseRoomSlots(body: String): List<RoomSlot> {
+        val data = dataArray(body).orEmpty()
+        val slots = data.mapNotNull { o ->
             val nodeId = o.optString("nodeId")
             val nodeName = o.optString("nodeName")
             if (nodeName.isBlank()) return@mapNotNull null
@@ -133,4 +143,13 @@ object SmartClassParser {
             }
             if (rooms.isEmpty()) null else RoomSlot(nodeId, nodeName, o.optString("startTime"), o.optString("endTime"), rooms)
         }
+        // 元素级一致性校验：HTTP 状态与顶层 JSON 已由调用方把关（M1 修复），
+        // 但字段改名/变类型会让 data 里的条目被逐条丢弃 → 返回空列表 →
+        // 界面显示"今天没有查询到无课教室"——把"服务端/我方解析出问题"说成了真结论。
+        // data 有内容却解析不出任何时段时，明确报错。
+        if (data.isNotEmpty() && slots.isEmpty()) {
+            throw SmartClassException("空教室数据格式异常（服务端字段可能已调整）")
+        }
+        return slots
+    }
 }

@@ -25,6 +25,10 @@ interface CourseDao {
     @Query("UPDATE course SET hidden = :hidden WHERE id = :id")
     suspend fun setHidden(id: Long, hidden: Boolean)
 
+    /** 整组隐藏/恢复：一张卡可能对应多行（教务拆行、手动多时段），必须一次事务写完。 */
+    @Query("UPDATE course SET hidden = :hidden WHERE id IN (:ids)")
+    suspend fun setHiddenForIds(ids: List<Long>, hidden: Boolean)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(courses: List<CourseEntity>)
 

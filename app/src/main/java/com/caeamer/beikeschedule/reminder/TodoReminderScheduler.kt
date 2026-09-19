@@ -8,9 +8,11 @@ import android.content.Intent
 import com.caeamer.beikeschedule.data.local.TodoEntity
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.model.TodoPlanner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -58,31 +60,44 @@ object TodoReminderScheduler {
 
     /** todo 表变化时调用：按最新数据全量重排。 */
     suspend fun reschedule(context: Context) = rescheduleMutex.withLock {
-        val repo = ScheduleRepository(context)
-        val settings = repo.settings
+        // 切到 IO：下面全是 Room/DataStore 读 + 每条闹钟一次 binder 调用
+        withContext(Dispatchers.IO) {
+            val repo = ScheduleRepository(context)
+            val settings = repo.settings
 
-        // —— 先算：所有读取与计算都在取消任何闹钟之前完成 ——
-        val now = LocalDateTime.now()
-        val zone = ZoneId.systemDefault()
-        val todos = repo.todos.first()
-        val planned = planTodoReminders(todos, now, zone)
-        val recorded = settings.todoScheduledAlarms.first()
+            // —— 先算：所有读取与计算都在取消任何闹钟之前完成 ——
+            val now = LocalDateTime.now()
+            val zone = ZoneId.systemDefault()
+            val todos = repo.todos.first()
+            val planned = planTodoReminders(todos, now, zone)
+            val recorded = settings.todoScheduledAlarms.first()
 
-        // —— 后换：不可中断地取消 + 设置 + 写回 ——
-        ReminderAlarmScheduler.apply(
-            context = context,
-            action = ACTION_TODO_REMIND,
-            recorded = recorded,
-            planned = planned.map { p ->
-                ReminderAlarmScheduler.PlannedAlarm(
-                    requestCode = p.requestCode,
-                    triggerAtMillis = p.triggerAtMillis,
-                    pendingIntent = todoPendingIntent(context, p),
-                )
-            },
-            cancelDueAlarms = false,
-            persist = { settings.saveTodoScheduledAlarms(it) },
-        )
+            // 定向取消：今天已打卡事项的提醒码。Doze 下"已到点但还没投递"的闹钟不会被
+            // 常规重排取消（那是刻意的，避免丢提醒），但打卡的语义就是"别再提醒了"，
+            // 所以这批要连已到点的一起取消——只取消这批码，不误伤同批其他待投递提醒。
+            val today = now.toLocalDate()
+            val forceCancel = todos
+                .filter { it.isDoneToday(today.toString()) && TodoPlanner.occursOn(it, today) }
+                .map { requestCodeOf(it, today) }
+                .toSet()
+
+            // —— 后换：不可中断地取消 + 设置 + 写回 ——
+            ReminderAlarmScheduler.apply(
+                context = context,
+                action = ACTION_TODO_REMIND,
+                recorded = recorded,
+                planned = planned.map { p ->
+                    ReminderAlarmScheduler.PlannedAlarm(
+                        requestCode = p.requestCode,
+                        triggerAtMillis = p.triggerAtMillis,
+                        pendingIntent = todoPendingIntent(context, p),
+                    )
+                },
+                cancelDueAlarms = false,
+                forceCancelCodes = forceCancel,
+                persist = { settings.saveTodoScheduledAlarms(it) },
+            )
+        }
     }
 
     /**
@@ -115,6 +130,10 @@ object TodoReminderScheduler {
     /**
      * 提醒的 requestCode = hash(事项 id + 出现日期)，落在 [REQUEST_CODE_BASE, +RANGE)。
      * 内容寻址所以跨轮次稳定；同一 (事项,日期) 永远得到同一个码，改时间也能精确取消。
+     *
+     * 碰撞概率：本段只有 1e6 个槽，8 天窗口 × 20 个每天重复的事项 = 160 个码时
+     * p ≈ 1.3%（生日近似 n(n-1)/2m）。碰撞会让后设置的闹钟覆盖前一个（少弹一条且无日志）。
+     * 当前量级（个位数事项）远低于此，先记录在案。
      */
     internal fun requestCodeOf(todo: TodoEntity, date: LocalDate): Int =
         REQUEST_CODE_BASE + Math.floorMod("${todo.id}@$date".hashCode(), REQUEST_CODE_RANGE)

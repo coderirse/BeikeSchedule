@@ -91,14 +91,16 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(MIGRATE_1_2, MIGRATE_2_3, MIGRATE_3_4, MIGRATE_4_5)
                     // 迁移失败的兜底保险丝。
                     //
-                    // 用户从 v1 直升 v4 需要三条迁移全部成功；任何一条在真机上失败
-                    // （字段类型不符、磁盘写满、历史版本写坏过表结构），默认行为是抛
+                    // **只兜"找不到迁移路径"这一种情况**（Room 的 fallbackToDestructiveMigration
+                    // 语义：findMigrationPath 返回 null 且 isMigrationRequired 为真时才
+                    // dropAllTables 重建）。迁移 SQL 自身抛异常、或迁移后 schema 校验失败
+                    // （"Migration didn't properly handle: ..."，例如字段类型不符、
+                    // 历史版本写坏过表结构）都**不会**走这条兜底，仍是
                     // IllegalStateException → **启动即崩且无法自愈**，用户只能清应用数据。
-                    // 声明兜底后最坏情况是课表库被重建（用户重新导入一次），
-                    // 而不是 App 打不开。
+                    // 当前四条迁移与 3/4/5.json 逐列核对一致、迁移链完整，
+                    // 所以这里目前是"备用保险丝"，不要把它当成万能兜底。
                     //
-                    // 注意这只兜「库结构无法迁移」，不兜「用户数据丢失」：
-                    // 迁移正常时数据完整保留，此声明不会被触发。
+                    // 注意也不兜「用户数据丢失」：迁移正常时数据完整保留，此声明不会被触发。
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { instance = it }

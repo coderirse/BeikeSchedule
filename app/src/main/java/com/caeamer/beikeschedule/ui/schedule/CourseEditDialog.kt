@@ -2,7 +2,6 @@ package com.caeamer.beikeschedule.ui.schedule
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -33,6 +33,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -44,6 +45,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.model.CourseRowBuilder
@@ -78,6 +82,9 @@ private class SessionState(dayOfWeek: Int, bigSections: Set<Int>, weeks: Set<Int
  * 若同名课程同时存在有/无固定时间两种行，无固定时间的行原样透传，绝不因为不在时段编辑器里就被丢弃。
  *
  * @param initialRows 课程的全部行（多时段课程 = 多行）；编辑时加载全部时段，不限于点击的那一行。
+ * @param manualNamesInUse 其它**手动课程**已占用的名字（不含本次编辑的这些行）。
+ *   同名的两门手动课会被 `groupOf(name + source)` 并成一组：隐藏/删除/编辑会互相连坐，
+ *   而删除不可撤销——所以在入口直接禁止重名（导入课的重名是同一门课拆行，不受此限）。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -86,6 +93,7 @@ fun CourseEditDialog(
     totalWeeks: Int,
     /** 长按课表空白格进入时预填的时段。 */
     prefill: SessionExpander.Session? = null,
+    manualNamesInUse: Set<String> = emptySet(),
     onDismiss: () -> Unit,
     onSave: (List<CourseEntity>) -> Unit,
 ) {
@@ -124,7 +132,21 @@ fun CourseEditDialog(
         )
     }
 
-    val valid = name.isNotBlank() &&
+    // 重名校验只对手动课程生效：导入课的同名多行是同一门课的拆行（本就该并成一组）
+    val savedAsManual = initialRows.isEmpty() || initialRows.first().source == CourseEntity.SOURCE_MANUAL
+    val nameDuplicated = savedAsManual && name.trim() in manualNamesInUse
+
+    // 保存后会被丢弃的周次（用户把总周数调小后，原有周次超出 1..totalWeeks 的部分）。
+    // 以前是静默丢：chips 只渲染 1..totalWeeks，看不见也改不回来，这里至少提示一次。
+    val droppedWeeks = remember(sessions, unscheduledWeeks, totalWeeks) {
+        val out = buildSet {
+            sessions.forEach { s -> s.weeks.filterTo(this) { it > totalWeeks } }
+            unscheduledWeeks.filterTo(this) { it > totalWeeks }
+        }
+        out.sorted()
+    }
+
+    val valid = name.isNotBlank() && !nameDuplicated &&
         if (onlyUnscheduled) {
             unscheduledWeeks.isNotEmpty()
         } else {
@@ -142,6 +164,12 @@ fun CourseEditDialog(
                 OutlinedTextField(
                     value = name, onValueChange = { name = it },
                     label = { Text("课程名 *") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    isError = nameDuplicated,
+                    supportingText = if (nameDuplicated) {
+                        { Text("已有同名的手动课程（同名的两门课会互相影响隐藏与删除），请换个名字") }
+                    } else {
+                        null
+                    },
                 )
                 OutlinedTextField(
                     value = teacher, onValueChange = { teacher = it },
@@ -166,10 +194,19 @@ fun CourseEditDialog(
                         val selected = idx == selectedColor
                         Box(
                             modifier = Modifier
-                                // 触摸目标 40dp（原 32dp 低于 48dp/40dp 的可点区域建议下限）
+                                // 视觉 32dp + minimumInteractiveComponentSize 把触摸区扩到 48dp
+                                // （原先 32dp/40dp 都低于 Material 的最小交互尺寸）
                                 .size(40.dp)
+                                .minimumInteractiveComponentSize()
                                 .clip(CircleShape)
-                                .clickable { selectedColor = idx },
+                                // selectable + Role.RadioButton：TalkBack 能读出"已选中"，
+                                // 且未选中色块此前无任何语义（读不出这是颜色选择）
+                                .selectable(
+                                    selected = selected,
+                                    role = Role.RadioButton,
+                                    onClick = { selectedColor = idx },
+                                )
+                                .semantics { contentDescription = "颜色 ${idx + 1}" },
                             contentAlignment = Alignment.Center,
                         ) {
                             Box(
@@ -187,7 +224,8 @@ fun CourseEditDialog(
                                 if (selected) {
                                     Icon(
                                         Icons.Default.Check,
-                                        contentDescription = "已选颜色 $idx",
+                                        // 语义已由外层的 contentDescription 承担，图标不再重复朗读
+                                        contentDescription = null,
                                         tint = fg,
                                         modifier = Modifier.size(16.dp),
                                     )
@@ -219,52 +257,14 @@ fun CourseEditDialog(
                 } else {
                     Text("时段（周几 + 大节 + 周次，可多个）", style = MaterialTheme.typography.titleSmall)
                     sessions.forEachIndexed { index, session ->
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                DropdownField(
-                                    label = "星期",
-                                    options = (1..7).map { it to WEEKDAY_NAMES_FULL[it - 1] },
-                                    selected = session.dayOfWeek,
-                                    onSelect = { session.dayOfWeek = it },
-                                    modifier = Modifier.weight(1f),
-                                )
-                                if (sessions.size > 1) {
-                                    IconButton(onClick = { sessions.removeAt(index) }) {
-                                        Icon(Icons.Default.Close, contentDescription = "删除此时段")
-                                    }
-                                }
-                            }
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy((-4).dp),
-                            ) {
-                                SectionMap.BIG_NAMES.forEachIndexed { big, label ->
-                                    FilterChip(
-                                        selected = big in session.bigSections,
-                                        onClick = {
-                                            session.bigSections =
-                                                if (big in session.bigSections) session.bigSections - big
-                                                else session.bigSections + big
-                                        },
-                                        label = { Text(label) },
-                                    )
-                                }
-                            }
-                            Text(
-                                "周次（可多选）",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            WeekChips(
-                                totalWeeks = totalWeeks,
-                                selected = session.weeks,
-                                onToggle = { w ->
-                                    session.weeks =
-                                        if (w in session.weeks) session.weeks - w else session.weeks + w
-                                },
-                                onSet = { session.weeks = it },
-                            )
-                        }
+                        // 每个时段独立成 composable：session 的 state 读取发生在它自己的作用域里，
+                        // 点一个 chip 只重组那一个时段，而不是整个对话框（原先 ~100 个 chip 全量重组）
+                        SessionEditor(
+                            session = session,
+                            totalWeeks = totalWeeks,
+                            canRemove = sessions.size > 1,
+                            onRemove = { sessions.removeAt(index) },
+                        )
                         if (index != sessions.lastIndex) HorizontalDivider()
                     }
                     OutlinedButton(
@@ -286,12 +286,22 @@ fun CourseEditDialog(
                     }
                 }
 
+                if (droppedWeeks.isNotEmpty()) {
+                    Text(
+                        "有 ${droppedWeeks.size} 个周次超出当前总周数（第 " +
+                            droppedWeeks.joinToString("、") + " 周），保存后会被丢弃；" +
+                            "如需保留请在「学期设置」里调大总周数。",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
                 if (!valid) {
                     Text(
-                        if (onlyUnscheduled) {
-                            "课程名必填；至少选一周"
-                        } else {
-                            "课程名必填；每个时段至少选一个大节和一周"
+                        when {
+                            nameDuplicated -> "课程名与已有手动课程重复"
+                            onlyUnscheduled -> "课程名必填；至少选一周"
+                            else -> "课程名必填；每个时段至少选一个大节和一周"
                         },
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
@@ -324,6 +334,64 @@ fun CourseEditDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+}
+
+/** 星期下拉的选项（提为常量，避免每次重组重新构造）。 */
+private val WEEKDAY_OPTIONS = (1..7).map { it to WEEKDAY_NAMES_FULL[it - 1] }
+
+/** 单个"时段"编辑器：周几 + 大节 + 周次。状态读取全部收在这个作用域内（见调用点注释）。 */
+@Composable
+private fun SessionEditor(
+    session: SessionState,
+    totalWeeks: Int,
+    canRemove: Boolean,
+    onRemove: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DropdownField(
+                label = "星期",
+                options = WEEKDAY_OPTIONS,
+                selected = session.dayOfWeek,
+                onSelect = { session.dayOfWeek = it },
+                modifier = Modifier.weight(1f),
+            )
+            if (canRemove) {
+                IconButton(onClick = onRemove) {
+                    Icon(Icons.Default.Close, contentDescription = "删除此时段")
+                }
+            }
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy((-4).dp),
+        ) {
+            SectionMap.BIG_NAMES.forEachIndexed { big, label ->
+                FilterChip(
+                    selected = big in session.bigSections,
+                    onClick = {
+                        session.bigSections =
+                            if (big in session.bigSections) session.bigSections - big
+                            else session.bigSections + big
+                    },
+                    label = { Text(label) },
+                )
+            }
+        }
+        Text(
+            "周次（可多选）",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        WeekChips(
+            totalWeeks = totalWeeks,
+            selected = session.weeks,
+            onToggle = { w ->
+                session.weeks = if (w in session.weeks) session.weeks - w else session.weeks + w
+            },
+            onSet = { session.weeks = it },
+        )
+    }
 }
 
 /** 周次多选：数字 chip 网格 + 全选/单周/双周/清空快捷按钮。 */

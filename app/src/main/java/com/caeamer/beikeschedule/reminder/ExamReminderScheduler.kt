@@ -7,7 +7,11 @@ import android.content.Context
 import android.content.Intent
 import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -32,6 +36,15 @@ object ExamReminderScheduler {
     const val EXTRA_TITLE_PREFIX = "titlePrefix"
     private const val REQUEST_CODE_BASE = 8_000_000
     private const val SCHEDULE_DAYS = 30
+
+    /**
+     * 重排串行化。考试重排有 4 个并发入口（每日脉冲 IO 线程、开机广播、抓取成功后、
+     * 清除成绩缓存），而 reschedule 内部"读记录 → 取消/设置/写记录"有多个挂起点：
+     * 交错执行会出现"清除缓存那次清空了记录，而抓取那次刚设好的闹钟还在 AlarmManager 里"
+     * —— 用户看不到考试数据却仍收到旧提醒，正是 C9 修复要避免的症状。
+     * 上课/日程调度一直有这把锁，考试此前漏了。
+     */
+    private val rescheduleMutex = Mutex()
 
     fun ensureChannel(context: Context) {
         val channel = NotificationChannel(
@@ -61,30 +74,36 @@ object ExamReminderScheduler {
      *   `!enabled`）的行为不一致。
      */
     suspend fun reschedule(context: Context, cancelDueAlarms: Boolean = false) {
-        val repo = ScheduleRepository(context)
-        val settings = repo.settings
+        rescheduleMutex.withLock {
+            // 切到 IO：下面全是 Room/DataStore 读 + 每条闹钟一次 binder 调用
+            // （PendingIntent 构造 + setExact），窗口内几十条时在主线程会明显掉帧
+            withContext(Dispatchers.IO) {
+                val repo = ScheduleRepository(context)
+                val settings = repo.settings
 
-        // —— 先算 ——
-        val exams = repo.exams.first()
-        val now = LocalDateTime.now()
-        val planned = planExamReminders(exams, now, ZoneId.systemDefault())
-        val recorded = settings.examScheduledAlarms.first()
+                // —— 先算 ——
+                val exams = repo.exams.first()
+                val now = LocalDateTime.now()
+                val planned = planExamReminders(exams, now, ZoneId.systemDefault())
+                val recorded = settings.examScheduledAlarms.first()
 
-        // —— 后换 ——
-        ReminderAlarmScheduler.apply(
-            context = context,
-            action = ACTION_EXAM_REMIND,
-            recorded = recorded,
-            planned = planned.map { p ->
-                ReminderAlarmScheduler.PlannedAlarm(
-                    requestCode = p.requestCode,
-                    triggerAtMillis = p.triggerAtMillis,
-                    pendingIntent = pendingIntent(context, p),
+                // —— 后换 ——
+                ReminderAlarmScheduler.apply(
+                    context = context,
+                    action = ACTION_EXAM_REMIND,
+                    recorded = recorded,
+                    planned = planned.map { p ->
+                        ReminderAlarmScheduler.PlannedAlarm(
+                            requestCode = p.requestCode,
+                            triggerAtMillis = p.triggerAtMillis,
+                            pendingIntent = pendingIntent(context, p),
+                        )
+                    },
+                    cancelDueAlarms = cancelDueAlarms,
+                    persist = { settings.saveExamScheduledAlarms(it) },
                 )
-            },
-            cancelDueAlarms = cancelDueAlarms,
-            persist = { settings.saveExamScheduledAlarms(it) },
-        )
+            }
+        }
     }
 
     /**
