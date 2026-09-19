@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -34,7 +35,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -83,11 +84,12 @@ import com.caeamer.beikeschedule.ui.settings.UpdateState
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
-    val themeMode by viewModel.themeMode.collectAsState()
-    val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsState()
-    val update by viewModel.update.collectAsState()
-    val studentProfile by viewModel.studentProfile.collectAsState()
-    val appVersion by viewModel.appVersion.collectAsState()
+    // withLifecycle：退到后台停止收集
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsStateWithLifecycle()
+    val update by viewModel.update.collectAsStateWithLifecycle()
+    val studentProfile by viewModel.studentProfile.collectAsStateWithLifecycle()
+    val appVersion by viewModel.appVersion.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showUpdateDialog by remember { mutableStateOf(false) }
     var showClearCacheConfirm by remember { mutableStateOf(false) }
@@ -412,20 +414,23 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                         SettingsStore.ThemeMode.LIGHT to "浅色",
                         SettingsStore.ThemeMode.DARK to "深色",
                     ).forEach { (mode, label) ->
+                        val selected = themeMode == mode
                         Row(
-                            Modifier.fillMaxWidth().clickable {
-                                viewModel.setThemeMode(mode)
-                                showThemeDialog = false
-                            },
+                            // selectable + Role.RadioButton：整行一个控件且能读出选中态；
+                            // RadioButton 置 onClick = null 只做展示（否则 TalkBack 报两个目标）
+                            Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = selected,
+                                    role = Role.RadioButton,
+                                    onClick = {
+                                        viewModel.setThemeMode(mode)
+                                        showThemeDialog = false
+                                    },
+                                ),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            RadioButton(
-                                selected = themeMode == mode,
-                                onClick = {
-                                    viewModel.setThemeMode(mode)
-                                    showThemeDialog = false
-                                },
-                            )
+                            RadioButton(selected = selected, onClick = null)
                             Text(label, style = MaterialTheme.typography.bodyLarge)
                         }
                     }
