@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Person
@@ -31,7 +32,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,11 +42,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.pref.AppSession
 import com.caeamer.beikeschedule.data.pref.ScorePrivacy
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.import.ImportScreen
+import com.caeamer.beikeschedule.import.ImportViewModel
 import com.caeamer.beikeschedule.ui.grades.GradesScreen
 import com.caeamer.beikeschedule.ui.profile.ProfileScreen
 import com.caeamer.beikeschedule.ui.schedule.ScheduleScreen
@@ -90,7 +94,9 @@ private fun TabItem(
 ) {
     Column(
         modifier = modifier
-            .clickable(onClick = onClick)
+            // selectable + Role.Tab：TalkBack 能读出"已选中"的 Tab 语义
+            // （裸 clickable 只会读成按钮，三个 Tab 听不出哪个是当前页）
+            .selectable(selected = selected, onClick = onClick, role = Role.Tab)
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -144,12 +150,18 @@ class MainActivity : ComponentActivity() {
                     setRecentsScreenshotEnabled(hidden)
                 }
             }
-            val themeMode by settings.themeMode.collectAsState(initial = SettingsStore.ThemeMode.SYSTEM)
+            // withLifecycle：App 退到后台时停止收集，避免后台仍在驱动主题树重组
+            val themeMode by settings.themeMode.collectAsStateWithLifecycle(
+                initialValue = SettingsStore.ThemeMode.SYSTEM,
+            )
             val darkTheme = when (themeMode) {
                 SettingsStore.ThemeMode.LIGHT -> false
                 SettingsStore.ThemeMode.DARK -> true
                 SettingsStore.ThemeMode.SYSTEM -> isSystemInDarkTheme()
             }
+            // 导入 ViewModel 提到宿主：进入导入前要清掉上一次流程的终态（见 resetIfFinished），
+            // 否则成功导入后同一进程内再也进不去导入页（会被 Done 终态立刻弹出来）
+            val importViewModel: ImportViewModel = viewModel()
             BeikeScheduleTheme(darkTheme = darkTheme) {
                 var tab by rememberSaveable { mutableStateOf("schedule") }
                 var showImport by rememberSaveable { mutableStateOf(false) }
@@ -173,6 +185,7 @@ class MainActivity : ComponentActivity() {
                     ImportScreen(
                         onDone = { showImport = false },
                         onLightBackgroundVisible = { importLightPage = it },
+                        viewModel = importViewModel,
                     )
                 } else {
                     // 整屏渐变仅在「课表页」开启：浅色暖渐变/暗色暗渐变，其他页用主题默认背景
@@ -223,7 +236,12 @@ class MainActivity : ComponentActivity() {
                                 when (tab) {
                                     "jw" -> GradesScreen()
                                     "mine" -> ProfileScreen()
-                                    else -> ScheduleScreen(onImportClick = { showImport = true }, darkTheme = darkTheme)
+                                    else -> ScheduleScreen(
+                                        onImportClick = {
+                                            importViewModel.resetIfFinished()
+                                            showImport = true
+                                        },
+                                    )
                                 }
                             }
                         }

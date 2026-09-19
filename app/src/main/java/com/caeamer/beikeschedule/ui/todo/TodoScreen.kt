@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -38,6 +39,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -56,8 +58,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.TodoEntity
+import com.caeamer.beikeschedule.ui.common.rememberNow
 import com.caeamer.beikeschedule.ui.schedule.DropdownField
 import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.serialization.json.Json
@@ -152,8 +156,10 @@ private fun TodoList(
     onToggleDone: (Long) -> Unit,
     onClick: (TodoEntity) -> Unit,
 ) {
-    val today = LocalDate.now()
-    val now = LocalTime.now()
+    // rememberNow：跨午夜后"今天/明天"分组标签与"已过时间"淡化要跟着变
+    val now = rememberNow()
+    val today = now.toLocalDate()
+    val nowTime = now.toLocalTime()
     LazyColumn(Modifier.fillMaxSize()) {
         state.groups.forEach { (date, dayTodos) ->
             item(key = "todo_header_$date") {
@@ -178,7 +184,7 @@ private fun TodoList(
                 TodoRow(
                     todo = todo,
                     isToday = date == today,
-                    isPast = date == today && runCatching { LocalTime.parse(todo.time) }.getOrNull()?.isBefore(now) == true,
+                    isPast = date == today && runCatching { LocalTime.parse(todo.time) }.getOrNull()?.isBefore(nowTime) == true,
                     done = todo.id in state.doneIds,
                     onToggleDone = { onToggleDone(todo.id) },
                     onClick = { onClick(todo) },
@@ -216,7 +222,8 @@ private fun TodoRow(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 打卡圈
+        // 打卡圈：toggleable + Role.Checkbox 让 TalkBack 只报一个控件并读出勾选态，
+        // 且把触摸区从 26dp 扩到 48dp（26dp 远低于最小交互尺寸）
         Surface(
             shape = CircleShape,
             color = if (done) MaterialTheme.colorScheme.primary else Color.Transparent,
@@ -225,12 +232,18 @@ private fun TodoRow(
             modifier = Modifier
                 .width(26.dp)
                 .height(26.dp)
-                .clickable(onClick = onToggleDone),
+                .minimumInteractiveComponentSize()
+                .toggleable(
+                    value = done,
+                    role = Role.Checkbox,
+                    onValueChange = { onToggleDone() },
+                ),
         ) {
             if (done) {
                 Icon(
                     Icons.Default.Check,
-                    contentDescription = "已完成",
+                    // 勾选态由 toggleable 语义承担，图标不再重复朗读
+                    contentDescription = null,
                     tint = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.padding(4.dp),
                 )
