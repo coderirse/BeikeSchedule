@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    深色模式下的窗口主题：只为了消掉冷启动那一帧白闪 ——
+    Compose 首帧之前显示的是 windowBackground，而 values/themes.xml 是浅色主题。
+    这里只跟随**系统** uiMode（应用内的"深色"偏好由 Compose 主题控制）：
+    "跟随系统"这一默认档因此不再白闪，"系统浅色 + 应用深色"仍会有这一帧。
+-->
+<resources>
+
+    <style name="Theme.BeikeSchedule" parent="android:Theme.Material.NoActionBar" />
+</resources>

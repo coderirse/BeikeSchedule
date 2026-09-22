@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 
 /**
@@ -110,30 +111,45 @@ class SmartClassKeyProvider(
      * 于是 clockOffsetMs 永远是 0 —— 校时功能实际从未生效。
      */
     override suspend fun syncClock() {
-        var server = runCatching { api.serverDateMillis() }.getOrNull()
+        var server = catching { api.serverDateMillis() }
         if (server == null) {
-            server = runCatching {
+            server = catching {
                 api.serverTimeMillis(SignedRequest(csrkKey(), signingTimeMillis()))
-            }.getOrNull()
+            }
         }
         server?.takeIf { it > 0L }?.let { clockOffsetMs = it - System.currentTimeMillis() }
     }
 
     /** 丢弃缓存，下次 [csrkKey] 会重新拉取。 */
     override suspend fun invalidate() {
-        runCatching { context.smartClassStore.edit { it.remove(key) } }
+        catching { context.smartClassStore.edit { it.remove(key) } }
     }
 
-    private suspend fun fetchFromServer(): String? = runCatching {
-        val cfg = api.fetchDomainConfig() ?: return@runCatching null
+    private suspend fun fetchFromServer(): String? = catching {
+        val cfg = api.fetchDomainConfig() ?: return@catching null
         SmartClassCrypto.extractCsrkKey(cfg)
-    }.getOrNull()
+    }
 
-    private suspend fun cachedKey(): String? = runCatching {
+    private suspend fun cachedKey(): String? = catching {
         context.smartClassStore.data.first()[key]?.takeIf { it.isNotBlank() }
-    }.getOrNull()
+    }
 
     private suspend fun saveCached(value: String) {
-        runCatching { context.smartClassStore.edit { it[key] = value } }
+        catching { context.smartClassStore.edit { it[key] = value } }
     }
+
+    /**
+     * [runCatching] 的取消安全版：普通异常吞掉返回 null，但**放行 CancellationException**。
+     * 此前这几处用裸 runCatching，取消信号被当成"取配置/校时失败"延续到下个挂起点；
+     * 最坏情况（取消恰好发生在末次挂起点）协程会"正常完成"并返回内置 key，
+     * 调用方在已取消的作用域里继续走成功分支写状态。
+     */
+    private inline fun <T> catching(block: () -> T): T? =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
 }

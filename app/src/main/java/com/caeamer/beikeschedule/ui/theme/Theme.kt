@@ -36,7 +36,13 @@ private val LightColorScheme = lightColorScheme(
 @Composable
 fun BeikeScheduleTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
+    /**
+     * 动态取色（Android 12+ 跟随壁纸）。
+     *
+     * **刻意保持开启**：强调色跟随系统壁纸是本项目的既有观感，课程色板（CourseColors）
+     * 是固定的 —— 两者并存是有意为之，不是因为忘了关。若要改成固定品牌色，
+     * 把这里改成 false 即可，下面的 Dark/LightColorScheme 就是那条分支。
+     */
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {

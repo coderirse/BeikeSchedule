@@ -122,8 +122,9 @@ class ReminderReceiver : BroadcastReceiver() {
      *
      * 旧实现用 `System.currentTimeMillis() % Int.MAX_VALUE`：同一天同一时间的两门课（真冲突）
      * 闹钟会同批投递，若落在同一毫秒就得到同一个 ID，后一条把前一条覆盖掉 —— 表现为"只收到一条"。
-     * requestCode 由 (课程, 日期) 内容寻址，稳定且唯一，天然不会撞车
-     * （上课提醒在 [0, 8e6)，考试提醒在 8e6 段，两类的通知 ID 也不会互相覆盖）。
+     * requestCode 由 (实体, 日期) 内容寻址，稳定且唯一，天然不会撞车
+     * （分段：上课 [0, 7e6)、日程 [7e6, 8e6)、考试 8e6 段、每日脉冲 9e6，四段互不重叠，
+     *   通知 ID 也因此不会互相覆盖；由 ReminderSchedulingTest 的段隔离用例钉住）。
      */
     private fun notificationId(intent: Intent, fallbackSeed: String): Int {
         val code = intent.getIntExtra(ReminderAlarmScheduler.EXTRA_REQUEST_CODE, Int.MIN_VALUE)

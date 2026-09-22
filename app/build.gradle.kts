@@ -23,8 +23,8 @@ android {
         applicationId = "com.caeamer.beikeschedule"
         minSdk = 34
         targetSdk = 37
-        versionCode = 37
-        versionName = "1.2.2"
+        versionCode = 40
+        versionName = "1.2.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -42,6 +42,9 @@ android {
         release {
             // 开启 R8 压缩/优化（依赖库均自带 consumer keep 规则：Compose/Room/kotlinx.serialization）
             isMinifyEnabled = true
+            // 资源裁剪：与 R8 配套，去掉未被引用的资源（APK 体积的主因仍是
+            // material-icons-extended，这一步只收窄剩余部分）
+            isShrinkResources = true
             signingConfig = signingConfigs.getByName("release")
         }
     }
@@ -84,6 +87,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.material.icons.extended)
+    implementation(libs.androidx.webkit)
     testImplementation(libs.junit)
     // org.json 在 JVM 单测里是 Android SDK 的 stub（方法返回 null/抛异常），
     // 解析器单测必须用真实实现替换它

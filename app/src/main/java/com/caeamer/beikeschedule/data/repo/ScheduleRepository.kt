@@ -116,26 +116,28 @@ class ScheduleRepository(context: Context) {
     suspend fun deleteTodo(id: Long) = todoDao.deleteById(id)
 
     /** 打卡 / 取消打卡：只更新"最近完成日期"，重复任务次日自然复活。 */
-    suspend fun setTodoDone(id: Long, doneDate: String) {
-        val todo = todoDao.getById(id) ?: return
-        todoDao.upsert(todo.copy(lastDoneDate = doneDate))
-    }
+    suspend fun setTodoDone(id: Long, doneDate: String) = todoDao.setDoneDate(id, doneDate)
 
     /** 隐藏/恢复教务导入课程（隐藏 = 不显示但保留；手动/示例删除用 deleteCourse）。 */
     suspend fun setCourseHidden(id: Long, hidden: Boolean) = courseDao.setHidden(id, hidden)
+
+    /** 整组隐藏/恢复：单条 UPDATE，不会出现"同一张卡一半隐藏一半显示"的中间态。 */
+    suspend fun setCoursesHidden(ids: List<Long>, hidden: Boolean) =
+        courseDao.setHiddenForIds(ids, hidden)
 
     /** 按源 + 课程名取全部行（含隐藏），用于多时段课程的整体编辑。 */
     fun observeCourseByName(sources: List<Int>, name: String): Flow<List<CourseEntity>> =
         courseDao.observeByNames(sources, name)
 
     /** 载入示例课表（assets 内置的真实教务样本），source=SOURCE_SAMPLE 便于一键清除。 */
-    suspend fun loadSampleData(courses: List<CourseEntity>, sectionTimes: List<SectionTimeEntity>) {
-        courseDao.deleteBySource(CourseEntity.SOURCE_SAMPLE)
-        courseDao.insertAll(courses.map { it.copy(source = CourseEntity.SOURCE_SAMPLE, id = 0) })
-        if (sectionTimeDao.getAll().isEmpty()) {
-            sectionTimeDao.insertAll(sectionTimes)
+    suspend fun loadSampleData(courses: List<CourseEntity>, sectionTimes: List<SectionTimeEntity>) =
+        db.withTransaction {
+            courseDao.deleteBySource(CourseEntity.SOURCE_SAMPLE)
+            courseDao.insertAll(courses.map { it.copy(source = CourseEntity.SOURCE_SAMPLE, id = 0) })
+            if (sectionTimeDao.getAll().isEmpty()) {
+                sectionTimeDao.insertAll(sectionTimes)
+            }
         }
-    }
 
     suspend fun clearSampleData() = courseDao.deleteBySource(CourseEntity.SOURCE_SAMPLE)
 

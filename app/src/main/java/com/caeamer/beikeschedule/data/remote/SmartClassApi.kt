@@ -202,7 +202,9 @@ class SmartClassApi(private val baseUrl: String = DEFAULT_BASE_URL) : SmartClass
             val text = stream?.bufferedReader()?.use(BufferedReader::readText)
             RawResponse(code, text, dateMillis)
         } catch (e: Exception) {
-            // 异常对象必须带出去：调用方要按类型给"网络不可用/超时"这类可行动提示
+            // 协程取消不是网络失败：吞掉它会破坏结构化取消（调用方以为"请求失败"继续跑失败分支），
+            // 必须原样放行。其余异常带出去：调用方要按类型给"网络不可用/超时"这类可行动提示。
+            if (e is kotlinx.coroutines.CancellationException) throw e
             RawResponse(-1, null, null, e)
         } finally {
             conn?.disconnect()

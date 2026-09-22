@@ -129,4 +129,25 @@ class CreditAggregatorTest {
         val failed = GradeRows.bestPerCourse(rows).filter { it.isFailed }
         assertEquals("补考通过后不应再算未通过", 0, failed.size)
     }
+
+    @Test
+    fun `总计行按 子项(父项) 命名汇总 - 真实数据的素质拓展行`() {
+        // 形态取自真实样本（docs/samples/grcjcx-all.json 的 kclb × xflbyq.json 的要求行）：
+        // 要求表里有总计行 "素质拓展"(要求 10.0) 及其子行 "素质拓展—美育(素质拓展)" 等，
+        // 而成绩单的 kclb 只有 "美育(素质拓展)" 这种"子项(父项)"形态 ——
+        // 修复前总计行恒解析为 0.00，界面上父行比子行之和还小（自相矛盾的假数字）。
+        val sums = mapOf(
+            "美育(素质拓展)" to 2.0,
+            "外语(素质拓展)" to 2.0,
+            "人文素养(素质拓展)" to 3.0,
+            "创新创业课程(素质拓展)" to 2.0,
+            "创新创业(素质拓展)" to 1.0,
+            "科学素养(素质拓展)" to 2.0,
+        )
+        assertEquals("总计行 = 全部 子项(父项) 之和", 12.0, CreditAggregator.completedCreditsFor(sums, "素质拓展"), 0.001)
+        // 子行仍走原来的"行名以本地名结尾"匹配，不受影响
+        assertEquals(2.0, CreditAggregator.completedCreditsFor(sums, "素质拓展—美育(素质拓展)"), 0.001)
+        // 精确匹配仍然最优先（不会被总计行回退掩盖）
+        assertEquals(2.0, CreditAggregator.completedCreditsFor(sums, "美育(素质拓展)"), 0.001)
+    }
 }

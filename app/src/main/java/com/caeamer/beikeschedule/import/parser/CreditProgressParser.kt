@@ -1,6 +1,8 @@
 package com.caeamer.beikeschedule.import.parser
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
@@ -63,21 +65,28 @@ object CreditProgressParser {
 
     fun parseProgress(jsonText: String): GraduationProgress? {
         if (jsonText.isBlank()) return null
-        val o = runCatching {
-            json.parseToJsonElement(jsonText).jsonObject["content"]?.jsonObject
-        }.getOrNull() ?: return null
-        fun num(key: String) = o[key]?.jsonPrimitive?.doubleOrNull ?: 0.0
-        fun int(key: String) = o[key]?.jsonPrimitive?.intOrNull ?: 0
-        val yqxf = o["yqmsxf"]?.jsonObject?.get("YQXF")?.jsonPrimitive?.doubleOrNull ?: return null
-        val yqms = o["yqmsxf"]?.jsonObject?.get("YQMS")?.jsonPrimitive?.intOrNull ?: 0
-        if (yqxf <= 0.0) return null
-        return GraduationProgress(
-            yqxf = yqxf,
-            yqms = yqms,
-            ywcxf = num("ywcxf"),
-            wwcxf = num("wwcxf"),
-            ywcms = int("ywcms"),
-            wwcms = int("wwcms"),
-        )
+        return runCatching {
+            val content = json.parseToJsonElement(jsonText).jsonObject["content"]?.jsonObject
+                ?: return null
+            // `yqmsxf` 在部分专业/学期会缺失或为 null。**绝不能直接 .jsonObject**：
+            // JsonElement.jsonObject 对非对象是抛 IllegalArgumentException，而这个异常
+            // 会逃出 uiState 的 combine 变换（stateIn 上游未捕获即崩进程），且坏 JSON
+            // 已被 saveCreditMeta 落盘 → 重启后每次进教务页都崩，用户连"清除成绩缓存"
+            // 的入口都进不去。字段缺失/形态异常一律当作"没有毕业进度"。
+            val yqmsxf = content["yqmsxf"] as? JsonObject ?: return null
+            fun num(key: String) = (content[key] as? JsonPrimitive)?.doubleOrNull ?: 0.0
+            fun int(key: String) = (content[key] as? JsonPrimitive)?.intOrNull ?: 0
+            val yqxf = (yqmsxf["YQXF"] as? JsonPrimitive)?.doubleOrNull ?: return null
+            val yqms = (yqmsxf["YQMS"] as? JsonPrimitive)?.intOrNull ?: 0
+            if (yqxf <= 0.0) return null
+            GraduationProgress(
+                yqxf = yqxf,
+                yqms = yqms,
+                ywcxf = num("ywcxf"),
+                wwcxf = num("wwcxf"),
+                ywcms = int("ywcms"),
+                wwcms = int("wwcms"),
+            )
+        }.getOrNull()
     }
 }

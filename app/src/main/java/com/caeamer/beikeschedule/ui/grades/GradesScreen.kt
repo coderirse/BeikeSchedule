@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -19,11 +20,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
@@ -53,7 +56,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -71,14 +73,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.ui.freeroom.FreeRoomScreen
 import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.local.GradeEntity
 import com.caeamer.beikeschedule.data.repo.GpaCalculator
 import com.caeamer.beikeschedule.import.GradesBridge
+import com.caeamer.beikeschedule.ui.common.rememberNow
 import com.caeamer.beikeschedule.import.JwWebView
 import com.caeamer.beikeschedule.import.loadAssetScript
 import com.caeamer.beikeschedule.ui.schedule.DropdownField
@@ -107,11 +112,14 @@ private fun Modifier.consumeAllScroll(): Modifier = nestedScroll(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showRefreshConfirm by remember { mutableStateOf(false) }
     var detailGrade by remember { mutableStateOf<GradeEntity?>(null) }
 
     Scaffold(
+        // 外层 Scaffold 不消费系统栏 inset（见 MainActivity），这里也不消费：
+        // 内层默认会把导航栏高度再算一遍，列表末尾多出一段空白（与 ProfileScreen 口径一致）
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             // 紧凑矮顶栏（外层 Scaffold 不消费状态栏 inset，这里自行处理）——透明透出整屏渐变
             Surface(color = Color.Transparent) {
@@ -127,6 +135,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                     // 「重新抓取」是成绩/考试段自己的动作：显示在无课教室/日程段会误导用户
                     // （点了之后抓取并不会开始，因为 WebView 只属于成绩/考试段）
                     if (!state.showWebView &&
+                        state.section != null &&
                         state.section != GradesSection.FREE_ROOM &&
                         state.section != GradesSection.TODO
                     ) {
@@ -170,11 +179,17 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                         fetching = state.fetching,
                         onFetchStart = { viewModel.onFetchStart() },
                         onCancel = { viewModel.cancelFetch() },
+                        onPageStarted = { viewModel.onPageStarted() },
                         onResult = { gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk ->
                             viewModel.onFetchResult(gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk)
                         },
                         onError = { viewModel.onFetchError(it) },
                     )
+
+                    // 分段偏好还没从 DataStore 读到（冷启动最初几帧）：只显示上面的分段行。
+                    // 不能先用"无课教室"占位——那会立刻把 FreeRoomViewModel 创建出来并
+                    // 发出 4 个外网请求，而用户上次停的可能是成绩段，这些请求白做。
+                    state.section == null -> Unit
 
                     // 无课教室的数据来自校外平台，与教务会话无关，独立成页
                     GradesSection.FREE_ROOM == state.section -> FreeRoomScreen()
@@ -182,7 +197,15 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                     // 日程来自本地 Room，与教务会话无关
                     GradesSection.TODO == state.section -> TodoScreen()
 
-                    GradesSection.EXAMS == state.section -> ExamListContent(state.examsSorted)
+                    // 考试分段自带 error/未抓取态：此前不传 error，失败提示在考试段永远看不到，
+                    // 而"从未抓取"也被说成"本学期暂无考试安排"
+                    GradesSection.EXAMS == state.section -> ExamListContent(
+                        exams = state.examsSorted,
+                        error = state.error,
+                        fetchedAt = state.fetchedAt,
+                        onFetch = viewModel::startRefresh,
+                        onDismissError = viewModel::dismissError,
+                    )
 
                     state.grades.isEmpty() && state.exams.isEmpty() ->
                         NoGradesYet(error = state.error, onFetch = viewModel::startRefresh)
@@ -213,7 +236,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
  * 必须在所有内容分支之上渲染（包括抓取 WebView 与空态），否则用户会失去切换能力。
  */
 @Composable
-private fun SectionTabs(section: GradesSection, onSelect: (GradesSection) -> Unit) {
+private fun SectionTabs(section: GradesSection?, onSelect: (GradesSection) -> Unit) {
     SingleChoiceSegmentedButtonRow(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
     ) {
@@ -276,6 +299,7 @@ private fun WebViewFetch(
     fetching: Boolean,
     onFetchStart: () -> Unit,
     onCancel: () -> Unit,
+    onPageStarted: () -> Unit,
     onResult: (String, String, String, String, String, String, String, String) -> Unit,
     onError: (String) -> Unit,
 ) {
@@ -286,7 +310,14 @@ private fun WebViewFetch(
 
     val runScript: () -> Unit = {
         onFetchStart()
-        webView?.evaluateJavascript(loadAssetScript(context, "import/jw_grades.js"), null)
+        // webView 为 null（onMainPage 早于 onCreated 触发）时静默失败会让用户停在登录页
+        // 且没有任何提示——与 ImportScreen 同款守卫
+        val wv = webView
+        if (wv == null) {
+            onError("页面尚未就绪，请稍候再试")
+        } else {
+            wv.evaluateJavascript(loadAssetScript(context, "import/jw_grades.js"), null)
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -321,6 +352,8 @@ private fun WebViewFetch(
             onCreated = { webView = it },
             onPageError = { pageError = it },
             onPageProgress = { pageLoading = it < 100 },
+            // 抓取中页面又导航时桥回调不会再来，复位抓取态避免进度条一直转
+            onPageStarted = onPageStarted,
         )
     }
 }
@@ -339,8 +372,29 @@ private fun GradesContent(
 ) {
     LazyColumn(Modifier.fillMaxSize()) {
         item { ScoreCard(state, onModeChange, onSchoolYearFilter, onSemesterFilter, onToggleCourse, onToggleHideScores) }
-        // 学分修读进度（要求来自教务接口，已完成本地按成绩汇总）
-        if (state.creditRows.isNotEmpty()) {
+        // 抓取失败的提示放在**列表最前**：此前它是最后一个 item，而 54 门课约 3000dp 高，
+        // 不滚到底根本看不到，用户以为刷新成功了
+        if (state.error != null) {
+            item(key = "error_banner") {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        state.error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onErrorDismiss) { Text("知道了") }
+                }
+            }
+        }
+        // 学分修读进度（要求来自教务接口，已完成本地按成绩汇总）。
+        // 门禁同时看 gradProgress：学分类别接口解析退化时，不该把从 bxkqk 正常解析出的
+        // "毕业总进度"也一起藏掉（卡片内部已分别处理两者缺失）。
+        if (state.creditRows.isNotEmpty() || state.gradProgress != null) {
             item(key = "credit_progress") { CreditProgressCard(state) }
         }
         state.grouped.forEach { (semester, grades) ->
@@ -365,7 +419,9 @@ private fun GradesContent(
                     }
                 }
             }
-            items(grades, key = { "${it.kcdm}@${it.xnxq}@${it.bkcx}" }) { grade ->
+            // key 带上行 id：同课同学期两条同 bkcx 行（服务端是否会出现未确认）会撞 key，
+            // 而 LazyColumn 的重复 key 是直接抛异常崩溃（无课教室那边修过同类问题）
+            items(grades, key = { "${it.id}@${it.kcdm}@${it.bkcx}" }) { grade ->
                 GradeRow(
                     grade = grade,
                     hideScores = state.hideScores,
@@ -378,25 +434,7 @@ private fun GradesContent(
                 )
             }
         }
-        item {
-            if (state.error != null) {
-                Row(
-                    Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        state.error!!,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = onErrorDismiss) { Text("知道了") }
-                }
-            } else {
-                Spacer(Modifier.height(24.dp))
-            }
-        }
+        item { Spacer(Modifier.height(24.dp)) }
     }
 }
 
@@ -430,7 +468,8 @@ private fun CreditProgressCard(state: GradesUiState) {
                     }
                 }
                 Icon(
-                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    // 箭头随展开状态变化：恒为右箭头看不出"点过之后会怎样"
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -512,7 +551,15 @@ private fun ProgressRow(label: String, completed: Double, required: Double, tran
 
 /** 考试安排列表：按日期分组 + 倒计时徽章 + 座位号。 */
 @Composable
-private fun ExamListContent(exams: List<ExamEntity>) {
+private fun ExamListContent(
+    exams: List<ExamEntity>,
+    error: String?,
+    fetchedAt: Long,
+    onFetch: () -> Unit,
+    onDismissError: () -> Unit,
+) {
+    // rememberNow：跨午夜后倒计时/"已结束"要跟着变（组合期读 now() 不会刷新）
+    val today = rememberNow().toLocalDate()
     if (exams.isEmpty()) {
         Column(
             Modifier.fillMaxSize().padding(32.dp),
@@ -525,21 +572,60 @@ private fun ExamListContent(exams: List<ExamEntity>) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
-            Text("本学期暂无考试安排", style = MaterialTheme.typography.titleMedium)
+            // "从未抓取"与"抓过但本学期没排考"必须区分：前者应引导去抓取，
+            // 后者才是真的"暂无"。此前一律说"本学期暂无考试安排"，用户会信以为真。
+            val neverFetched = fetchedAt == 0L
+            Text(
+                if (neverFetched) "还没有考试数据" else "本学期暂无考试安排",
+                style = MaterialTheme.typography.titleMedium,
+            )
             Spacer(Modifier.height(6.dp))
             Text(
-                "教务网排考后，点右上角刷新即可获取",
+                if (neverFetched) "登录教务系统即可自动获取考试安排"
+                else "教务网排考后，点右上角刷新即可获取",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
+            if (error != null) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                )
+            }
+            if (neverFetched) {
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onFetch) { Text("去获取") }
+            }
         }
         return
     }
-    val today = LocalDate.now()
     val grouped = exams.groupBy { it.ksrq.ifBlank { "时间待定" } }
         .toSortedMap(compareBy { key -> if (key == "时间待定") LocalDate.MAX else runCatching { LocalDate.parse(key) }.getOrNull() ?: LocalDate.MAX })
 
     LazyColumn(Modifier.fillMaxSize()) {
+        // 抓取失败的提示必须在列表**顶部**：此前错误行只挂在成绩页列表末尾，
+        // 而考试段根本没有 error 入口，用户以为刷新成功了。
+        if (error != null) {
+            item(key = "exam_error") {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onDismissError) { Text("知道了") }
+                }
+            }
+        }
         grouped.forEach { (date, dayExams) ->
             item(key = "exam_header_$date") {
                 val countdown = runCatching { java.time.temporal.ChronoUnit.DAYS.between(today, LocalDate.parse(date)) }.getOrNull()
@@ -585,7 +671,9 @@ private fun countdownDays(exam: ExamEntity, today: LocalDate): Long =
 
 @Composable
 private fun ExamRow(exam: ExamEntity, passed: Boolean) {
-    val alpha = if (passed) 0.45f else 1f
+    // 已结束的考试淡化：用 onSurfaceVariant 而不是整体 alpha 0.45
+    // （alpha 会把正文对比度压到约 2.8:1，低于 WCAG AA 小字号 4.5:1）
+    val textColor = if (passed) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -595,9 +683,9 @@ private fun ExamRow(exam: ExamEntity, passed: Boolean) {
                 exam.kcmc,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
+                color = textColor,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.alpha(alpha),
             )
             val timeText = when {
                 exam.kssj.isNotBlank() && exam.jssj.isNotBlank() -> "${exam.kssj}–${exam.jssj}"
@@ -611,7 +699,6 @@ private fun ExamRow(exam: ExamEntity, passed: Boolean) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.alpha(alpha),
             )
         }
         if (exam.zwh.isNotBlank()) {
@@ -777,8 +864,17 @@ private fun ScoreCard(
             val subtitleText = if (state.scoreMode == ScoreMode.WEIGHTED) {
                 val r = state.weightedResult
                 if (r != null) {
-                    "纳入 ${r.courseCount} 门必修 · 共 ${r.totalCredits} 学分" +
-                        if (state.excludedKcdm.isNotEmpty()) "（已排除 ${state.excludedKcdm.size} 门）" else ""
+                    // 门数与学分数同样属于隐私信息，隐藏成绩时一并掩码
+                    // （此前掩码只加在 GPA 分支，加权分支仍在明文显示"纳入 N 门 · 共 X 学分"）
+                    if (state.hideScores) {
+                        "只看必修课 · 已隐藏明细"
+                    } else {
+                        // "已排除 N 门"用当前筛选下实际可见的排除数，而不是全局 excludedKcdm.size
+                        // （在全部学期排除 4 门后筛到某学期，可能只有 1 门在该筛选内）
+                        val excludedShown = state.weightEligible.count { !it.second }
+                        "纳入 ${r.courseCount} 门必修 · 共 ${r.totalCredits} 学分" +
+                            if (excludedShown > 0) "（已排除 $excludedShown 门）" else ""
+                    }
                 } else "没有可计算的必修课数字成绩"
             } else {
                 // GPA 为本地 4.0 制计算；教务网排名口径是平均学分绩，仍展示作参考。
@@ -831,7 +927,7 @@ private fun ScoreCard(
                         modifier = Modifier.weight(1f),
                     )
                     Icon(
-                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        if (showCourseSelector) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
                     )
@@ -847,20 +943,25 @@ private fun ScoreCard(
                     ) {
                         state.weightEligible.forEach { (grade, included) ->
                             Row(
-                                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                // 整行可点（与行式交互一致），Checkbox 只作展示：
+                                // toggleable + Role.Checkbox 让 TalkBack 只报一个控件、且能读出勾选态
+                                Modifier.fillMaxWidth()
+                                    .toggleable(
+                                        value = included,
+                                        role = Role.Checkbox,
+                                        onValueChange = { onToggleCourse(grade.kcdm) },
+                                    )
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Checkbox(
-                                    checked = included,
-                                    onCheckedChange = { onToggleCourse(grade.kcdm) },
-                                )
+                                Checkbox(checked = included, onCheckedChange = null)
                                 Column(Modifier.weight(1f)) {
                                     Text(grade.kcmc, style = MaterialTheme.typography.bodySmall)
                                     Text(
-                                        // 分数必须与主数值/成绩行一样掩码：此处此前无条件打印原始分，
-                                        // 是隐私开关最明显的一处绕过（勾选列表展开即泄露全部必修课分数）。
-                                        "${grade.xnxqmc} · ${grade.xf}学分 · " +
-                                            if (state.hideScores) "***" else "${grade.zzcj}分",
+                                        // 分数与学分必须与主数值/成绩行一样掩码：
+                                        // GradeRow 与详情弹层都把学分当隐私，此处此前只掩了分数
+                                        if (state.hideScores) "${grade.xnxqmc} · ***"
+                                        else "${grade.xnxqmc} · ${grade.xf}学分 · ${grade.zzcj}分",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
                                     )

@@ -11,9 +11,11 @@ import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.model.ReminderCourses
 import com.caeamer.beikeschedule.model.WeekResolver
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -39,10 +41,15 @@ object ClassReminderScheduler {
     private const val SCHEDULE_DAYS = 8
 
     /**
-     * 上课提醒的 requestCode 空间上界，与考试提醒（8_000_000 段）和每日脉冲（9_000_000）隔离。
-     * 顺带让"通知 ID = requestCode"在两类提醒之间也不会撞车。
+     * 上课提醒的 requestCode 空间 [0, 7M)，与日程提醒（[7M,8M)）、考试提醒（8M 段）
+     * 和每日脉冲（9M）完全隔离。
+     * 顺带让"通知 ID = requestCode"在三类提醒之间也不会撞车。
+     *
+     * 历史注：曾用 [0,8M)，与日程段 [7M,8M) 有 1/8 重叠——闹钟因 action 不同互不干扰，
+     * 但通知 ID（=裸 requestCode）跨类同码时会互相覆盖。改小后旧码经下次重排自愈
+     * （记录里未来旧码不在新计划内会被取消，再按新码重设）。
      */
-    private const val REQUEST_CODE_RANGE = 8_000_000
+    private const val REQUEST_CODE_RANGE = 7_000_000
 
     /**
      * 重排串行化：reschedule 会被 App 打开、每日脉冲、开机广播等多处并发触发。
@@ -76,42 +83,46 @@ object ClassReminderScheduler {
 
     /** 课程/学期/提醒设置变化时调用：按最新数据全量重排。 */
     suspend fun reschedule(context: Context) = rescheduleMutex.withLock {
-        val repo = ScheduleRepository(context)
-        val settings = repo.settings
+        // 切到 IO：下面全是 Room/DataStore 读 + 每条闹钟一次 binder 调用
+        // （PendingIntent 构造 + setExact），窗口内几十条时在主线程会明显掉帧
+        withContext(Dispatchers.IO) {
+            val repo = ScheduleRepository(context)
+            val settings = repo.settings
 
-        // —— 先算：所有读取与计算都在取消任何闹钟之前完成 ——
-        val now = LocalDateTime.now()
-        val zone = ZoneId.systemDefault()
-        val enabled = settings.reminderEnabled.first()
-        val planned = if (enabled) {
-            val minutes = settings.reminderMinutes.first()
-            val semester = settings.semester.first()
-            val courses = reminderCourses(repo.courses.first())
-            val startTimes = repo.sectionTimes.first().associate { it.section to it.startTime }
-            planClassReminders(courses, startTimes, semester, minutes, now, zone)
-        } else {
-            emptyList()
+            // —— 先算：所有读取与计算都在取消任何闹钟之前完成 ——
+            val now = LocalDateTime.now()
+            val zone = ZoneId.systemDefault()
+            val enabled = settings.reminderEnabled.first()
+            val planned = if (enabled) {
+                val minutes = settings.reminderMinutes.first()
+                val semester = settings.semester.first()
+                val courses = reminderCourses(repo.courses.first())
+                val startTimes = repo.sectionTimes.first().associate { it.section to it.startTime }
+                planClassReminders(courses, startTimes, semester, minutes, now, zone)
+            } else {
+                emptyList()
+            }
+            val recorded = settings.reminderScheduledAlarms.first()
+
+            // —— 后换：不可中断地取消 + 设置 + 写回 ——
+            ReminderAlarmScheduler.apply(
+                context = context,
+                action = ACTION_REMIND,
+                recorded = recorded,
+                planned = planned.map { p ->
+                    ReminderAlarmScheduler.PlannedAlarm(
+                        requestCode = p.requestCode,
+                        triggerAtMillis = p.triggerAtMillis,
+                        pendingIntent = remindPendingIntent(context, p),
+                    )
+                },
+                // 用户主动关掉提醒时连"已到点还没投递"的也一并取消 —— 那种情况下再弹一次才是 bug
+                cancelDueAlarms = !enabled,
+                persist = { settings.saveReminderScheduledAlarms(it) },
+            )
+
+            scheduleDailyPulse(context)
         }
-        val recorded = settings.reminderScheduledAlarms.first()
-
-        // —— 后换：不可中断地取消 + 设置 + 写回 ——
-        ReminderAlarmScheduler.apply(
-            context = context,
-            action = ACTION_REMIND,
-            recorded = recorded,
-            planned = planned.map { p ->
-                ReminderAlarmScheduler.PlannedAlarm(
-                    requestCode = p.requestCode,
-                    triggerAtMillis = p.triggerAtMillis,
-                    pendingIntent = remindPendingIntent(context, p),
-                )
-            },
-            // 用户主动关掉提醒时连"已到点还没投递"的也一并取消 —— 那种情况下再弹一次才是 bug
-            cancelDueAlarms = !enabled,
-            persist = { settings.saveReminderScheduledAlarms(it) },
-        )
-
-        scheduleDailyPulse(context)
     }
 
     /**
@@ -166,7 +177,10 @@ object ClassReminderScheduler {
     /**
      * 提醒的 requestCode = hash(课程 id + 日期)，落在 [0, REQUEST_CODE_RANGE)。
      * 内容寻址所以跨轮次稳定；同一 (课程,日期) 永远得到同一个码，删课/改时间也能精确取消。
-     * 32 位 hash 理论上可碰撞（碰撞只会覆盖一个闹钟），窗口内 <100 个闹钟概率约 1e-6，可接受。
+     *
+     * 碰撞概率：n 个码落在 m 个槽的生日近似 p ≈ n(n-1)/2m。本段 m = 7e6、窗口内 n ≈ 100，
+     * p ≈ 7e-4（不是 1e-6 量级）。碰撞后果是"后设置的闹钟覆盖前一个"，表现为少弹一条且无日志，
+     * 记录里会留下两条同码不同时刻。实测 40 门课 × 8 天的码无碰撞，故维持现状。
      */
     internal fun requestCodeOf(course: CourseEntity, date: LocalDate): Int =
         Math.floorMod("${course.id}@$date".hashCode(), REQUEST_CODE_RANGE)

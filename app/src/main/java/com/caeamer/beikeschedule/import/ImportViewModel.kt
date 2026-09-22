@@ -8,6 +8,7 @@ import com.caeamer.beikeschedule.data.local.SectionTimeEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.JwParser
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -28,6 +29,19 @@ sealed interface ImportUiState {
      * （第二次会清空并重插第一次的行，与学期配置写入交错）。
      */
     data object Committing : ImportUiState
+
+    /**
+     * 写库与学期配置都已落地，等待屏幕退出本流程。
+     *
+     * 必须是**独立终态**：A 组修复后的实现在成功后只回调 onDone()、状态仍停在 [Committing]，
+     * 而 ViewModel 是 Activity 级的（离开组合不销毁）——同一进程内第二次进入导入页时
+     * 读到 Committing，返回箭头禁用、BackHandler 吞返回、页面无 Tab，
+     * 表现为**除了杀进程没有任何出口**（100% 复现）。
+     *
+     * 屏幕侧由 `LaunchedEffect(state)` 观察本状态后调 onDone()，这样即使写库期间
+     * Activity 被重建（旧 onDone 回调写的是已被丢弃的 state），新组合也能照常退出。
+     */
+    data object Done : ImportUiState
 
     /** 抓取成功，等待用户确认写入。 */
     data class Preview(
@@ -114,18 +128,42 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 页面开始加载时调用：把卡住的 [ImportUiState.Fetching] 复位。
+     *
+     * Fetching 只由桥回调清除，而脚本可能因重入标志直接 return、或在桥不可用的页面上
+     * 静默失败——没有这一步时界面会永久停在"抓取中…"，按钮禁用，用户只剩返回键。
+     */
+    fun onPageStarted() {
+        if (_state.value is ImportUiState.Fetching) {
+            _state.value = ImportUiState.Browsing
+        }
+    }
+
+    /**
+     * 进入导入页前由宿主调用：清掉上一次流程留下的 [ImportUiState.Done]。
+     *
+     * 没有这一步，成功导入后同一进程内再进导入页会立刻被终态导航弹出去（进不去）。
+     * 只清终态：Committing 表示有写库在途，绝不能重置。
+     */
+    fun resetIfFinished() {
+        if (_state.value is ImportUiState.Done) {
+            _state.value = ImportUiState.Browsing
+        }
+    }
+
+    /**
      * 确认导入：覆盖式写入课程与节次时间（含清除示例数据，单事务），再写学期配置。
      *
      * 三处之前的缺陷：
      * 1. 课程写入与 clearSampleData 分属两个事务，中途被杀会留下"新课已写入、示例仍在"；
      * 2. 整个流程没有 try/catch，任何异常（磁盘满、Room/DataStore IO 失败）都会逃出
-     *    viewModelScope.launch 直接崩进程，且 onDone() 不执行；
-     * 3. 状态在 onDone() 之前一直是 Preview，按钮不禁用 → 双击可并发跑两次导入。
+     *    viewModelScope.launch 直接崩进程，且流程不结束；
+     * 3. 状态在写库期间仍是 Preview，按钮不禁用 → 双击可并发跑两次导入。
      *
      * 现在：先置 [ImportUiState.Committing] 让按钮禁用并挡住重入，课程与学期配置各自
-     * 尽力写入，失败落到 Error 而不是崩溃。
+     * 尽力写入，失败落到 Error、成功落到 [ImportUiState.Done]，由屏幕侧统一退出流程。
      */
-    fun confirmImport(onDone: () -> Unit) {
+    fun confirmImport() {
         if (_state.value !is ImportUiState.Preview) return
         val preview = _state.value as ImportUiState.Preview
         _state.value = ImportUiState.Committing
@@ -144,7 +182,9 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
                         weekMondays = preview.weekMondays,
                     )
                 )
-                onDone()
+                _state.value = ImportUiState.Done
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 // 课程可能已写入、学期配置未写入：明确告诉用户发生了什么，而不是静默
                 _state.value = ImportUiState.Error(

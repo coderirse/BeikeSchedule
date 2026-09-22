@@ -31,12 +31,19 @@ object CreditAggregator {
             .groupBy { it.kclb }
             .mapValues { (_, rows) -> rows.sumOf { it.xf } }
 
-    /** 指定学分类别行的已完成学分：精确匹配优先，其次最长后缀匹配（无匹配返回 0）。 */
+    /** 指定学分类别行的已完成学分：精确匹配 → 最长后缀匹配 → 总计行回退（都不中返回 0）。 */
     fun completedCreditsFor(localSums: Map<String, Double>, rowName: String): Double {
         localSums[rowName]?.let { return it }
         val best = localSums.keys
             .filter { rowName.endsWith(it) }
-            .maxByOrNull { it.length } ?: return 0.0
-        return localSums.getValue(best)
+            .maxByOrNull { it.length }
+        if (best != null) return localSums.getValue(best)
+        // 总计行回退：教务的类别树里，"素质拓展"这类**总计行**在成绩单里没有同名 kclb，
+        // 只有 "美育(素质拓展)" 这种"子项(父项)"形态。只做后缀匹配时总计行恒为 0.00，
+        // 界面上就会出现父行 `0.00/10.00` 而紧邻的子行各自 `2.00/2.00` 的自相矛盾数字。
+        // 判据收紧到"本地类别名以 (行名) 结尾"，不做任何前缀/包含匹配，避免误吸无关类别。
+        val children = localSums.keys.filter { it.endsWith("($rowName)") }
+        if (children.isNotEmpty()) return children.sumOf { localSums.getValue(it) }
+        return 0.0
     }
 }

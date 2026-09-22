@@ -9,9 +9,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
+import androidx.webkit.WebViewCompat
 
 private const val JW_HOME = "https://byyt.ustb.edu.cn"
 private const val MAIN_PAGE_MARK = "/authentication/main"
+
+/**
+ * JS 桥允许注入的 origin 规则。
+ *
+ * 收口目标是"只有教务系统自己的页面能调用桥"：
+ * - 教务站点本体（脚本实际注入的页面）；
+ * - ustb.edu.cn 其它子域（统一身份认证可能在别的子域，登录页上手动抓取失败时
+ *   仍需要把错误经桥报回界面，否则用户看到的是"点了没反应"）。
+ *
+ * 第三方 iframe（非 ustb 域）拿不到桥对象；回调里再要求主框架，双保险。
+ */
+private val BRIDGE_ORIGINS = setOf("https://byyt.ustb.edu.cn", "https://*.ustb.edu.cn")
 
 /**
  * 教务页面渲染修正脚本，解决 WebView 白页：
@@ -50,8 +63,11 @@ private const val PAGE_FIX_JS = """
 /**
  * 教务系统 WebView（导入页/成绩页共用）：
  * 登录统一认证 → 到达主页后回调 onMainPage（由调用方注入抓取脚本）。
- * @param bridge addJavascriptInterface 的桥对象（JwImportBridge/GradesBridge）
- * @param bridgeName 桥在 JS 侧的名字（"BeikeImport"/"BeikeGrades"）
+ *
+ * JS 桥（[bridge]/[bridgeName]）走 `WebViewCompat.addWebMessageListener`：
+ * 对象只注入给下面的 [BRIDGE_ORIGINS] 列出的 origin，且回调里再校验"主框架 + 教务域名"。
+ * 此前用 `addJavascriptInterface`，它对 WebView 里**每个 frame** 生效，
+ * 白名单页面内嵌的第三方 iframe 能直接调用桥伪造数据（导航白名单管不到 iframe 与重定向）。
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -92,10 +108,22 @@ fun JwWebView(
                 // 第三方 cookie 不必要：jw_import.js / jw_grades.js 的所有 fetch 都是
                 // credentials: 'same-origin'，关掉它只减少暴露面。
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
-                addJavascriptInterface(bridge, bridgeName)
+                // 桥：平台按 origin 限定可见范围（见类注释），回调里再校验主框架 + 教务域名。
+                // 两条 origin 规则覆盖"教务站点本体"与"统一认证可能用到的其它 ustb 子域"，
+                // 保证登录页上手动抓取失败时仍能把错误经桥报回界面（而不是静默无反应）。
+                WebViewCompat.addWebMessageListener(
+                    this,
+                    bridgeName,
+                    BRIDGE_ORIGINS,
+                ) { _, message, sourceOrigin, isMainFrame, _ ->
+                    if (!isMainFrame) return@addWebMessageListener
+                    val host = sourceOrigin.host?.lowercase() ?: return@addWebMessageListener
+                    if (!isJwHost(host)) return@addWebMessageListener
+                    message.data?.let(bridge::dispatch)
+                }
                 webViewClient = object : WebViewClient() {
-                    // 域名白名单：addJavascriptInterface 的桥对 WebView 里所有页面生效，
-                    // 站外链接一律转交系统浏览器，避免第三方页面调用桥伪造抓取数据。
+                    // 域名白名单：站外链接一律转交系统浏览器，避免把教务会话带进任意站点。
+                    // （桥的可见范围另有平台级 origin 限定，见 BRIDGE_ORIGINS。）
                     //
                     // **必须失败关闭**：此前 host 为 null 时 `?: return false` 会放行
                     // file:/content:/data:/blob: 这类无 host 的 URL 进入 WebView；
@@ -176,7 +204,7 @@ fun JwWebView(
         // WebView 与其 JS 定时器（PAGE_FIX_JS 里的 MutationObserver / setTimeout）会一起泄漏。
         // 导入页的"预览 → 重新抓取"会反复创建新实例，成绩页每次抓取完成后也会销毁一个。
         onRelease = { view ->
-            runCatching { view.removeJavascriptInterface(bridgeName) }
+            runCatching { WebViewCompat.removeWebMessageListener(view, bridgeName) }
             runCatching { view.stopLoading() }
             runCatching { view.loadUrl("about:blank") }
             runCatching { view.destroy() }

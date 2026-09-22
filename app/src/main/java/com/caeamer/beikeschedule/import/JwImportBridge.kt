@@ -1,8 +1,6 @@
 package com.caeamer.beikeschedule.import
 
-import android.webkit.JavascriptInterface
-
-/** WebView 注入脚本与 Kotlin 的桥接。方法签名与 assets/import/jw_import.js 对应。 */
+/** 导入脚本（assets/import/jw_import.js）与 Kotlin 的桥接。参数顺序与脚本的 send('onResult', [...]) 对应。 */
 class JwImportBridge(
     private val onSuccess: (
         semester: String,
@@ -12,17 +10,24 @@ class JwImportBridge(
         weekDates: String,
         calendar: String,
     ) -> Unit,
-    override val onFailure: (String) -> Unit,
-) : JwBridge() {
-    @JavascriptInterface
-    fun onResult(
-        semester: String,
-        published: String,
-        courses: String,
-        sections: String,
-        weekDates: String,
-        calendar: String,
-    ) {
-        onSuccess(semester, published, courses, sections, weekDates, calendar)
+    private val onFailure: (String) -> Unit,
+) : JwBridge {
+
+    override fun onError(message: String) = onFailure(message)
+
+    override fun onMessage(fn: String, args: List<String>) {
+        if (fn != FN_ON_RESULT) return
+        onSuccess(
+            args.getOrElse(0) { "" },
+            args.getOrElse(1) { "" },
+            args.getOrElse(2) { "" },
+            args.getOrElse(3) { "" },
+            args.getOrElse(4) { "" },
+            args.getOrElse(5) { "" },
+        )
+    }
+
+    private companion object {
+        const val FN_ON_RESULT = "onResult"
     }
 }

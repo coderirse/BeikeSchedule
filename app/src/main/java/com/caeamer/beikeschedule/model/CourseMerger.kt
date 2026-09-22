@@ -10,6 +10,9 @@ import com.caeamer.beikeschedule.data.local.CourseEntity
  */
 object CourseMerger {
 
+    /** 【校区】前缀（教务地点形如 "【校本部】机械楼720"）。提为常量，避免每次调用重新编译。 */
+    private val CAMPUS_PREFIX = Regex("【[^】]*】")
+
     fun mergeSameSlot(courses: List<CourseEntity>): List<CourseEntity> =
         courses.groupBy { SlotKey(it.name, it.dayOfWeek, it.startSection, it.endSection) }
             .map { (_, rows) -> merge(rows) }
@@ -42,8 +45,7 @@ object CourseMerger {
      * 通知文案与地点"可用性"判定共用同一套剥离规则：若只在通知里剥前缀，
      * "【校本部】-" 会变成裸 "-" 显示给用户。
      */
-    fun stripCampusPrefix(location: String): String =
-        location.replace(Regex("【[^】]*】"), "").trim()
+    fun stripCampusPrefix(location: String): String = location.replace(CAMPUS_PREFIX, "").trim()
 
     /** 周次位图按位或（长度不齐时取最长）。 */
     internal fun orBitmaps(bitmaps: List<String>): String {

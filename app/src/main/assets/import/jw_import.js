@@ -12,6 +12,18 @@
     if (window.__beikeRunning) return;
     window.__beikeRunning = true;
 
+    /**
+     * 回传桥消息。桥由平台按 origin 限定（WebViewCompat.addWebMessageListener，
+     * 只注入给 ustb.edu.cn 的页面），统一用 JSON 信封 {fn, args} 走 postMessage。
+     * 桥不可用（非教务页面）时静默：手动抓取在登录页触发属于用户误操作，
+     * 界面侧靠"页面加载即复位抓取态"给出重试入口。
+     */
+    function send(fn, args) {
+        try {
+            window.BeikeImport.postMessage(JSON.stringify({ fn: fn, args: args }));
+        } catch (e) { /* 桥不可用 */ }
+    }
+
     function post(url, params, headers) {
         return fetch(url, {
             method: 'POST',
@@ -19,15 +31,38 @@
                 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
             }, headers || {}),
             body: new URLSearchParams(params).toString(),
-            credentials: 'same-origin'
-        }).then(function (r) { return r.text(); });
+            credentials: 'same-origin',
+            // 超时兜底：连接挂起时 fetch 可以永不 resolve，界面会一直停在"抓取中…"。
+            // 单次请求 20 秒足够（兜底路径最多 25 次顺序请求，各算各的）。
+            signal: AbortSignal.timeout(20000)
+        }).then(function (r) {
+            // 会话过期被 302 到登录页、接口 5xx 时 r.text() 会拿到 HTML，
+            // 下游 JSON.parse 报英文错直接铺到中文界面。显式抛 HTTP 状态更可读。
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        });
+    }
+
+    /**
+     * JSON.parse 的统一入口：会话过期时教务会 302 到登录页并返回 200 的 HTML，
+     * 直接 JSON.parse 会把英文语法错误（Unexpected token '<'）铺到中文界面。
+     */
+    function parseJson(text, hint) {
+        if (typeof text !== 'string' || text.trim().charAt(0) === '<') {
+            throw new Error('会话已过期，请重新登录教务系统后重试');
+        }
+        try {
+            return JSON.parse(text);
+        } catch (e) {
+            throw new Error((hint || '教务响应格式异常') + '，请重新登录后重试');
+        }
     }
 
     /** 校历接口 → 统一周历结构；失败返回 null（由调用方兜底）。 */
     function calendarFromXiaoli(xn, xq) {
         return post('/Xiaoli/queryMonthList', { xn: xn, xq: xq }, { RoleCode: '01' })
             .then(function (text) {
-                var data = JSON.parse(text);
+                var data = parseJson(text, '校历解析失败');
                 var semKey = xn + xq; // xlList 里 XNXQ 形如 "2026-20271"
                 var weeks = (data.xlList || [])
                     .filter(function (e) { return e.XNXQ === semKey && e.MON && e.ZC >= 1 && e.ZC <= 90; })
@@ -46,7 +81,7 @@
             return chain.then(function () {
                 return post('/component/queryRlZcSj', { xn: xn, xq: xq, djz: String(zc) })
                     .then(function (text) {
-                        var content = (JSON.parse(text) || {}).content || [];
+                        var content = (parseJson(text, '校历周次解析失败') || {}).content || [];
                         var mon = content.filter(function (e) { return e.xqj === '1'; })[0];
                         if (mon && mon.rq) weeks.push({ zc: zc, monday: mon.rq });
                     });
@@ -58,7 +93,7 @@
 
     post('/component/querydangqianxnxq', {})
         .then(function (semText) {
-            var sem = JSON.parse(semText);
+            var sem = parseJson(semText, '当前学期解析失败');
             if (!sem || !sem.XN) throw new Error('未获取到当前学期，请确认已登录');
             return Promise.all([
                 post('/xszykb/querykbsffb', { xn: sem.XN, xq: sem.XQ }),
@@ -73,7 +108,7 @@
                     // 此前按裸数组解析 → `.map is not a function` 抛异常 → 被下面的 catch
                     // 静默吞掉 → zcList 恒为空。后果是兜底路径退化成硬编码的 25 周顺序请求，
                     // 且 totalWeeks 只能取校历长度。两种形态都兼容。
-                    var raw = JSON.parse(rs[4]);
+                    var raw = parseJson(rs[4], '周次列表解析失败');
                     var arr = Array.isArray(raw) ? raw : ((raw && raw.content) || []);
                     zcList = arr
                         .map(function (e) { return e && e.ZC; })
@@ -95,12 +130,12 @@
                     // 成功路径也必须复位重入标志：否则"手动抓取"按钮在首次成功后
                     // 变成静默无操作的空按钮（jw_grades.js 一直在成功路径复位，此处是漏改）。
                     window.__beikeRunning = false;
-                    window.BeikeImport.onResult(semText, rs[0], rs[1], rs[2], rs[3], calendar);
+                    send('onResult', [semText, rs[0], rs[1], rs[2], rs[3], calendar]);
                 });
             });
         })
         .catch(function (e) {
             window.__beikeRunning = false;
-            window.BeikeImport.onError(String(e));
+            send('onError', [String(e)]);
         });
 })();

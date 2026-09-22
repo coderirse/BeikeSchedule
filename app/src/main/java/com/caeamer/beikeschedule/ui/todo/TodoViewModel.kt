@@ -6,9 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.caeamer.beikeschedule.data.local.TodoEntity
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.model.TodoPlanner
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -41,15 +41,6 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TodoUiState())
 
-    /** 最新事项列表缓存，供 toggleDone 同步读取当前行。 */
-    private val todosCache = MutableStateFlow<List<TodoEntity>>(emptyList())
-
-    init {
-        viewModelScope.launch {
-            repo.todos.collect { todosCache.value = it }
-        }
-    }
-
     /** 新增或更新（id=0 为新增）。 */
     fun save(todo: TodoEntity) {
         viewModelScope.launch { repo.upsertTodo(todo) }
@@ -59,11 +50,17 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repo.deleteTodo(id) }
     }
 
-    /** 切换打卡：今天已打卡则清除（取消完成），否则记为今天完成。 */
+    /**
+     * 切换打卡：今天已打卡则清除（取消完成），否则记为今天完成。
+     *
+     * 每次都从 Room 流取**最新**值再翻转：此前读过一份异步维护的缓存，
+     * 快速双击会落在同一次回写落地前，两次点击读到同一份旧行，
+     * "打卡→立刻取消"静默变成两次打卡。
+     */
     fun toggleDone(id: Long) {
         viewModelScope.launch {
             val today = LocalDate.now().toString()
-            val todo = todosCache.value.firstOrNull { it.id == id } ?: return@launch
+            val todo = repo.todos.first().firstOrNull { it.id == id } ?: return@launch
             repo.setTodoDone(id, if (todo.isDoneToday(today)) "" else today)
         }
     }

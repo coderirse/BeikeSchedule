@@ -52,7 +52,8 @@ object TodoPlanner {
      * 未来 [days] 天内要排的提醒（触发时刻 = 计划时刻 − 提前分钟数）。
      *
      * 只排触发时刻仍在 [now] 之后的：过去的不再补排，避免一打开 App 就补一堆过期提醒。
-     * 返回按触发时刻升序，供调度器直接落闹钟。
+     * **今天已打卡的不排**：打卡的意图就是"这件事不用再提醒了"；未来日不受打卡影响
+     * （重复任务次日自然复活）。返回按触发时刻升序，供调度器直接落闹钟。
      */
     fun upcomingReminders(
         todo: TodoEntity,
@@ -62,6 +63,7 @@ object TodoPlanner {
     ): List<LocalDateTime> {
         val minutes = todo.remindMinutes.coerceAtLeast(0).toLong()
         return upcomingOccurrences(todo, today, days)
+            .filter { (date, _) -> !(date == today && todo.isDoneToday(today.toString())) }
             .map { (date, time) -> LocalDateTime.of(date, time).minusMinutes(minutes) }
             .filter { it.isAfter(now) }
             .sorted()

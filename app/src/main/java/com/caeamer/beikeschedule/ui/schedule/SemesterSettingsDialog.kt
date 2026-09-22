@@ -96,12 +96,25 @@ fun SemesterSettingsDialog(
                         else "开学日期：$firstMonday",
                     )
                 }
+                // 下拉必须包含当前值：导入会写入校历自己的总周数，若不在枚举里，
+                // ExposedDropdownMenuBox 会渲染成空白（看起来像"没选"）
                 DropdownField(
                     label = "总周数",
-                    options = listOf(16, 18, 20, 22, 25).map { it to "${it}周" },
+                    options = (listOf(16, 18, 20, 22, 25) + totalWeeks)
+                        .distinct().sorted().map { it to "${it}周" },
                     selected = totalWeeks, onSelect = { totalWeeks = it },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                // 总周数不能小于官方校历的长度：否则 currentWeek 可能超过 totalWeeks，
+                // 周次菜单里的"（本周）"永远不出现，且超出部分的课会被静默截断
+                val minWeeks = current.weekMondays.size
+                if (minWeeks > 0 && totalWeeks < minWeeks) {
+                    Text(
+                        "总周数不能小于官方教学周日历的 $minWeeks 周，保存时会被自动校正为 $minWeeks",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 Text(
                     if (current.weekMondays.isNotEmpty()) {
                         "教学周日历：来自教务系统（${current.weekMondays.size} 周，含放假跳周），" +
@@ -252,7 +265,15 @@ fun SemesterSettingsDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                onSave(current.copy(name = name.trim(), firstMonday = firstMonday, totalWeeks = totalWeeks))
+                // 总周数不得小于官方校历长度（见上方提示）：静默校正比让"（本周）"消失好
+                val safeWeeks = totalWeeks.coerceAtLeast(current.weekMondays.size.coerceAtLeast(1))
+                onSave(
+                    current.copy(
+                        name = name.trim(),
+                        firstMonday = firstMonday,
+                        totalWeeks = safeWeeks,
+                    ),
+                )
                 onDismiss()
             }) { Text("保存") }
         },

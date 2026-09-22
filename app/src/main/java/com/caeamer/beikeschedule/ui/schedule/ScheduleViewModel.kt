@@ -11,6 +11,7 @@ import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.JwParser
 import com.caeamer.beikeschedule.model.WeekResolver
 import com.caeamer.beikeschedule.reminder.ClassReminderScheduler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -81,12 +82,24 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val selectedWeek = MutableStateFlow<Int?>(null)
 
+    /**
+     * 前台会话序号（镜像 [AppSession.epoch]）。
+     *
+     * 必须作为 uiState 的一个输入：`selectedWeek` 是 MutableStateFlow，**等值写入不发射**，
+     * 而"重新进入"时它本来就是 null（上次重进后没有手动选过周）——只写 null 不会让
+     * combine 重跑，`locateWeek(today)` 于是仍用上一次组合时的日期求值，
+     * 跨天/跨周重进会停在旧周（顶栏、日期行、网格全是旧的）。
+     * 会话序号变化必然带来一次重算，这才让"重进定位当前周"真正成立。
+     */
+    private val sessionEpoch = MutableStateFlow(AppSession.epoch.value)
+
     val uiState: StateFlow<ScheduleUiState> = combine(
         repo.courses,
         repo.sectionTimes,
         repo.settings.semester,
         selectedWeek,
-    ) { courses, sections, semester, week ->
+        sessionEpoch,
+    ) { courses, sections, semester, week, _ ->
         val location = WeekResolver.locateWeek(semester)
         // 未选过时（首次启动 / 重新进入 App）按 WeekResolver.defaultWeek 落位，否则用用户的选择
         val resolved = week ?: WeekResolver.defaultWeek(location, semester.totalWeeks)
@@ -152,22 +165,34 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         //      （见 ScheduleScreen 里的 drop(1)），于是每次启动都被初始页 0
         //      抢先写成"第 1 周"，且写完后非空，定位永远不再发生。
         viewModelScope.launch {
-            AppSession.epoch.collect { selectedWeek.value = null }
+            AppSession.epoch.collect { epoch ->
+                selectedWeek.value = null
+                // 等值写入不发射（见 sessionEpoch 注释），这里显式推进会话序号，
+                // 保证 uiState 一定会重算一次"今天是第几周"
+                sessionEpoch.value = epoch
+            }
         }
-        // 课程/学期/提醒设置任一变化 → 全量重排上课提醒闹钟。
+        // 课程/节次/学期/提醒设置任一变化 → 全量重排上课提醒闹钟。
         // 必须按值去重：reschedule() 内部会把已排 requestCode 写回 DataStore(REMINDER_CODES)，
-        // 而下面三个设置流都源自同一个 DataStore.data，写任何键都会让它们重新发射（map 不去重），
+        // 而下面几个设置流都源自同一个 DataStore.data，写任何键都会让它们重新发射（map 不去重），
         // 不去重就会形成「重排→写 codes→重新发射→重排」的自激循环，闹钟被反复取消重设。
+        // 节次时间必须在键里：重新导入只改节次不改课程时，ReminderKey 不含它会被去重抑制，
+        // 当天提醒仍按旧时刻触发（此前只靠次日脉冲自愈）。节次表无 DataStore 回写，无自激风险。
         viewModelScope.launch {
             combine(
                 repo.courses,
+                repo.sectionTimes,
                 repo.settings.semester,
                 repo.settings.reminderEnabled,
                 repo.settings.reminderMinutes,
-            ) { courses, semester, enabled, minutes ->
-                ReminderKey(courses, semester, enabled, minutes)
+            ) { courses, sections, semester, enabled, minutes ->
+                ReminderKey(courses, sections, semester, enabled, minutes)
             }.distinctUntilChanged().collect {
-                ClassReminderScheduler.reschedule(getApplication())
+                // 重排失败只允许"本轮不重排"：异常逃出 viewModelScope 会直接崩进程
+                // （SettingsStore 的 DataStore 读可能抛 IOException、精确闹钟权限
+                // 也可能在 check-then-act 窗口里被收回）
+                runCatching { ClassReminderScheduler.reschedule(getApplication()) }
+                    .onFailure { e -> if (e is CancellationException) throw e }
             }
         }
     }
@@ -175,6 +200,7 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
     /** 重排触发条件的值快照：用于过滤 DataStore 的无关键写入（见 init 注释）。 */
     private data class ReminderKey(
         val courses: List<CourseEntity>,
+        val sectionTimes: List<SectionTimeEntity>,
         val semester: SettingsStore.SemesterConfig,
         val enabled: Boolean,
         val minutes: Int,
@@ -216,7 +242,7 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
      * 与手动多时段课都是多行合并成一张卡，只改一行会让卡片继续留在网格上。
      */
     fun setCoursesHidden(ids: List<Long>, hidden: Boolean) {
-        viewModelScope.launch { ids.forEach { repo.setCourseHidden(it, hidden) } }
+        viewModelScope.launch { repo.setCoursesHidden(ids, hidden) }
     }
 
     fun deleteCourse(id: Long) {

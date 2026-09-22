@@ -67,7 +67,7 @@ object WeekResolver {
             ScheduleRepository.locateWeek(semester.weekMondays, today)
         } else {
             val strictWeek = ScheduleRepository.currentWeek(semester.firstMonday, semester.totalWeeks, today)
-            val start = runCatching { LocalDate.parse(semester.firstMonday) }.getOrNull()
+            val start = weekMonday(semester, 1)
             val beforeStart = start != null && today.isBefore(start)
             ScheduleRepository.Companion.WeekLocation(
                 // 开学前按显示口径视为第 1 周
@@ -79,4 +79,31 @@ object WeekResolver {
                 afterEnd = strictWeek == null && !beforeStart && start != null,
             )
         }
+
+    /**
+     * 第 [week] 教学周的周一日期（**周→周一映射的唯一实现**）。
+     *
+     * - 官方校历优先；
+     * - 校历没覆盖到（用户把总周数调大、或本来就没有校历）时从最后一个已知周一顺延，
+     *   没有校历时用**归一化到周一**的开学日期推算；
+     * - 归一化必须与 [ScheduleRepository.currentWeek] 一致：那里用
+     *   `previousOrSame(MONDAY)` 把非周一的开学日期归到那一周的周一，而日期行与
+     *   `beforeStart` 此前直接用原始日期 → 开学日期是周三时，日期行整学期偏移 2 天、
+     *   "今天"胶囊落在错误的列上，08-31/09-01 还会"未开学"与"第 1 周课程"同时出现。
+     */
+    fun weekMonday(semester: SettingsStore.SemesterConfig, week: Int): LocalDate? {
+        if (week < 1) return null
+        semester.weekMondays.getOrNull(week - 1)?.let { raw ->
+            runCatching { LocalDate.parse(raw) }.getOrNull()?.let { return it }
+        }
+        val known = semester.weekMondays.mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
+        if (known.isNotEmpty()) {
+            // 校历只到第 N 周：第 N + k 周 = 最后一个校历周一 + k 周
+            val extra = week - known.size
+            return known.last().plusWeeks(extra.toLong())
+        }
+        val start = runCatching { LocalDate.parse(semester.firstMonday) }.getOrNull() ?: return null
+        val firstMonday = start.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))
+        return firstMonday.plusWeeks((week - 1).toLong())
+    }
 }

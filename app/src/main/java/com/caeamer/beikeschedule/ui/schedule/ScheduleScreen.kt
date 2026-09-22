@@ -5,7 +5,6 @@ import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,11 +52,11 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -71,6 +70,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.local.SectionTimeEntity
@@ -82,9 +82,9 @@ import com.caeamer.beikeschedule.model.SessionExpander
 import com.caeamer.beikeschedule.model.WeekLayout
 import com.caeamer.beikeschedule.model.WeekResolver
 import com.caeamer.beikeschedule.model.WeekUtils
+import com.caeamer.beikeschedule.ui.common.rememberNow
 import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import android.Manifest
@@ -104,6 +104,9 @@ private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "�
  */
 private const val SCROLLABLE_SHEET_MIN_ITEMS = 5
 
+/** 网格底部为 FAB 预留的净空（40dp 按钮 + 16dp 边距，见 WeekGrid 注释）。 */
+private val FAB_CLEARANCE = 56.dp
+
 /** 日期所属教学周（严格口径：开学前/假期跳周/学期后返回 null），与提醒排期同一套判定。 */
 private fun teachingWeekOf(semester: SettingsStore.SemesterConfig, date: LocalDate): Int? =
     WeekResolver.teachingWeekOf(semester, date)
@@ -112,15 +115,15 @@ private fun teachingWeekOf(semester: SettingsStore.SemesterConfig, date: LocalDa
 @Composable
 fun ScheduleScreen(
     onImportClick: () -> Unit = {},
-    darkTheme: Boolean = isSystemInDarkTheme(),
     viewModel: ScheduleViewModel = viewModel(),
 ) {
-    val state by viewModel.uiState.collectAsState()
-    val reminderEnabled by viewModel.reminderEnabled.collectAsState()
-    val reminderMinutes by viewModel.reminderMinutes.collectAsState()
-    val hideWeekend by viewModel.hideWeekend.collectAsState()
-    val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsState()
-    val reminderSchedule by viewModel.reminderSchedule.collectAsState()
+    // withLifecycle：退到后台停止收集（WhileSubscribed 才能在后台真正停流）
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val reminderEnabled by viewModel.reminderEnabled.collectAsStateWithLifecycle()
+    val reminderMinutes by viewModel.reminderMinutes.collectAsStateWithLifecycle()
+    val hideWeekend by viewModel.hideWeekend.collectAsStateWithLifecycle()
+    val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsStateWithLifecycle()
+    val reminderSchedule by viewModel.reminderSchedule.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -135,25 +138,21 @@ fun ScheduleScreen(
 
     var weekMenuExpanded by remember { mutableStateOf(false) }
     var detailCourse by remember { mutableStateOf<CourseEntity?>(null) }
-    var editingCourse by remember { mutableStateOf<CourseEntity?>(null) }
     // 多时段课程编辑：存该课的全部行（同「名字+来源」），传给编辑框加载全部时段
     var editCourseGroup by remember { mutableStateOf<List<CourseEntity>?>(null) }
     var prefillSession by remember { mutableStateOf<SessionExpander.Session?>(null) }
+    // 编辑框与其中的半填表单不做 rememberSaveable：SessionState 目前没有 Saver，
+    // 只恢复"打开"标志会得到"对话框回来了、输入全丢"的假恢复，比关掉更糟（记录在案）。
     var showEditDialog by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
+    // 下面两个对话框的全部内容都从 state 现读，旋转后恢复打开态是安全的
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     // 长按空白格后待激活的"添加课程"格子（周几, 大节下标）
     var pendingSlot by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     // 无固定时间课程弹层
-    var showUnscheduledSheet by remember { mutableStateOf(false) }
-    // "下一节课"图钉：每分钟重算一次，跨过上课点后自动前移（无需重进页面）
-    val now by remember {
-        flow {
-            while (true) {
-                emit(java.time.LocalDateTime.now())
-                kotlinx.coroutines.delay(60_000)
-            }
-        }
-    }.collectAsState(initial = java.time.LocalDateTime.now())
+    var showUnscheduledSheet by rememberSaveable { mutableStateOf(false) }
+    // "下一节课"图钉：每分钟重算一次，跨过上课点后自动前移（无需重进页面）。
+    // 只在 RESUMED 走时钟，且唤醒点对齐整分钟（见 rememberNow 注释）。
+    val now = rememberNow()
 
     val totalWeeks = state.semester.totalWeeks
     val visibleDays = if (hideWeekend) (1..5).toList() else (1..7).toList()
@@ -166,6 +165,16 @@ fun ScheduleScreen(
      */
     fun groupOf(course: CourseEntity): List<CourseEntity> =
         state.courses.filter { it.name == course.name && it.source == course.source }
+
+    // 其它**手动课程**已占用的名字（排除本次编辑的这些行）：编辑框据此禁止重名，
+    // 否则两张同名卡会在隐藏/删除/编辑时互相连坐（groupOf 以 name+source 为键）。
+    val manualNamesInUse = remember(state.courses, editCourseGroup) {
+        val editingIds = editCourseGroup.orEmpty().map { it.id }.toSet()
+        state.courses
+            .filter { it.source == CourseEntity.SOURCE_MANUAL && it.id !in editingIds }
+            .map { it.name.trim() }
+            .toSet()
+    }
     // 下一节课：仅今天（严格教学周内）尚未开始的最早一节；卡片 id 与合并后课程一致
     val nextClassId = remember(state.scheduledCourses, state.sectionTimes, now, state.semester) {
         NextClass.resolve(
@@ -231,7 +240,7 @@ fun ScheduleScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                text = todayStatusLine(state),
+                                text = todayStatusLine(state, now.toLocalDate()),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
@@ -300,7 +309,6 @@ fun ScheduleScreen(
         floatingActionButton = {
             // 小号 FAB：56dp 默认尺寸在课表页喧宾夺主，40dp + 默认阴影足够
             SmallFloatingActionButton(onClick = {
-                editingCourse = null
                 prefillSession = null
                 showEditDialog = true
             }) {
@@ -314,7 +322,6 @@ fun ScheduleScreen(
                     onLoadSample = { viewModel.loadSampleData() },
                     onImportClick = onImportClick,
                     onAdd = {
-                        editingCourse = null
                         showEditDialog = true
                     },
                 )
@@ -322,7 +329,7 @@ fun ScheduleScreen(
                 DateRow(
                     week = state.selectedWeek,
                     semester = state.semester,
-                    today = LocalDate.now(),
+                    today = now.toLocalDate(),
                     days = visibleDays,
                 )
                 if (state.inHoliday && state.nextWeekMonday != null) {
@@ -351,7 +358,6 @@ fun ScheduleScreen(
                         onSlotLongPress = { day, big -> pendingSlot = day to big },
                         onSlotClick = { day, big ->
                             if (pendingSlot == day to big) {
-                                editingCourse = null
                                 prefillSession = SessionExpander.Session(day, setOf(big))
                                 showEditDialog = true
                             }
@@ -394,9 +400,10 @@ fun ScheduleScreen(
 
     if (showEditDialog) {
         CourseEditDialog(
-            initialRows = editCourseGroup ?: listOfNotNull(editingCourse),
+            initialRows = editCourseGroup.orEmpty(),
             totalWeeks = totalWeeks,
             prefill = prefillSession,
+            manualNamesInUse = manualNamesInUse,
             onDismiss = {
                 showEditDialog = false
                 prefillSession = null
@@ -439,7 +446,13 @@ fun ScheduleScreen(
             onReminderChange = { enabled, minutes -> viewModel.setReminder(enabled, minutes) },
             onHideWeekendChange = { viewModel.setHideWeekend(it) },
             onClearSample = { viewModel.clearSampleData() },
-            onRestoreCourse = { viewModel.setCourseHidden(it, false) },
+            // 恢复也必须按整组：隐藏是按合并组做的（一张卡 N 行），只恢复一行会留下
+            // 一张"残废"卡片（例如只剩第 7 周有课），且隐藏列表里还有同名项要反复点。
+            onRestoreCourse = { id ->
+                state.courses.firstOrNull { it.id == id }
+                    ?.let { row -> viewModel.setCoursesHidden(groupOf(row).map { it.id }, false) }
+                    ?: viewModel.setCourseHidden(id, false)
+            },
             onRequestNotificationPermission = { onGranted ->
                 if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
                         context, Manifest.permission.POST_NOTIFICATIONS,
@@ -477,8 +490,7 @@ private fun EmptyState(onLoadSample: () -> Unit, onImportClick: () -> Unit, onAd
 }
 
 /** 顶栏学期名下的小字：今天日期 + 学期状态（未开学/第N周/假期中/已放假）。 */
-private fun todayStatusLine(state: ScheduleUiState): String {
-    val today = LocalDate.now()
+private fun todayStatusLine(state: ScheduleUiState, today: LocalDate): String {
     val dateText = "${today.monthValue}月${today.dayOfMonth}日 周${"一二三四五六日"[today.dayOfWeek.value - 1]}"
     val status = when {
         // locateWeek 的显示语义"未开学视为第1周"用 beforeStart 区分，不能只看 currentWeek
@@ -491,13 +503,11 @@ private fun todayStatusLine(state: ScheduleUiState): String {
     return "$dateText · $status"
 }
 
-/** 顶部日期行：左格对齐节次列，N 天列；优先用官方教学周日历取周一日期，今天用主题色实心胶囊高亮。 */
+/** 顶部日期行：左格对齐节次列，N 天列；周一日期统一走 WeekResolver.weekMonday（校历优先，
+ *  非周一开学日期会被归一化，见那里的注释），今天用主题色实心胶囊高亮。 */
 @Composable
 private fun DateRow(week: Int, semester: SettingsStore.SemesterConfig, today: LocalDate, days: List<Int>) {
-    val monday = remember(semester, week) {
-        semester.weekMondays.getOrNull(week - 1)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-            ?: runCatching { LocalDate.parse(semester.firstMonday) }.getOrNull()?.plusWeeks((week - 1).toLong())
-    }
+    val monday = remember(semester, week) { WeekResolver.weekMonday(semester, week) }
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Spacer(Modifier.width(SECTION_COL_WIDTH))
         days.forEach { day ->
@@ -557,7 +567,8 @@ private fun WeekGrid(
     val timeMap = remember(sectionTimes) { sectionTimes.associateBy { it.section } }
     // 同名同段多行（教务单周调课/单双周拆分）先合并成一张卡，再进冲突聚类
     val mergedCourses = remember(courses) { CourseMerger.mergeSameSlot(courses) }
-    Row(Modifier.fillMaxSize()) {
+    // 底部留出 FAB 的净空：网格不可滚动，FAB 压住的最后一天最后一个大节是**看不回来**的。
+    Row(Modifier.fillMaxSize().padding(bottom = FAB_CLEARANCE)) {
         // 节次列
         // 节次列：按 6 大节显示（一~六 + 起止时间），行高按小节数加权
         Column(Modifier.width(SECTION_COL_WIDTH).fillMaxHeight()) {
@@ -705,9 +716,11 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
                     modifier = if (isNext) Modifier.padding(end = 15.dp) else Modifier,
                 )
                 if (span >= 2 && course.location.isNotBlank()) {
-                    // 楼名+房号一行显示（"机械楼720"），省出的行高留给课名
+                    // 楼名+房号一行显示（"机械楼720"），省出的行高留给课名。
+                    // 剥【校区】前缀走 CourseMerger 的共享实现（通知里也是同一条规则），
+                    // 不再在卡片内每次重组内联编译 Regex。
                     Text(
-                        course.location.replace(Regex("【[^】]*】"), "").trim(),
+                        CourseMerger.stripCampusPrefix(course.location),
                         fontSize = 9.sp,
                         lineHeight = 11.sp,
                         color = fg.copy(alpha = 0.8f),

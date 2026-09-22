@@ -9,6 +9,7 @@ import com.caeamer.beikeschedule.data.remote.SmartClassException
 import com.caeamer.beikeschedule.data.remote.SmartClassKeyProvider
 import com.caeamer.beikeschedule.data.remote.SmartClassParser
 import com.caeamer.beikeschedule.data.repo.FreeRoomRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -165,7 +166,7 @@ class FreeRoomViewModel(app: Application) : AndroidViewModel(app) {
     fun retry() = load(initial = _state.value.buildings.isEmpty())
 
     private fun load(initial: Boolean) {
-        loadSeq++
+        val seq = ++loadSeq
         viewModelScope.launch {
             _state.update {
                 it.copy(
@@ -178,6 +179,9 @@ class FreeRoomViewModel(app: Application) : AndroidViewModel(app) {
             }
             try {
                 val meta = repo.loadMeta()
+                // 元数据在途时用户切了楼栋（selectBuilding 也会自增序号）：
+                // 放弃这次刷新，否则会把用户刚选的楼栋改回去、或用它的教室覆盖新选择
+                if (seq != loadSeq) return@launch
                 if (meta.buildings.isEmpty()) {
                     _state.update {
                         it.copy(loading = false, refreshing = false, error = "没有获取到教学楼列表，请稍后重试")
@@ -189,9 +193,28 @@ class FreeRoomViewModel(app: Application) : AndroidViewModel(app) {
                 val selected = meta.buildings.firstOrNull { it.id == remembered }?.id
                     ?: meta.buildings.first().id
                 // 注意不要在这里把 loading 置 false：教室还没回来，置 false 会闪一屏空态
-                _state.update { it.copy(buildings = meta.buildings, selectedBuildingId = selected) }
+                if (selected != _state.value.selectedBuildingId) {
+                    // 选择变了（持久化的楼栋已从服务端列表消失）：旧楼的教室必须一起清掉，
+                    // 否则会出现"选中 B 楼 + 下面列的是 A 楼的教室"
+                    _state.update {
+                        it.copy(
+                            buildings = meta.buildings,
+                            selectedBuildingId = selected,
+                            slots = emptyList(),
+                            loading = true,
+                            expandedIndex = null,
+                            loadedAt = 0L,
+                        )
+                    }
+                    settings.setFreeRoomBuilding(selected)
+                } else {
+                    _state.update { it.copy(buildings = meta.buildings) }
+                }
                 loadRooms(selected)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                if (seq != loadSeq) return@launch
                 _state.update { it.copy(loading = false, refreshing = false, error = friendly(e)) }
             }
         }
@@ -211,6 +234,8 @@ class FreeRoomViewModel(app: Application) : AndroidViewModel(app) {
                         loadedAt = System.currentTimeMillis(),
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 if (seq != loadSeq) return@launch
                 _state.update { it.copy(loading = false, refreshing = false, error = friendly(e)) }

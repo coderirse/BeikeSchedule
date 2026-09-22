@@ -20,11 +20,14 @@ import com.caeamer.beikeschedule.import.parser.GpaInfo
 import com.caeamer.beikeschedule.import.parser.JwParser
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
 import com.caeamer.beikeschedule.reminder.TodoReminderScheduler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -51,7 +54,8 @@ data class CreditRow(val category: CreditCategory, val completed: Double)
 data class GradesUiState(
     val showWebView: Boolean = false,
     val fetching: Boolean = false,
-    val section: GradesSection = GradesSection.SCORES,
+    /** null = 分段偏好还没从 DataStore 读到（冷启动最初几帧），此时不渲染任何分段页。 */
+    val section: GradesSection? = null,
     val grades: List<GradeEntity> = emptyList(),
     val exams: List<ExamEntity> = emptyList(),
     val gpa: GpaInfo? = null,
@@ -255,10 +259,24 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         val hideScores: Boolean,
     )
 
+    /**
+     * 学业进度 JSON → 解析结果。
+     *
+     * 必须单独抽出来并去重：`xflbyq` 有 ~60KB，解析写在 combine 变换里时，
+     * **任意一个上游发射都会重跑**（DataStore 写任何键这两个流都会重发射、
+     * 点一次勾选框也会），而实际内容极少变化。
+     */
+    private val creditParsed: Flow<Pair<List<CreditCategory>, GraduationProgress?>> =
+        combine(repo.settings.xflbyqJson, repo.settings.bxkqkJson) { a, b -> a to b }
+            .distinctUntilChanged()
+            .map { (xflbyq, bxkqk) ->
+                CreditProgressParser.parseCategories(xflbyq) to CreditProgressParser.parseProgress(bxkqk)
+            }
+
     val uiState: StateFlow<GradesUiState> = combine(
         repo.grades,
         repo.exams,
-        combine(repo.settings.xflbyqJson, repo.settings.bxkqkJson) { a, b -> a to b },
+        creditParsed,
         combine(
             repo.settings.gradesFetchedAt, showWebView, fetching, section,
             ScorePrivacy.hidden,
@@ -267,7 +285,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
             gpaFromCache, error, scoreMode, semesterFilter,
             combine(schoolYearFilter, excludedKcdm) { y, x -> y to x },
         ) { g, e, m, f, (y, x) -> UiPrefs(g, e, m, f, y, x) },
-    ) { grades, exams, creditJson, info, prefs ->
+    ) { grades, exams, credit, info, prefs ->
         GradesUiState(
             showWebView = info.showWebView,
             fetching = info.fetching,
@@ -281,17 +299,26 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
             semesterFilter = prefs.filter,
             schoolYearFilter = prefs.schoolYear,
             excludedKcdm = prefs.excluded,
-            creditCategories = CreditProgressParser.parseCategories(creditJson.first),
-            gradProgress = CreditProgressParser.parseProgress(creditJson.second),
+            creditCategories = credit.first,
+            gradProgress = credit.second,
             hideScores = info.hideScores,
         )
-    }.stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5000),
-        // 初值必须与偏好的默认段一致（无课教室）：否则冷启动进教务的最前面几帧
-        // 会按"成绩段 + 无数据"渲染一屏"还没有成绩数据"，然后才跳回无课教室
-        GradesUiState(section = GradesSection.FREE_ROOM),
-    )
+    }
+        // 解析层出任何意外都不能把整个 uiState 流打挂：stateIn 上游异常会走
+        // 未捕获异常处理 → 崩进程，而落盘的坏 JSON 会让"每次进教务页都崩"、
+        // 连自救入口（清除成绩缓存）都进不去。兜底为"无学业进度"，
+        // 成绩/考试等其余部分照常显示。
+        .catch { e ->
+            if (e is CancellationException) throw e
+            emit(GradesUiState(section = GradesSection.FREE_ROOM))
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            // 初值必须与偏好的默认段一致（无课教室）：否则冷启动进教务的最前面几帧
+            // 会按"成绩段 + 无数据"渲染一屏"还没有成绩数据"，然后才跳回无课教室
+            GradesUiState(section = GradesSection.FREE_ROOM),
+        )
 
     init {
         viewModelScope.launch {
@@ -306,7 +333,12 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         // 而本收集器源自同一 dataStore.data，不去重会形成「重排→写 codes→重发→重排」自激循环。
         viewModelScope.launch {
             repo.todos.distinctUntilChangedBy { it }
-                .collect { TodoReminderScheduler.reschedule(getApplication()) }
+                .collect {
+                    // 重排失败只允许"本轮不重排"：异常逃出 viewModelScope 会直接崩进程，
+                    // 而这里由 Room 流驱动，坏数据会变成"每次改日程都崩"。
+                    runCatching { TodoReminderScheduler.reschedule(getApplication()) }
+                        .onFailure { e -> if (e is CancellationException) throw e }
+                }
         }
     }
 
@@ -316,6 +348,15 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
     fun onFetchStart() {
         fetching.value = true
         error.value = null
+    }
+
+    /**
+     * 页面开始加载时调用：把卡住的抓取态复位。
+     * 脚本可能因重入标志直接 return、或在桥不可用的页面上静默失败，
+     * 桥回调不会再来——不复位就会一直显示"抓取中"的进度条。
+     */
+    fun onPageStarted() {
+        fetching.value = false
     }
 
     /** GradesBridge 回调：成绩+GPA+学籍+当前学期+考试+学业进度，一次会话全量。 */
@@ -332,34 +373,41 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val grades = GradesParser.parseGrades(gradesJson)
-                if (grades.isEmpty()) {
-                    error.value = "未解析到成绩，请确认已在教务系统完成评教/成绩发布后重试"
-                } else {
+                if (grades.isNotEmpty()) {
                     repo.replaceGrades(grades)
                     repo.settings.saveGradesMeta(gpaJson, System.currentTimeMillis())
                     gpaFromCache.value = GradesParser.parseGpa(gpaJson)
-                    // 学籍快照顺手存（"我的"页离线展示）
-                    GradesParser.parseStudentProfile(userJson, xsxxJson)?.let {
-                        repo.settings.saveStudentProfile(it)
-                    }
-                    // 考试安排（仅当前学期）。
-                    // **不能无条件覆盖**：jw_grades.js 对考试子请求失败会返回空串，
-                    // 而 parseExams("") 得到空列表，replaceExams 是 clear + insertAll ——
-                    // 一次子请求失败就会静默清空已有考试安排与考前提醒。
-                    // 成绩侧与学业进度侧都有守卫，唯独这里漏了。
-                    val (semXn, semXq, _) = JwParser.parseCurrentSemester(semJson)
-                    val examsFromServer = examsJson.isNotBlank()
-                    val exams = ExamsParser.parseExams(examsJson, semXn + semXq)
-                    if (examsFromServer) repo.replaceExams(exams)
-                    // 学业进度缓存
-                    if (xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()) {
-                        repo.settings.saveCreditMeta(xflbyqJson, bxkqkJson)
-                    }
-                    // 考试请求成功时无论如何都重排（空列表 = 全部取消，用于学期结束等场景）；
-                    // 请求失败时**不动**闹钟，否则会把仍然有效的考试提醒一并取消。
-                    if (examsFromServer) ExamReminderScheduler.reschedule(getApplication())
-                    error.value = if (examsFromServer) null else "考试安排获取失败，已保留上次数据"
                 }
+                // 成绩为空是合法的（新生/评教未完成）：只影响"成绩表"这一件事，
+                // 不能因此丢掉同一次已抓成功的考试、学籍与学业进度。
+                // 错误文案在末尾统一汇总（见 buildList）。
+                // 以下四项与成绩无关，各自独立判定（此前全被 else 包住，
+                // 大一新生第一学期永远看不到考试安排、学籍信息与学业进度）。
+                // 学籍快照顺手存（"我的"页离线展示）
+                GradesParser.parseStudentProfile(userJson, xsxxJson)?.let {
+                    repo.settings.saveStudentProfile(it)
+                }
+                // 考试安排（仅当前学期）。
+                // **不能无条件覆盖**：jw_grades.js 对考试子请求失败会返回空串，
+                // 而 parseExams("") 得到空列表，replaceExams 是 clear + insertAll ——
+                // 一次子请求失败就会静默清空已有考试安排与考前提醒。
+                val (semXn, semXq, _) = JwParser.parseCurrentSemester(semJson)
+                val examsFromServer = examsJson.isNotBlank()
+                val exams = ExamsParser.parseExams(examsJson, semXn + semXq)
+                if (examsFromServer) repo.replaceExams(exams)
+                // 学业进度缓存
+                if (xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()) {
+                    repo.settings.saveCreditMeta(xflbyqJson, bxkqkJson)
+                }
+                // 考试请求成功时无论如何都重排（空列表 = 取消未来的考试提醒，用于学期结束等场景）；
+                // 请求失败时**不动**闹钟，否则会把仍然有效的考试提醒一并取消。
+                if (examsFromServer) ExamReminderScheduler.reschedule(getApplication())
+                error.value = buildList {
+                    if (grades.isEmpty()) add("未解析到成绩，请确认已在教务系统完成评教/成绩发布后重试")
+                    if (!examsFromServer) add("考试安排获取失败，已保留上次数据")
+                }.joinToString("；").ifEmpty { null }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 error.value = "解析失败：${e.message}"
             } finally {

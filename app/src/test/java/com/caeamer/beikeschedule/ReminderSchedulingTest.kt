@@ -2,12 +2,14 @@ package com.caeamer.beikeschedule
 
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.local.ExamEntity
+import com.caeamer.beikeschedule.data.local.TodoEntity
 import com.caeamer.beikeschedule.data.pref.AlarmCodec
 import com.caeamer.beikeschedule.data.pref.ScheduledAlarm
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.reminder.ClassReminderScheduler
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
 import com.caeamer.beikeschedule.reminder.ReminderAlarmScheduler
+import com.caeamer.beikeschedule.reminder.TodoReminderScheduler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -30,6 +32,26 @@ class ReminderSchedulingTest {
 
     private fun millis(y: Int, mo: Int, d: Int, h: Int, mi: Int): Long =
         LocalDateTime.of(y, mo, d, h, mi).atZone(zone).toInstant().toEpochMilli()
+
+    @Test
+    fun `已到点闹钟默认不取消_定向取消集合能取消它`() {
+        // 不变量 1 的边界：已到点但系统还没投递的闹钟默认必须留着（Doze 会推迟投递），
+        // 但"用户明确不要这条"（打卡/清空数据）时必须能取消 —— 这正是 forceCancelCodes 的用途。
+        val now = millis(2026, 9, 7, 8, 0)
+        val due = ScheduledAlarm(requestCode = 11, triggerAtMillis = millis(2026, 9, 7, 7, 50))
+        val future = ScheduledAlarm(requestCode = 22, triggerAtMillis = millis(2026, 9, 7, 9, 0))
+
+        val normal = ReminderAlarmScheduler.alarmsToCancel(listOf(due, future), plannedCodes = emptySet(), nowMillis = now)
+        assertEquals("常规重排只取消未来的", listOf(22), normal.map { it.requestCode })
+
+        val forced = ReminderAlarmScheduler.alarmsToCancel(
+            listOf(due, future),
+            plannedCodes = emptySet(),
+            nowMillis = now,
+            forceCancelCodes = setOf(11),
+        )
+        assertEquals("定向取消要连已到点的一起取消", listOf(11, 22), forced.map { it.requestCode }.sorted())
+    }
 
     private fun course(
         id: Long,
@@ -235,7 +257,37 @@ class ReminderSchedulingTest {
         val a = ClassReminderScheduler.requestCodeOf(c, d)
         val b = ClassReminderScheduler.requestCodeOf(c, d)
         assertEquals("同一(课程,日期)必须稳定", a, b)
-        assertTrue("必须落在 [0, 8e6)，与考试提醒/每日脉冲隔离", a in 0 until 8_000_000)
+        // 上课段已从 8M 收窄到 7M：与日程段 [7M,8M) 隔离（此前 1/8 概率重叠，
+        // 通知 ID 用裸 requestCode，跨类同码时后弹的会覆盖先弹的）
+        assertTrue("必须落在 [0, 7e6)", a in 0 until 7_000_000)
+    }
+
+    @Test
+    fun `四类提醒的 requestCode 段互不重叠`() {
+        // 上课 [0,7M) / 日程 [7M,8M) / 考试 [8M,9M) / 每日脉冲 9M。
+        // 这是通知 ID 不互相覆盖的前提（notificationId = 裸 requestCode），
+        // 任何一段调整都必须让这条测试先亮。
+        val classCodes = (1..200).map { id ->
+            ClassReminderScheduler.requestCodeOf(course(id = id.toLong(), day = 1, startSection = 1), LocalDate.of(2026, 9, 7))
+        }
+        assertTrue("上课段越界", classCodes.all { it in 0 until 7_000_000 })
+
+        val todoCodes = (1..200).map { id ->
+            TodoReminderScheduler.requestCodeOf(
+                TodoEntity(id = id.toLong(), title = "t$id", time = "08:00"),
+                LocalDate.of(2026, 9, 7),
+            )
+        }
+        assertTrue("日程段越界", todoCodes.all { it in 7_000_000 until 8_000_000 })
+
+        val examCodes = listOf(1L, 2L, 100L).flatMap { id ->
+            listOf(8_000_000 + (id * 2).toInt(), 8_000_000 + (id * 2).toInt() + 1)
+        }
+        assertTrue("考试段越界", examCodes.all { it in 8_000_000 until 9_000_000 })
+
+        // 三类之间没有交集
+        assertTrue(classCodes.none { it in todoCodes.toSet() })
+        assertTrue(todoCodes.none { it in examCodes.toSet() })
     }
 
     // ——— 考试提醒 ———
