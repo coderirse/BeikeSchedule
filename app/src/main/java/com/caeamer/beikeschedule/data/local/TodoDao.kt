@@ -21,6 +21,10 @@ interface TodoDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(todo: TodoEntity): Long
 
+    /** 批量插入（云恢复整包覆盖用；配合 clear() 在同一事务内完成清空+写入）。 */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(todos: List<TodoEntity>)
+
     /**
      * 只改打卡日期，不动其它字段。
      *
@@ -32,4 +36,8 @@ interface TodoDao {
 
     @Query("DELETE FROM todo WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    /** 云恢复整包覆盖用：清空全部日程（与插入同一事务）。 */
+    @Query("DELETE FROM todo")
+    suspend fun clear()
 }

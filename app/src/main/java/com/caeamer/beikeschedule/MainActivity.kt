@@ -46,11 +46,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.caeamer.beikeschedule.data.backup.CloudSync
 import com.caeamer.beikeschedule.data.pref.AppSession
 import com.caeamer.beikeschedule.data.pref.ScorePrivacy
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.import.ImportScreen
 import com.caeamer.beikeschedule.import.ImportViewModel
+import com.caeamer.beikeschedule.ui.cloud.CloudLoginScreen
 import com.caeamer.beikeschedule.ui.grades.GradesScreen
 import com.caeamer.beikeschedule.ui.profile.ProfileScreen
 import com.caeamer.beikeschedule.ui.schedule.ScheduleScreen
@@ -150,6 +152,10 @@ class MainActivity : ComponentActivity() {
                     setRecentsScreenshotEnabled(hidden)
                 }
             }
+            // 云同步：把上次进程死亡漏掉的脏快照补传（内部自行判断开关/登录/脏标记）
+            LaunchedEffect(Unit) {
+                CloudSync.uploadIfDirty(applicationContext)
+            }
             // withLifecycle：App 退到后台时停止收集，避免后台仍在驱动主题树重组
             val themeMode by settings.themeMode.collectAsStateWithLifecycle(
                 initialValue = SettingsStore.ThemeMode.SYSTEM,
@@ -165,14 +171,16 @@ class MainActivity : ComponentActivity() {
             BeikeScheduleTheme(darkTheme = darkTheme) {
                 var tab by rememberSaveable { mutableStateOf("schedule") }
                 var showImport by rememberSaveable { mutableStateOf(false) }
-                // 导入页的 WebView 展示的是浅底教务页面，需要临时切成深色状态栏图标
+                var showCloudLogin by rememberSaveable { mutableStateOf(false) }
+                // 导入页/云登录页的 WebView 展示的是浅底教务页面，需要临时切成深色状态栏图标
                 var importLightPage by remember { mutableStateOf(false) }
+                var cloudLightPage by remember { mutableStateOf(false) }
 
                 // 状态栏/导航栏图标明暗：themeMode 只是 Compose 内部的主题选择，
                 // 不会改资源 uiMode，而 enableEdgeToEdge() 的 SystemBarStyle.auto 只看 uiMode
                 // （本应用主题是 android:Theme.Material.Light.NoActionBar，恒为 notnight），
                 // 所以必须自己按 darkTheme 设置，否则"系统浅色 + 应用深色"时是深图标压在近黑渐变上。
-                val darkIcons = if (showImport && importLightPage) true else !darkTheme
+                val darkIcons = if ((showImport && importLightPage) || (showCloudLogin && cloudLightPage)) true else !darkTheme
                 SideEffect {
                     WindowCompat.getInsetsController(window, window.decorView).apply {
                         isAppearanceLightStatusBars = darkIcons
@@ -186,6 +194,12 @@ class MainActivity : ComponentActivity() {
                         onDone = { showImport = false },
                         onLightBackgroundVisible = { importLightPage = it },
                         viewModel = importViewModel,
+                    )
+                } else if (showCloudLogin) {
+                    // 云登录同样为全屏流程：内嵌教务 WebView，登录成功抓到学号即完成云登录
+                    CloudLoginScreen(
+                        onDone = { showCloudLogin = false },
+                        onLightBackgroundVisible = { cloudLightPage = it },
                     )
                 } else {
                     // 整屏渐变仅在「课表页」开启：浅色暖渐变/暗色暗渐变，其他页用主题默认背景
@@ -235,7 +249,7 @@ class MainActivity : ComponentActivity() {
                             Box(Modifier.padding(padding)) {
                                 when (tab) {
                                     "jw" -> GradesScreen()
-                                    "mine" -> ProfileScreen()
+                                    "mine" -> ProfileScreen(onCloudLoginClick = { showCloudLogin = true })
                                     else -> ScheduleScreen(
                                         onImportClick = {
                                             importViewModel.resetIfFinished()

@@ -1,9 +1,12 @@
 package com.caeamer.beikeschedule.ui.settings
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.caeamer.beikeschedule.data.backup.CloudSync
 import com.caeamer.beikeschedule.data.pref.SettingsStore
+import com.caeamer.beikeschedule.data.remote.CloudApi
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.GradesParser
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
@@ -12,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -27,7 +31,13 @@ sealed interface UpdateState {
     data object Idle : UpdateState
     data object Checking : UpdateState
     data object UpToDate : UpdateState
-    data class Available(val latestVersion: String, val notes: String, val url: String) : UpdateState
+    data class Available(
+        val latestVersion: String,
+        val notes: String,
+        val url: String,
+        /** 服务端 force 标记：弹窗不可跳过（仅自有服务器接口提供，GitHub 兜底恒为 false）。 */
+        val force: Boolean = false,
+    ) : UpdateState
     data class Failed(val message: String) : UpdateState
 }
 
@@ -51,6 +61,74 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     /** 「隐藏本周不上的课」：与课表页共用同一个 DataStore 键，两边即时同步。 */
     val hideInactiveCourses: StateFlow<Boolean> = settings.hideInactiveCourses
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    // —— 云同步（账号 = 学号，opt-in 默认关闭）——
+
+    val cloudAccount: StateFlow<SettingsStore.CloudAccount> = settings.cloudAccount
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsStore.CloudAccount())
+    val cloudSyncEnabled: StateFlow<Boolean> = settings.cloudSyncEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val cloudLastBackupAt: StateFlow<Long> = settings.cloudLastBackupAt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+
+    /** 手动备份/恢复进行中（UI 据此禁用按钮并显示进度）。 */
+    val cloudBusy = MutableStateFlow(false)
+
+    /** 一次性结果提示（UI Toast 后调 consumeCloudEvent 清空）。 */
+    val cloudEvent = MutableStateFlow<String?>(null)
+
+    fun setCloudSyncEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settings.setCloudSyncEnabled(enabled)
+            // 开启即做一次全量备份：用户"同意上云"的动作应当立刻看到云端有数据，
+            // 而不是等下一次数据变更的 8 秒去抖
+            if (enabled && settings.cloudAccount.first().isLoggedIn) {
+                val result = CloudSync.manualBackup(getApplication())
+                cloudEvent.value = result.fold(
+                    onSuccess = { "已备份到云端" },
+                    onFailure = { "首次备份失败：${it.message}" },
+                )
+            }
+        }
+    }
+
+    fun backupNow() {
+        if (cloudBusy.value) return
+        cloudBusy.value = true
+        viewModelScope.launch {
+            val result = CloudSync.manualBackup(getApplication())
+            cloudEvent.value = result.fold(
+                onSuccess = { "已备份到云端" },
+                onFailure = { "备份失败：${it.message}" },
+            )
+            cloudBusy.value = false
+        }
+    }
+
+    fun restoreFromCloud() {
+        if (cloudBusy.value) return
+        cloudBusy.value = true
+        viewModelScope.launch {
+            try {
+                CloudSync.restore(getApplication())
+                cloudEvent.value = "已从云端恢复全部数据"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                cloudEvent.value = "恢复失败：${e.message}"
+            }
+            cloudBusy.value = false
+        }
+    }
+
+    /** 退出云账号：只清本机 token，云端备份保留（换设备重新教务登录即可找回）。 */
+    fun logoutCloud() {
+        viewModelScope.launch { settings.clearCloudAccount() }
+    }
+
+    fun consumeCloudEvent() {
+        cloudEvent.value = null
+    }
 
     fun setHideInactiveCourses(hidden: Boolean) {
         viewModelScope.launch { settings.setHideInactiveCourses(hidden) }
@@ -82,14 +160,37 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 检查 GitHub 最新 release 与已装版本比对（进入设置页自动触发，可手动重查）。 */
+    /**
+     * 检查最新版本（进入设置页自动触发，可手动重查）。
+     * 优先自有服务器（国内可达、支持 force 强更与直链 APK）；服务器失败时回退 GitHub Releases。
+     */
     fun checkUpdate() {
         if (updateState.value is UpdateState.Checking) return
         updateState.value = UpdateState.Checking
         viewModelScope.launch {
-            updateState.value = fetchLatestRelease()
+            val fromServer = runCatching { fetchLatestFromServer() }
+                .getOrElse { if (it is CancellationException) throw it else null }
+            updateState.value = fromServer ?: fetchLatestRelease()
         }
     }
+
+    /** 自有服务器：GET /api/bs/app/latest，按 versionCode 数值比较。 */
+    private suspend fun fetchLatestFromServer(): UpdateState? = withContext(Dispatchers.IO) {
+        val installed = installedVersionCode() ?: return@withContext null
+        val latest = CloudApi.latestVersion()
+        if (latest.versionCode <= 0 || latest.versionName.isBlank()) return@withContext null
+        if (latest.versionCode > installed) {
+            UpdateState.Available(latest.versionName, latest.changelog, latest.url, latest.force)
+        } else {
+            UpdateState.UpToDate
+        }
+    }
+
+    private fun installedVersionCode(): Int? = runCatching {
+        val info = getApplication<Application>().packageManager
+            .getPackageInfo(getApplication<Application>().packageName, 0)
+        if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode.toInt() else info.versionCode
+    }.getOrNull()
 
     private suspend fun fetchLatestRelease(): UpdateState = withContext(Dispatchers.IO) {
         val installed = runCatching {

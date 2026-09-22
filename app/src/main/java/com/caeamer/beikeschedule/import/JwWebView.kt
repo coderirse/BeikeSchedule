@@ -6,6 +6,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
@@ -79,8 +81,28 @@ fun JwWebView(
     onPageStarted: () -> Unit = {},
     onPageError: (String) -> Unit = {},
     onPageProgress: (Int) -> Unit = {},
+    /**
+     * 每次子资源请求回调（含 iframe 内请求）。
+     * 云登录页用它监听贝壳教学平台微认证 iframe 的 qrpage/qrimg 请求，
+     * 原生取到二维码 sid（不依赖注入脚本与页面自身轮询，见 CloudLoginViewModel）。
+     */
+    onSubresourceRequest: ((android.webkit.WebResourceRequest) -> Unit)? = null,
+    /**
+     * document-start 注入脚本（按 origin 规则，**含 iframe**）：用于在页面脚本运行前
+     * 改写其行为。云登录页用它禁用微认证页自带的二维码轮询（该轮询与 App 原生轮询
+     * 会互相触发 205 并发冲突，页面把 205 当"二维码已失效"处理并停止轮询）。
+     */
+    documentStartScripts: List<Pair<Set<String>, String>> = emptyList(),
 ) {
     val context = LocalContext.current
+    // document-start 脚本句柄：离开组合时要移除，否则 WebView 复用时脚本重复注入
+    val scriptHandlers = remember { mutableListOf<androidx.webkit.ScriptHandler>() }
+    DisposableEffect(documentStartScripts) {
+        onDispose {
+            scriptHandlers.forEach { runCatching { it.remove() } }
+            scriptHandlers.clear()
+        }
+    }
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = {
@@ -121,6 +143,13 @@ fun JwWebView(
                     if (!isJwHost(host)) return@addWebMessageListener
                     message.data?.let(bridge::dispatch)
                 }
+                // document-start 脚本：平台保证在匹配 origin 的每个 frame（含 iframe）
+                // 的页面脚本之前执行；句柄记下来供离开组合时移除
+                documentStartScripts.forEach { (origins, script) ->
+                    runCatching {
+                        scriptHandlers += WebViewCompat.addDocumentStartJavaScript(this, script, origins)
+                    }
+                }
                 webViewClient = object : WebViewClient() {
                     // 域名白名单：站外链接一律转交系统浏览器，避免把教务会话带进任意站点。
                     // （桥的可见范围另有平台级 origin 限定，见 BRIDGE_ORIGINS。）
@@ -147,19 +176,29 @@ fun JwWebView(
                     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                         onPageStarted()
                         // 尽早注入，MutationObserver 会在 meta 标签解析出来时立即改写。
-                        // 只对白名单域名注入：此前对每个页面（含站外页）都注入。
-                        if (isAllowlistedUrl(url)) view.evaluateJavascript(PAGE_FIX_JS, null)
+                        // 只对教务本体域注入：SSO 的 ac-h5 是移动版页面，改写 viewport 反而会把
+                        // 二维码等元素缩成小图；ac-h5 自带移动适配，不需要也不应被修正。
+                        if (isByytUrl(url)) view.evaluateJavascript(PAGE_FIX_JS, null)
                     }
 
                     override fun onPageFinished(view: WebView, url: String) {
                         // 兜底注入（脚本幂等），覆盖 onPageStarted 时机过晚的情况
-                        if (isAllowlistedUrl(url)) view.evaluateJavascript(PAGE_FIX_JS, null)
+                        if (isByytUrl(url)) view.evaluateJavascript(PAGE_FIX_JS, null)
                         // 主页面判定改为 host + path **精确**匹配：
                         // 此前是 url.contains("/authentication/main")，任意域名下含该路径的
                         // URL（如 https://evil.example/authentication/main）都会触发抓取脚本注入。
                         if (isMainPageUrl(url)) {
                             view.post { onMainPage() }
                         }
+                    }
+
+                    /** 子资源请求（含 iframe）：云登录页据此原生捕获微认证二维码 sid。 */
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: android.webkit.WebResourceRequest,
+                    ): android.webkit.WebResourceResponse? {
+                        onSubresourceRequest?.invoke(request)
+                        return null
                     }
 
                     override fun onReceivedError(
@@ -216,12 +255,11 @@ fun JwWebView(
 internal fun isJwHost(host: String): Boolean =
     host == "ustb.edu.cn" || host.endsWith(".ustb.edu.cn")
 
-/** URL 是否属于白名单域名（解析失败按不在白名单处理）。 */
-private fun isAllowlistedUrl(url: String): Boolean =
+/** 教务系统本体域（页面缩放修正 PAGE_FIX_JS 只对它注入，见 JwWebView 注释）。 */
+private fun isByytUrl(url: String): Boolean =
     runCatching { android.net.Uri.parse(url) }.getOrNull()
         ?.takeIf { it.scheme == "https" }
-        ?.host?.lowercase()
-        ?.let { isJwHost(it) } == true
+        ?.host?.lowercase() == "byyt.ustb.edu.cn"
 
 /**
  * 是否为教务主页面：**host 必须在白名单内**且 path 精确等于 [MAIN_PAGE_MARK]。

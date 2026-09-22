@@ -1,0 +1,169 @@
+package com.caeamer.beikeschedule.ui.cloud
+
+import android.app.Application
+import android.util.Log
+import androidx.lifecycle.AndroidViewModel
+import com.caeamer.beikeschedule.BuildConfig
+import androidx.lifecycle.viewModelScope
+import com.caeamer.beikeschedule.data.backup.CloudSync
+import com.caeamer.beikeschedule.data.pref.SettingsStore
+import com.caeamer.beikeschedule.data.remote.CloudApi
+import com.caeamer.beikeschedule.data.remote.QrAuthApi
+import com.caeamer.beikeschedule.data.remote.QrTargetTracker
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
+
+/** 云登录流程状态：Browsing（登录教务）→ SigningIn（换 token）→ Done / Failed。 */
+sealed interface CloudLoginUiState {
+    data object Browsing : CloudLoginUiState
+    data class SigningIn(val xh: String) : CloudLoginUiState
+    data object Done : CloudLoginUiState
+    data class Failed(val message: String) : CloudLoginUiState
+}
+
+/**
+ * 云登录：教务统一认证成功后抓到学号 → 向服务端换 token（账号 = 学号，登录即注册）。
+ * 服务端 401/网络异常都可重试（重新注入身份脚本即可，教务会话还在）。
+ *
+ * **扫码的可靠路径**：SSO 页面的二维码 iframe 自带轮询在慢网下会 abort→reload→换码
+ * （见 [QrAuthApi] 注释），这里不依赖它——WebView 的子资源请求经 [onSubresource]
+ * 原生捕获二维码 sid，App 自己长轮询，授权到达后由界面把主框架导航到 SSO 回调。
+ * 同时对外提供"最新 sid"给"复制微信授权链接"用（同机扫码的替代入口）。
+ */
+class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val settings = SettingsStore(app)
+    private val _state = MutableStateFlow<CloudLoginUiState>(CloudLoginUiState.Browsing)
+    val state: StateFlow<CloudLoginUiState> = _state
+
+    private val tracker = QrTargetTracker()
+
+    /** 当前展示二维码的 sid（空 = 还没有二维码）。 */
+    private val _qrSid = MutableStateFlow<String?>(null)
+    val qrSid: StateFlow<String?> = _qrSid
+
+    /** 二维码被微信授权后，应导航到的 SSO 回调地址（非空即已授权）。 */
+    private val _authorizedUrl = MutableStateFlow<String?>(null)
+    val authorizedUrl: StateFlow<String?> = _authorizedUrl
+
+    /** 原生轮询看到的扫码进度提示（页面自带轮询已被禁用，状态由 App 提供）。 */
+    private val _qrHint = MutableStateFlow<String?>(null)
+    val qrHint: StateFlow<String?> = _qrHint
+
+    private val pollingJobs = ConcurrentHashMap<String, Job>()
+
+    /** WebView 子资源请求（WebView IO 线程调用）。 */
+    fun onSubresource(url: String) {
+        val changed = tracker.onRequest(url)
+        if (!changed) return
+        _qrSid.value = tracker.latestSid
+        _qrHint.value = null // 新二维码：清掉上一张的状态提示
+        if (BuildConfig.DEBUG) Log.d(TAG, "qr sid captured: ${tracker.latestSid}")
+        val keep = tracker.snapshot().takeLast(MAX_POLL_TARGETS)
+        val keepSids = keep.map { it.sid }.toSet()
+        // 页面会不断刷新二维码，被淘汰的 sid 不再轮询
+        pollingJobs.entries.filter { it.key !in keepSids }.forEach { (sid, job) ->
+            pollingJobs.remove(sid)?.cancel()
+        }
+        keep.forEach(::ensurePolling)
+    }
+
+    private fun ensurePolling(target: QrAuthApi.QrTarget) {
+        if (_authorizedUrl.value != null) return
+        if (pollingJobs.containsKey(target.sid)) return
+        pollingJobs[target.sid] = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                while (isActive && _authorizedUrl.value == null) {
+                    val qrState = runCatching { QrAuthApi.pollState(target.sid) }.getOrNull()
+                    if (qrState == null) {
+                        // 网络失败：不终止（慢网下常见），稍后重试；sid 真失效会以业务码返回
+                        delay(POLL_INTERVAL_MS)
+                        continue
+                    }
+                    when (qrState.code) {
+                        1 -> {
+                            qrState.authCode?.let { code ->
+                                if (BuildConfig.DEBUG) {
+                                    Log.d(TAG, "qr poll sid=${target.sid} code=1 -> navigate")
+                                }
+                                _authorizedUrl.value = QrAuthApi.authorizeUrl(target, code)
+                            }
+                            break
+                        }
+                        // 二维码失效/sid 非法/方法不允许等：该 sid 到此为止
+                        3, 101, 102, 202, 203 -> {
+                            if (BuildConfig.DEBUG) {
+                                Log.d(TAG, "qr poll sid=${target.sid} dead code=${qrState.code}")
+                            }
+                            _qrHint.value = "二维码已失效，请点页面上的刷新或重进本页"
+                            break
+                        }
+                        // 2=已扫码待确认：给用户一个明确提示（页面不再自己显示状态）
+                        2 -> {
+                            _qrHint.value = "微信已扫码，请在微信里点确认授权"
+                            delay(POLL_INTERVAL_MS)
+                        }
+                        // 4=等待超时、205=并发冲突：继续等
+                        else -> {
+                            if (BuildConfig.DEBUG) {
+                                Log.d(TAG, "qr poll sid=${target.sid} code=${qrState.code}")
+                            }
+                            delay(POLL_INTERVAL_MS)
+                        }
+                    }
+                }
+            } finally {
+                pollingJobs.remove(target.sid)
+            }
+        }
+    }
+
+    /** 身份脚本回传学号：调 /api/bs/auth/login 换 token 并落盘。 */
+    fun onIdentity(xh: String, xm: String) {
+        if (_state.value is CloudLoginUiState.SigningIn) return // 防重复提交
+        if (xh.isBlank()) {
+            _state.value = CloudLoginUiState.Failed("未获取到学号，请确认已登录教务系统")
+            return
+        }
+        _state.value = CloudLoginUiState.SigningIn(xh)
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { CloudApi.login(xh, xm) }
+                settings.saveCloudAccount(
+                    SettingsStore.CloudAccount(xh = result.xh, name = result.name, token = result.token),
+                )
+                _state.value = CloudLoginUiState.Done
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = CloudLoginUiState.Failed(e.message ?: "登录失败，请重试")
+            }
+        }
+    }
+
+    fun onError(message: String) {
+        if (_state.value is CloudLoginUiState.SigningIn) return // 换 token 失败有自己的错误展示
+        _state.value = CloudLoginUiState.Failed(message)
+    }
+
+    /** 从失败态重试：回 Browsing 重新注入身份脚本（教务会话通常仍在）。 */
+    fun retry() {
+        _state.value = CloudLoginUiState.Browsing
+    }
+
+    private companion object {
+        const val TAG = "BeikeCloud"
+
+        /** 并发长轮询的 sid 上限（每个 sid 同一时刻只有一条在途请求）。 */
+        const val MAX_POLL_TARGETS = 3
+        const val POLL_INTERVAL_MS = 600L
+    }
+}

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    默认全量禁用明文流量（targetSdk 28+ 的默认语义在这里显式写明，便于审计）。
+    唯一例外：api.caeamer.com 未做 ICP 备案，阿里云会拦截走域名的流量
+    （HTTPS 握手被 reset），备案完成前与 showwe 客户端同策略——仅对该 IP
+    放行明文 HTTP。备案完成后删除 domain-config 并把 BASE_URL 换回 https 域名。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">112.125.88.178</domain>
+    </domain-config>
+</network-security-config>

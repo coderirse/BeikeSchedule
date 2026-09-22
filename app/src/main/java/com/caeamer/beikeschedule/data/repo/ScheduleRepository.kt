@@ -2,6 +2,7 @@ package com.caeamer.beikeschedule.data.repo
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.caeamer.beikeschedule.data.backup.CloudSync
 import com.caeamer.beikeschedule.data.local.AppDatabase
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.local.ExamEntity
@@ -17,7 +18,7 @@ import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
 
 /** UI 唯一数据入口。 */
-class ScheduleRepository(context: Context) {
+class ScheduleRepository(private val context: Context) {
 
     private val db = AppDatabase.get(context)
     private val courseDao = db.courseDao()
@@ -26,6 +27,9 @@ class ScheduleRepository(context: Context) {
     private val examDao = db.examDao()
     private val todoDao = db.todoDao()
     val settings = SettingsStore(context)
+
+    /** 云同步脏标记：所有用户数据变更点调用（CloudSync 内部判断是否真的需要上传）。 */
+    private fun markCloudDirty() = CloudSync.markDirty(context)
 
     val courses: Flow<List<CourseEntity>> = courseDao.observeAll()
     val sectionTimes: Flow<List<SectionTimeEntity>> = sectionTimeDao.observeAll()
@@ -37,12 +41,29 @@ class ScheduleRepository(context: Context) {
     suspend fun replaceGrades(grades: List<GradeEntity>) = db.withTransaction {
         gradeDao.clear()
         gradeDao.insertAll(grades)
-    }
+    }.also { markCloudDirty() }
 
     /** 覆盖式写入考试安排（仅当前学期）。 */
     suspend fun replaceExams(exams: List<ExamEntity>) = db.withTransaction {
         examDao.clear()
         examDao.insertAll(exams)
+    }.also { markCloudDirty() }
+
+    // —— 云恢复专用（整包覆盖，见 data/backup/CloudSnapshotCodec）——
+
+    /** 清空指定来源的课程（云恢复用：三个 source 全清 = 整表清空）。 */
+    suspend fun clearCoursesBySource(source: Int) = courseDao.deleteBySource(source)
+
+    /** 覆盖式写入节次时间。 */
+    suspend fun replaceSectionTimes(sections: List<SectionTimeEntity>) = db.withTransaction {
+        sectionTimeDao.clear()
+        sectionTimeDao.insertAll(sections)
+    }
+
+    /** 覆盖式写入全部日程（云恢复用：清空后整表插入）。 */
+    suspend fun replaceAllTodos(todos: List<TodoEntity>) = db.withTransaction {
+        todoDao.clear()
+        todoDao.insertAll(todos)
     }
 
     /**
@@ -79,14 +100,14 @@ class ScheduleRepository(context: Context) {
         sectionTimeDao.clear()
         sectionTimeDao.insertAll(sectionTimes)
         if (clearSample) courseDao.deleteBySource(CourseEntity.SOURCE_SAMPLE)
-    }
+    }.also { markCloudDirty() }
 
     /** 编辑替换：同一事务内删除旧行并插入展开后的新行，中途失败不会丢课。 */
     suspend fun replaceCourses(deleteIds: List<Long>, inserts: List<CourseEntity>) =
         db.withTransaction {
             deleteIds.forEach { courseDao.deleteById(it) }
             courseDao.insertAll(inserts)
-        }
+        }.also { markCloudDirty() }
 
     /**
      * 教务课程颜色去重：
@@ -97,33 +118,41 @@ class ScheduleRepository(context: Context) {
      */
     suspend fun addManualCourse(course: CourseEntity) =
         courseDao.insert(course.copy(source = CourseEntity.SOURCE_MANUAL, taskId = ""))
+            .also { markCloudDirty() }
 
     /** 原样插入课程行（保留 source，用于编辑展开后的多行写回）。 */
-    suspend fun insertCourses(courses: List<CourseEntity>) = courseDao.insertAll(courses)
+    suspend fun insertCourses(courses: List<CourseEntity>) =
+        courseDao.insertAll(courses).also { markCloudDirty() }
 
     /** 更新单行课程（手动课程编辑走保存替换时较少用；编辑展开用 insertCourses+deleteCourse）。 */
-    suspend fun updateCourse(course: CourseEntity) = courseDao.update(course)
+    suspend fun updateCourse(course: CourseEntity) =
+        courseDao.update(course).also { markCloudDirty() }
 
     /** 删除一门课的指定 id（手动课程删除；编辑替换旧行时也用它）。 */
-    suspend fun deleteCourse(id: Long) = courseDao.deleteById(id)
+    suspend fun deleteCourse(id: Long) =
+        courseDao.deleteById(id).also { markCloudDirty() }
 
     // —— 日程 ——
 
     /** 新增或更新一条日程（id=0 为新增，Room 自增生主键）。 */
-    suspend fun upsertTodo(todo: TodoEntity) = todoDao.upsert(todo)
+    suspend fun upsertTodo(todo: TodoEntity) =
+        todoDao.upsert(todo).also { markCloudDirty() }
 
     /** 删除一条日程。 */
-    suspend fun deleteTodo(id: Long) = todoDao.deleteById(id)
+    suspend fun deleteTodo(id: Long) =
+        todoDao.deleteById(id).also { markCloudDirty() }
 
     /** 打卡 / 取消打卡：只更新"最近完成日期"，重复任务次日自然复活。 */
-    suspend fun setTodoDone(id: Long, doneDate: String) = todoDao.setDoneDate(id, doneDate)
+    suspend fun setTodoDone(id: Long, doneDate: String) =
+        todoDao.setDoneDate(id, doneDate).also { markCloudDirty() }
 
     /** 隐藏/恢复教务导入课程（隐藏 = 不显示但保留；手动/示例删除用 deleteCourse）。 */
-    suspend fun setCourseHidden(id: Long, hidden: Boolean) = courseDao.setHidden(id, hidden)
+    suspend fun setCourseHidden(id: Long, hidden: Boolean) =
+        courseDao.setHidden(id, hidden).also { markCloudDirty() }
 
     /** 整组隐藏/恢复：单条 UPDATE，不会出现"同一张卡一半隐藏一半显示"的中间态。 */
     suspend fun setCoursesHidden(ids: List<Long>, hidden: Boolean) =
-        courseDao.setHiddenForIds(ids, hidden)
+        courseDao.setHiddenForIds(ids, hidden).also { markCloudDirty() }
 
     /** 按源 + 课程名取全部行（含隐藏），用于多时段课程的整体编辑。 */
     fun observeCourseByName(sources: List<Int>, name: String): Flow<List<CourseEntity>> =
@@ -137,9 +166,10 @@ class ScheduleRepository(context: Context) {
             if (sectionTimeDao.getAll().isEmpty()) {
                 sectionTimeDao.insertAll(sectionTimes)
             }
-        }
+        }.also { markCloudDirty() }
 
-    suspend fun clearSampleData() = courseDao.deleteBySource(CourseEntity.SOURCE_SAMPLE)
+    suspend fun clearSampleData() =
+        courseDao.deleteBySource(CourseEntity.SOURCE_SAMPLE).also { markCloudDirty() }
 
     companion object {
         /**

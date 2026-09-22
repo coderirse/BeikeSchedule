@@ -24,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -35,6 +36,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +57,10 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Class
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Grade
 import androidx.compose.material.icons.filled.Groups
@@ -80,21 +86,41 @@ import com.caeamer.beikeschedule.import.clearJwSession
 import com.caeamer.beikeschedule.ui.settings.SettingsViewModel
 import com.caeamer.beikeschedule.ui.settings.UpdateState
 
-/** 我的 Tab：学籍信息 + 主题 / 检查更新 / GitHub / 版本号 / 清缓存 + 版权。 */
+/** 我的 Tab：学籍信息 + 云同步 + 主题 / 检查更新 / GitHub / 版本号 / 清缓存 + 版权。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
+fun ProfileScreen(
+    viewModel: SettingsViewModel = viewModel(),
+    /** 未登录时点「云同步」→ 打开全屏教务登录页（由宿主 MainActivity 承载）。 */
+    onCloudLoginClick: () -> Unit = {},
+) {
     // withLifecycle：退到后台停止收集
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsStateWithLifecycle()
     val update by viewModel.update.collectAsStateWithLifecycle()
     val studentProfile by viewModel.studentProfile.collectAsStateWithLifecycle()
     val appVersion by viewModel.appVersion.collectAsStateWithLifecycle()
+    val cloudAccount by viewModel.cloudAccount.collectAsStateWithLifecycle()
+    val cloudSyncEnabled by viewModel.cloudSyncEnabled.collectAsStateWithLifecycle()
+    val cloudLastBackupAt by viewModel.cloudLastBackupAt.collectAsStateWithLifecycle()
+    val cloudBusy by viewModel.cloudBusy.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showUpdateDialog by remember { mutableStateOf(false) }
     var showClearCacheConfirm by remember { mutableStateOf(false) }
     var showLogoutConfirm by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
+    var showCloudLogoutConfirm by remember { mutableStateOf(false) }
+    var showCloudRestoreConfirm by remember { mutableStateOf(false) }
+
+    // 云同步操作结果 → Toast（一次性事件，消费即清）
+    LaunchedEffect(Unit) {
+        viewModel.cloudEvent.collect { message ->
+            if (!message.isNullOrBlank()) {
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                viewModel.consumeCloudEvent()
+            }
+        }
+    }
 
     Scaffold(
         // 外层 Scaffold（MainActivity）已用 navigationBarsPadding 预留底部 Tab 栏高度，
@@ -185,6 +211,75 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
 
             Spacer(Modifier.height(16.dp))
 
+            // —— 云同步 ——（账号 = 学号；opt-in，默认关闭，见 README 隐私说明）
+            Text(
+                "云同步",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            if (!cloudAccount.isLoggedIn) {
+                SettingsItemRow(
+                    icon = { Icon(Icons.Default.CloudOff, null, Modifier.size(20.dp)) },
+                    title = "云同步",
+                    value = "未登录 · 用教务账号（统一身份认证）登录后可备份与恢复课表、日程、成绩",
+                    trailing = {
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    onClick = onCloudLoginClick,
+                )
+            } else {
+                val who = cloudAccount.name.ifBlank { cloudAccount.xh }
+                SettingsItemRow(
+                    icon = { Icon(Icons.Default.Cloud, null, Modifier.size(20.dp)) },
+                    title = "云同步",
+                    value = if (cloudSyncEnabled) {
+                        "已登录 " + who + " · 课表/日程/成绩等数据自动备份到云端"
+                    } else {
+                        "已登录 " + who + " · 已关闭，开启后立即做一次全量备份"
+                    },
+                    trailing = { Switch(checked = cloudSyncEnabled, onCheckedChange = null) },
+                    onClick = { viewModel.setCloudSyncEnabled(!cloudSyncEnabled) },
+                    toggleRole = true,
+                    toggleValue = cloudSyncEnabled,
+                )
+                SettingsItemRow(
+                    icon = { Icon(Icons.Default.CloudUpload, null, Modifier.size(20.dp)) },
+                    title = "立即备份",
+                    value = formatBackupTime(cloudLastBackupAt),
+                    trailing = if (cloudBusy) {
+                        {
+                            CircularProgressIndicator(
+                                Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                    } else {
+                        { TextButton(onClick = { viewModel.backupNow() }) { Text("备份") } }
+                    },
+                    onClick = { if (!cloudBusy) viewModel.backupNow() },
+                )
+                SettingsItemRow(
+                    icon = { Icon(Icons.Default.CloudDownload, null, Modifier.size(20.dp)) },
+                    title = "从云端恢复",
+                    value = "用云端备份覆盖本机全部数据（换机 / 重装后使用）",
+                    onClick = { if (!cloudBusy) showCloudRestoreConfirm = true },
+                )
+                SettingsItemRow(
+                    icon = { Icon(Icons.Default.Logout, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error) },
+                    title = "退出云账号",
+                    value = "清除本机登录状态；云端备份保留，重新登录即可找回",
+                    destructive = true,
+                    onClick = { showCloudLogoutConfirm = true },
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
             // —— 通用功能 ——（每行独立卡片：图标 + 功能名 + 右侧按钮）
             Text(
                 "通用",
@@ -197,7 +292,7 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                 is UpdateState.UpToDate -> "已是最新版本"
                 is UpdateState.Available -> "发现新版本 v${u.latestVersion}"
                 is UpdateState.Failed -> u.message
-                UpdateState.Idle -> "检查 GitHub Releases"
+                UpdateState.Idle -> "检查更新"
             }
             SettingsItemRow(
                 icon = { Icon(Icons.Default.SystemUpdate, null, Modifier.size(20.dp)) },
@@ -385,20 +480,37 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
     if (showUpdateDialog) {
         val u = update
         if (u is UpdateState.Available) {
+            // force 版本：强制更新，弹窗不可点击外部/返回键关闭，也不给"关闭"按钮
             AlertDialog(
-                onDismissRequest = { showUpdateDialog = false },
+                onDismissRequest = { if (!u.force) showUpdateDialog = false },
                 title = { Text("发现新版本 v${u.latestVersion}") },
-                text = { if (u.notes.isNotBlank()) Text(u.notes, style = MaterialTheme.typography.bodySmall) },
+                text = {
+                    Column {
+                        if (u.notes.isNotBlank()) {
+                            Text(u.notes, style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (u.force) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "此版本为必要更新，请升级后继续使用",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                },
                 confirmButton = {
                     TextButton(onClick = {
                         context.openExternal(
                             Intent(Intent.ACTION_VIEW, Uri.parse(u.url)),
                             "未找到可打开网页的应用",
                         )
-                        showUpdateDialog = false
+                        if (!u.force) showUpdateDialog = false
                     }) { Text("前往下载") }
                 },
-                dismissButton = { TextButton(onClick = { showUpdateDialog = false }) { Text("关闭") } },
+                dismissButton = if (!u.force) {
+                    { TextButton(onClick = { showUpdateDialog = false }) { Text("关闭") } }
+                } else null,
             )
         }
     }
@@ -462,6 +574,46 @@ fun ProfileScreen(viewModel: SettingsViewModel = viewModel()) {
                 }) { Text("清除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { showClearCacheConfirm = false }) { Text("取消") } },
+        )
+    }
+
+    if (showCloudRestoreConfirm) {
+        AlertDialog(
+            onDismissRequest = { showCloudRestoreConfirm = false },
+            title = { Text("从云端恢复") },
+            text = {
+                Text(
+                    "将用云端备份整包覆盖本机数据：课表、日程、成绩、考试、学业进度与相关设置。" +
+                        "本机与云端不一致的改动会丢失（以云端为准）。是否继续？",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCloudRestoreConfirm = false
+                    viewModel.restoreFromCloud()
+                }) { Text("恢复") }
+            },
+            dismissButton = { TextButton(onClick = { showCloudRestoreConfirm = false }) { Text("取消") } },
+        )
+    }
+
+    if (showCloudLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showCloudLogoutConfirm = false },
+            title = { Text("退出云账号") },
+            text = {
+                Text(
+                    "将清除本机保存的云登录状态（云端备份不会删除）。" +
+                        "之后重新用教务账号登录即可继续备份与恢复。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCloudLogoutConfirm = false
+                    viewModel.logoutCloud()
+                }) { Text("退出登录", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showCloudLogoutConfirm = false }) { Text("取消") } },
         )
     }
 
@@ -590,4 +742,13 @@ private fun Context.openExternal(intent: Intent, unavailableHint: String) {
     runCatching { startActivity(intent) }.onFailure {
         Toast.makeText(this, unavailableHint, Toast.LENGTH_SHORT).show()
     }
+}
+
+/** 上次备份时间展示："从未备份" / "yyyy-MM-dd HH:mm"。 */
+private fun formatBackupTime(at: Long): String {
+    if (at <= 0L) return "从未备份"
+    return runCatching {
+        val t = java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneId.systemDefault())
+        "%04d-%02d-%02d %02d:%02d".format(t.year, t.monthValue, t.dayOfMonth, t.hour, t.minute)
+    }.getOrDefault("从未备份")
 }
