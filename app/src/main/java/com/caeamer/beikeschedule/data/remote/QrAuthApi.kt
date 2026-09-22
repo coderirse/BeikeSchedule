@@ -4,6 +4,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -45,7 +50,10 @@ object QrAuthApi {
     private data class StateResponse(
         val code: Int = -1,
         val message: String = "",
-        val data: String? = null,
+        // 服务端可能是纯字符串，也可能是 {authCode/auth_code/...} 对象；用 JsonElement 兼容
+        val data: JsonElement? = null,
+        val authCode: String? = null,
+        val auth_code: String? = null,
     )
 
     data class QrState(val code: Int, val authCode: String? = null)
@@ -59,10 +67,42 @@ object QrAuthApi {
         response.use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
             val text = resp.body?.string().orEmpty()
-            val parsed = json.decodeFromString(StateResponse.serializer(), text)
-            QrState(code = parsed.code, authCode = parsed.data)
+            val parsed = runCatching {
+                json.decodeFromString(StateResponse.serializer(), text)
+            }.getOrElse {
+                throw IOException("状态响应格式异常")
+            }
+            QrState(
+                code = parsed.code,
+                authCode = extractAuthCode(parsed.authCode, parsed.auth_code, parsed.data),
+            )
         }
     }
+
+    /**
+     * 从状态响应里取授权码：兼容字符串 / `data` 为字符串 / `{authCode|auth_code|code}` 对象。
+     * code=1 但取不到时返回 null（调用方应继续轮询，不能直接放弃）。
+     */
+    internal fun extractAuthCode(vararg candidates: Any?): String? {
+        for (c in candidates) {
+            when (c) {
+                null -> Unit
+                is String -> c.trim().takeIf { it.isNotEmpty() }?.let { return it }
+                is JsonNull -> Unit
+                is JsonPrimitive -> c.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+                is JsonObject -> {
+                    for (key in AUTH_CODE_KEYS) {
+                        val nested = c[key] ?: continue
+                        extractAuthCode(nested)?.let { return it }
+                    }
+                }
+                else -> Unit
+            }
+        }
+        return null
+    }
+
+    private val AUTH_CODE_KEYS = listOf("authCode", "auth_code", "authcode", "code", "token", "data")
 
     /** `/connect/state` 地址：sid 进 query，特殊字符由 [HttpUrl] 编码。 */
     internal fun pollStateUrl(sid: String): String =

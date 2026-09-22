@@ -78,22 +78,33 @@ fun CloudLoginScreen(
     // 微信授权到达（App 自己轮询到的，不依赖学校页面的轮询）：把主框架推到 SSO 回调。
     // 之后 SSO 种下会话并跳回教务系统主页 → onMainPage → 自动抓学号。
     // 勿打完整 URL：含 auth_code/rand_token，release 也会进 logcat。
+    // WebView 可能尚未创建/正在重建：稍等再 load，避免授权成功却丢了跳转。
     LaunchedEffect(authorizedUrl) {
         val url = authorizedUrl ?: return@LaunchedEffect
-        webView?.loadUrl(url)
+        repeat(30) {
+            val wv = webView
+            if (wv != null) {
+                wv.loadUrl(url)
+                return@LaunchedEffect
+            }
+            kotlinx.coroutines.delay(50)
+        }
     }
 
     val showingWebView = state !is CloudLoginUiState.Done
     LaunchedEffect(showingWebView) { onLightBackgroundVisible(showingWebView) }
     DisposableEffect(Unit) { onDispose { onLightBackgroundVisible(false) } }
 
-    // 抓学号（Browsing 手动重试也走这里）
+    // 抓学号（Browsing 手动重试也走这里）。
+    // 脚本内是相对路径 /user/me：必须在 byyt 主框架上注入，否则会打到 SSO/sis 域得到 404。
     val fetchIdentity: () -> Unit = {
         val wv = webView
-        if (wv == null) {
-            viewModel.onError("页面尚未就绪，请稍候再试")
-        } else {
-            wv.evaluateJavascript(loadAssetScript(context, "import/jw_identity.js"), null)
+        val pageUrl = wv?.url.orEmpty()
+        when {
+            wv == null -> viewModel.onError("页面尚未就绪，请稍候再试")
+            !isByytHost(pageUrl) ->
+                viewModel.onError("请先登录并进入教务系统主页后再获取（当前不在教务页）")
+            else -> wv.evaluateJavascript(loadAssetScript(context, "import/jw_identity.js"), null)
         }
     }
 
@@ -144,9 +155,12 @@ fun CloudLoginScreen(
                                     // 不再依赖"截图→相册扫码→回来页面已换码"的脆弱流程
                                     if (qrSid != null) {
                                         OutlinedButton(onClick = {
+                                            val sid = qrSid.orEmpty()
+                                            // 锁定该 sid：页面换码时继续轮询，微信里授权不会丢
+                                            viewModel.pinSidForWeChat(sid)
                                             copyToClipboard(
                                                 context,
-                                                QrAuthApi.wechatAuthorizeUrl(qrSid.orEmpty()),
+                                                QrAuthApi.wechatAuthorizeUrl(sid),
                                             )
                                         }) { Text("复制授权链接") }
                                     }
@@ -200,6 +214,13 @@ fun CloudLoginScreen(
             }
         }
     }
+}
+
+/** 当前页是否为教务本体域（byyt），身份脚本只能在这里跑。 */
+internal fun isByytHost(url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    val host = runCatching { java.net.URI(url).host?.lowercase() }.getOrNull()
+    return host == "byyt.ustb.edu.cn"
 }
 
 /** 复制微信授权链接到剪贴板（同机扫码的替代入口）。 */

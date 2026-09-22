@@ -60,20 +60,37 @@ class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
 
     private val pollingJobs = ConcurrentHashMap<String, Job>()
 
+    /**
+     * 用户通过「复制授权链接」锁定的 sid：页面刷新换码时**不得**停掉对它的轮询，
+     * 否则微信里刚点完授权，App 这边已经没人听结果了（表现为「授权了没反应」）。
+     */
+    @Volatile
+    private var pinnedSid: String? = null
+
     /** WebView 子资源请求（WebView IO 线程调用）。 */
     fun onSubresource(url: String) {
         val changed = tracker.onRequest(url)
         if (!changed) return
         _qrSid.value = tracker.latestSid
-        _qrHint.value = null // 新二维码：清掉上一张的状态提示
+        if (_authorizedUrl.value == null && _qrHint.value == null) {
+            // 有码可扫时给一点存在感，避免用户以为卡死
+            _qrHint.value = "等待扫码 · 也可点「复制授权链接」在微信里打开"
+        }
         if (BuildConfig.DEBUG) Log.d(TAG, "qr sid captured: ${tracker.latestSid}")
         val keep = tracker.snapshot().takeLast(MAX_POLL_TARGETS)
-        val keepSids = keep.map { it.sid }.toSet()
-        // 页面会不断刷新二维码，被淘汰的 sid 不再轮询
-        pollingJobs.entries.filter { it.key !in keepSids }.forEach { (sid, job) ->
+        val keepSids = keep.map { it.sid }.toSet() + listOfNotNull(pinnedSid, _qrSid.value)
+        // 页面会不断刷新二维码，被淘汰的 sid 不再轮询；**已锁定/正在展示的 sid 除外**
+        pollingJobs.entries.filter { it.key !in keepSids }.forEach { (sid, _) ->
             pollingJobs.remove(sid)?.cancel()
         }
         keep.forEach(::ensurePolling)
+        pinnedSid?.let { pin -> tracker.snapshot().find { it.sid == pin }?.let(::ensurePolling) }
+    }
+
+    /** 复制授权链接时锁定该 sid，保证微信侧授权结果一定有人轮询。 */
+    fun pinSidForWeChat(sid: String) {
+        pinnedSid = sid
+        tracker.snapshot().find { it.sid == sid }?.let(::ensurePolling)
     }
 
     private fun ensurePolling(target: QrAuthApi.QrTarget) {
@@ -81,21 +98,40 @@ class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
         if (pollingJobs.containsKey(target.sid)) return
         pollingJobs[target.sid] = viewModelScope.launch(Dispatchers.IO) {
             try {
+                var netFailures = 0
                 while (isActive && _authorizedUrl.value == null) {
-                    val qrState = runCatching { QrAuthApi.pollState(target.sid) }.getOrNull()
-                    if (qrState == null) {
-                        // 网络失败：不终止（慢网下常见），稍后重试；sid 真失效会以业务码返回
-                        delay(POLL_INTERVAL_MS)
+                    val qrState = try {
+                        QrAuthApi.pollState(target.sid).also { netFailures = 0 }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        netFailures++
+                        if (netFailures >= 3) {
+                            _qrHint.value = "网络异常，正在重试…（请检查网络/VPN）"
+                        }
+                        if (BuildConfig.DEBUG) {
+                            Log.d(TAG, "qr poll sid=${target.sid} error=${e.message}")
+                        }
+                        delay(POLL_INTERVAL_MS * 2)
                         continue
                     }
                     when (qrState.code) {
                         1 -> {
-                            qrState.authCode?.let { code ->
+                            val code = qrState.authCode
+                            if (code.isNullOrBlank()) {
+                                // 已授权但还没吐出 code：继续要，绝不能 break（否则永久卡住）
                                 if (BuildConfig.DEBUG) {
-                                    Log.d(TAG, "qr poll sid=${target.sid} code=1 -> navigate")
+                                    Log.d(TAG, "qr poll sid=${target.sid} code=1 missing authCode")
                                 }
-                                _authorizedUrl.value = QrAuthApi.authorizeUrl(target, code)
+                                _qrHint.value = "微信已确认授权，正在进入教务系统…"
+                                delay(POLL_INTERVAL_MS)
+                                continue
                             }
+                            if (BuildConfig.DEBUG) {
+                                Log.d(TAG, "qr poll sid=${target.sid} code=1 -> navigate")
+                            }
+                            _qrHint.value = "授权成功，正在进入教务系统…"
+                            _authorizedUrl.value = QrAuthApi.authorizeUrl(target, code)
                             break
                         }
                         // 二维码失效/sid 非法/方法不允许等：该 sid 到此为止
@@ -103,7 +139,11 @@ class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
                             if (BuildConfig.DEBUG) {
                                 Log.d(TAG, "qr poll sid=${target.sid} dead code=${qrState.code}")
                             }
-                            _qrHint.value = "二维码已失效，请点页面上的刷新或重进本页"
+                            if (target.sid != pinnedSid) {
+                                _qrHint.value = "二维码已失效，请点页面上的刷新或重进本页"
+                            } else {
+                                _qrHint.value = "授权链接已失效，请重新复制链接到微信确认"
+                            }
                             break
                         }
                         // 2=已扫码待确认：给用户一个明确提示（页面不再自己显示状态）
@@ -151,12 +191,27 @@ class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onError(message: String) {
         if (_state.value is CloudLoginUiState.SigningIn) return // 换 token 失败有自己的错误展示
-        _state.value = CloudLoginUiState.Failed(message)
+        _state.value = CloudLoginUiState.Failed(humanizeIdentityError(message))
     }
 
     /** 从失败态重试：回 Browsing 重新注入身份脚本（教务会话通常仍在）。 */
     fun retry() {
         _state.value = CloudLoginUiState.Browsing
+    }
+
+    /**
+     * 身份脚本/桥错误 → 中文。
+     * 脚本已改为 `教务接口 /user/me 返回 HTTP 404` 这类带路径文案；
+     * 兜底把历史的 `Error: HTTP 404` 也翻译掉，避免界面出现英文裸错误。
+     */
+    private fun humanizeIdentityError(message: String): String = when {
+        message.isBlank() -> "获取学号失败，请重试"
+        message.contains("当前不在教务页") -> message
+        message.contains("HTTP 404") && message.contains("教务接口") -> "$message（可能尚未登录或不在教务主页）"
+        message == "Error: HTTP 404" || message == "HTTP 404" ->
+            "教务接口返回 404，请先进入教务主页再获取"
+        message.startsWith("Error: ") -> message.removePrefix("Error: ")
+        else -> message
     }
 
     private companion object {
