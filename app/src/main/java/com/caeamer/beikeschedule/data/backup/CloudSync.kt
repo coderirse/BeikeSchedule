@@ -3,6 +3,7 @@ package com.caeamer.beikeschedule.data.backup
 import android.content.Context
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.remote.CloudApi
+import com.caeamer.beikeschedule.data.remote.CloudAuthException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -96,6 +97,10 @@ object CloudSync {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                // token 失效：清本地登录态，自动同步停下，避免静默反复失败
+                if (e is CloudAuthException) {
+                    runCatching { settings.clearCloudAccount() }
+                }
                 Result.failure(e)
             }
         }
@@ -111,15 +116,24 @@ object CloudSync {
         val account = settings.cloudAccount.first()
         if (!account.isLoggedIn) throw IllegalStateException("未登录云账号")
 
-        val envelope = CloudApi.getBackup(account.token)
-        if (!envelope.exists || envelope.data == null) {
-            throw IllegalStateException("云端还没有备份")
+        try {
+            val envelope = CloudApi.getBackup(account.token)
+            if (!envelope.exists || envelope.data == null) {
+                throw IllegalStateException("云端还没有备份")
+            }
+            val snapshot = CloudSnapshot.decode(envelope.data.toString())
+            CloudSnapshotCodec.applyRestore(app, snapshot)
+            settings.clearCloudDirty()
+            settings.setCloudLastBackupAt(envelope.updatedAt)
+            snapshot
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (e is CloudAuthException) {
+                runCatching { settings.clearCloudAccount() }
+            }
+            throw e
         }
-        val snapshot = CloudSnapshot.decode(envelope.data.toString())
-        CloudSnapshotCodec.applyRestore(app, snapshot)
-        settings.clearCloudDirty()
-        settings.setCloudLastBackupAt(envelope.updatedAt)
-        snapshot
     }
 
     private fun appVersionCode(context: Context): Int = runCatching {

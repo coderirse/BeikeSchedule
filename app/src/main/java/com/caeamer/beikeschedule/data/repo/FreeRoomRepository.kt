@@ -121,6 +121,13 @@ class FreeRoomRepository(
             // 排查线上问题时是最关键的线索（用户侧只会看到一句"暂时查不到空教室"）
             Log.w(TAG, "签名被拒，丢弃缓存的 csrkKey 后重试一次", ex)
             keyProvider.invalidate()
+            // 时钟偏慢同样表现为 token 被拒（窗口只向未来开放）；只重取 key 救不了时间问题
+            try {
+                keyProvider.syncClock()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            }
             val second = call(signed(forceRefresh = true))
             return second.getOrElse { throw it }
         }

@@ -91,7 +91,7 @@ object CloudApi {
 
     suspend fun getBackup(token: String): BackupEnvelope = withContext(Dispatchers.IO) {
         val request = authorized(Request.Builder().url("$BASE_URL$PATH_BACKUP").get(), token).build()
-        parseOrThrow(execute(request), PATH_BACKUP) { text ->
+        parseOrThrow(execute(request), PATH_BACKUP, authRequired = true) { text ->
             json.decodeFromString(BackupEnvelope.serializer(), text)
         }
     }
@@ -112,7 +112,7 @@ object CloudApi {
                 token,
             ).build()
             execute(request).use { resp ->
-                if (!resp.isSuccessful) throw IOException("${messageOf(resp)}（HTTP ${resp.code}）")
+                if (!resp.isSuccessful) throw httpError(resp, authRequired = true)
             }
         }
 
@@ -122,7 +122,7 @@ object CloudApi {
             token,
         ).build()
         execute(request).use { resp ->
-            if (!resp.isSuccessful) throw IOException("${messageOf(resp)}（HTTP ${resp.code}）")
+            if (!resp.isSuccessful) throw httpError(resp, authRequired = true)
         }
     }
 
@@ -163,13 +163,30 @@ object CloudApi {
     private inline fun <T> parseOrThrow(
         response: okhttp3.Response,
         path: String,
+        authRequired: Boolean = false,
         parse: (String) -> T,
     ): T = response.use { resp ->
-        if (!resp.isSuccessful) throw IOException("${messageOf(resp)}（HTTP ${resp.code}）")
+        if (!resp.isSuccessful) throw httpError(resp, authRequired, path)
         val text = resp.body?.string().orEmpty()
         runCatching { parse(text) }.getOrElse {
             throw IOException("$path 响应格式异常")
         }
+    }
+
+    /**
+     * HTTP 错误 → 异常。带 token 的接口 401 映射为 [CloudAuthException]，
+     * 上层据此清本地登录态并引导重新登录，而不是静默当网络失败重试。
+     */
+    private fun httpError(
+        resp: okhttp3.Response,
+        authRequired: Boolean,
+        @Suppress("UNUSED_PARAMETER") path: String = "",
+    ): IOException {
+        val message = messageOf(resp)
+        if (authRequired && resp.code == 401) {
+            return CloudAuthException(message.ifBlank { "登录已过期，请重新登录" })
+        }
+        return IOException("${message}（HTTP ${resp.code}）")
     }
 
     /** 服务端错误信息提取（{message: "..."}），取不到用通用文案。 */
@@ -178,3 +195,9 @@ object CloudApi {
         json.parseToJsonElement(text).jsonObject["message"]?.jsonPrimitive?.content
     }.getOrNull().takeUnless { it.isNullOrBlank() } ?: "请求失败"
 }
+
+/**
+ * 云 token 失效（带鉴权接口返回 401）。
+ * 上层应清本地登录态并引导重新登录，暂停自动同步。
+ */
+class CloudAuthException(message: String) : IOException(message)

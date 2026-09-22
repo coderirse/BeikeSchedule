@@ -112,6 +112,17 @@ class FreeRoomRepositoryTest {
     }
 
     @Test
+    fun `tokenRejected 重试前会重新校正服务器时钟`() = runBlocking {
+        // 时钟偏慢同样表现为 token 被拒；只重取 key 救不了时间问题
+        val keys = FakeKeys()
+        val api = FakeApi(buildingRejections = 1)
+        FreeRoomRepository(keys, api).loadMeta()
+
+        // loadMeta 开头 1 次 + 被拒重试前 1 次
+        assertEquals(2, keys.syncClockCount)
+    }
+
+    @Test
     fun `loadFreeRooms - 空教室请求被拒时同样自愈`() = runBlocking {
         val keys = FakeKeys()
         val api = FakeApi(roomRejections = 1)

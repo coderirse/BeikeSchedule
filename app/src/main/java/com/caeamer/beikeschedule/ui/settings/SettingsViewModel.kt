@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.caeamer.beikeschedule.data.backup.CloudSync
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.remote.CloudApi
+import com.caeamer.beikeschedule.data.remote.CloudAuthException
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.GradesParser
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
@@ -99,7 +100,14 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             val result = CloudSync.manualBackup(getApplication())
             cloudEvent.value = result.fold(
                 onSuccess = { "已备份到云端" },
-                onFailure = { "备份失败：${it.message}" },
+                onFailure = { e ->
+                    if (e.isAuthExpired()) {
+                        // CloudSync 已清 token；这里只负责文案
+                        "登录已过期，请重新登录云账号"
+                    } else {
+                        "备份失败：${e.message}"
+                    }
+                },
             )
             cloudBusy.value = false
         }
@@ -115,7 +123,12 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                cloudEvent.value = "恢复失败：${e.message}"
+                if (e.isAuthExpired()) {
+                    settings.clearCloudAccount()
+                    cloudEvent.value = "登录已过期，请重新登录云账号"
+                } else {
+                    cloudEvent.value = "恢复失败：${e.message}"
+                }
             }
             cloudBusy.value = false
         }
@@ -241,3 +254,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         const val SRTP_URL = "https://srtp.ustb.edu.cn"
     }
 }
+
+/** 异常是否为云 token 失效（含被包装一层的情况）。 */
+internal fun Throwable.isAuthExpired(): Boolean =
+    generateSequence(this) { it.cause }.any { it is CloudAuthException }
