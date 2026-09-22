@@ -8,6 +8,7 @@ import com.caeamer.beikeschedule.data.backup.CloudSync
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.remote.CloudApi
 import com.caeamer.beikeschedule.data.remote.CloudAuthException
+import com.caeamer.beikeschedule.data.remote.UpdateSignature
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.GradesParser
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
@@ -187,11 +188,17 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 自有服务器：GET /api/bs/app/latest，按 versionCode 数值比较。 */
+    /**
+     * 自有服务器：GET /api/bs/app/latest，按 versionCode 数值比较。
+     *
+     * **无签名 / 验签失败 → 返回 null 完全忽略自有源**（回退 GitHub）。
+     * 明文 HTTP 下 force + APK URL 可被 MITM 改写，未验签的元数据不得驱动更新。
+     */
     private suspend fun fetchLatestFromServer(): UpdateState? = withContext(Dispatchers.IO) {
         val installed = installedVersionCode() ?: return@withContext null
         val latest = CloudApi.latestVersion()
         if (latest.versionCode <= 0 || latest.versionName.isBlank()) return@withContext null
+        if (!UpdateSignature.verify(latest)) return@withContext null
         if (latest.versionCode > installed) {
             UpdateState.Available(latest.versionName, latest.changelog, latest.url, latest.force)
         } else {

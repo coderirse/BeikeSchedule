@@ -58,6 +58,8 @@ object CloudApi {
         val force: Boolean = false,
         val size: Long = 0,
         val url: String = "",
+        /** Ed25519 分离签名（Base64），覆盖上述字段的规范化 JSON，见 [UpdateSignature]。 */
+        val sig: String = "",
     )
 
     @Serializable
