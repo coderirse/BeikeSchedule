@@ -23,8 +23,8 @@ android {
         applicationId = "com.caeamer.beikeschedule"
         minSdk = 34
         targetSdk = 37
-        versionCode = 43
-        versionName = "1.3.2"
+        versionCode = 48
+        versionName = "1.3.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -44,8 +44,14 @@ android {
             applicationIdSuffix = ".debug"
         }
         release {
-            // 开启 R8 压缩/优化（依赖库均自带 consumer keep 规则：Compose/Room/kotlinx.serialization）
+            // 开启 R8 压缩/优化（依赖库均自带 consumer keep 规则：Compose/Room/kotlinx.serialization）。
+            // 规则文件必须显式声明：此前未声明 proguardFiles，R8 只靠 consumer rules 裸跑，
+            // 将来引入的反射/序列化多态只会在 release 运行时炸
             isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             // 资源裁剪：与 R8 配套，去掉未被引用的资源（APK 体积的主因仍是
             // material-icons-extended，这一步只收窄剩余部分）
             isShrinkResources = true

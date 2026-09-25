@@ -60,6 +60,8 @@ object CloudApi {
         val url: String = "",
         /** Ed25519 分离签名（Base64），覆盖上述字段的规范化 JSON，见 [UpdateSignature]。 */
         val sig: String = "",
+        /** APK 的 SHA-256（hex 小写）。仅当签名按新约定覆盖它时才可信（见 UpdateSignature.verifyDetailed）。 */
+        val apkSha256: String = "",
     )
 
     @Serializable
@@ -70,19 +72,38 @@ object CloudApi {
         val appVersionCode: Int = 0,
         // 快照本体保持为原始 JSON 对象，由 CloudSnapshot 反序列化，避免这里耦合字段
         val data: JsonObject? = null,
+        /** 签名覆盖的**原始快照字节串**（服务端原样下发）；验签走它而不是重序列化 data。 */
+        val snapshot: String? = null,
+        /** 服务端 Ed25519 签名（Base64），覆盖 [snapshot] 的 UTF-8 字节，见 [BackupSignature]。 */
+        val sig: String = "",
     )
 
-    /** 学号登录（登录即注册）。调用前提：教务统一认证已在 WebView 里成功登录。 */
-    suspend fun login(xh: String, xm: String): LoginResult = withContext(Dispatchers.IO) {
-        val body = json.encodeToString(
-            JsonObject.serializer(),
-            buildJsonObject { put("xh", xh); put("xm", xm) },
-        )
+    /**
+     * 学号登录（登录即注册）。调用前提：教务统一认证已在 WebView 里成功登录。
+     *
+     * [jwTicket] = 教务 SESSION 的密封票据（见 [JwSessionTicket]）：服务端拿它向教务系统
+     * 核实"登录的人确实是这个学号"。取不到票据时传 null，服务端会明确要求升级重试
+     * （旧版仅校验学号+姓名，等于谁都能读走别人的备份，服务端已不再为新账号放行）。
+     */
+    suspend fun login(xh: String, xm: String, jwTicket: String? = null): LoginResult =
+        withContext(Dispatchers.IO) {
+        val body = loginBody(xh, xm, jwTicket)
         val response = post(PATH_LOGIN, body, token = null)
         parseOrThrow(response, PATH_LOGIN) { text ->
             json.decodeFromString(LoginResult.serializer(), text)
         }
     }
+
+    /** 登录请求体（纯逻辑，JVM 可单测）：票据为空时不写字段，避免发 `"jwTicket":null`。 */
+    internal fun loginBody(xh: String, xm: String, jwTicket: String?): String =
+        json.encodeToString(
+            JsonObject.serializer(),
+            buildJsonObject {
+                put("xh", xh)
+                put("xm", xm)
+                if (!jwTicket.isNullOrBlank()) put("jwTicket", jwTicket)
+            },
+        )
 
     suspend fun latestVersion(): LatestVersion = withContext(Dispatchers.IO) {
         val request = Request.Builder().url("$BASE_URL$PATH_LATEST").get().build()

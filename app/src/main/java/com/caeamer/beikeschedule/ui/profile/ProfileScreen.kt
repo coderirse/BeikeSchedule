@@ -41,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,14 +77,13 @@ import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
-// 上面 6-17 行已 import 过 Column/Row/Spacer/fillMaxSize…，此处只保留 Box 与新增的 WindowInsets，
-// 原先这 12 行是重复粘贴（Kotlin 只报 Duplicate import 警告，故一直被忽略）
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.R
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.import.clearJwSession
 import com.caeamer.beikeschedule.ui.settings.SettingsViewModel
+import com.caeamer.beikeschedule.ui.settings.UpdateInstaller
 import com.caeamer.beikeschedule.ui.settings.UpdateState
 
 /** 我的 Tab：学籍信息 + 云同步 + 主题 / 检查更新 / GitHub / 版本号 / 清缓存 + 版权。 */
@@ -105,12 +105,19 @@ fun ProfileScreen(
     val cloudLastBackupAt by viewModel.cloudLastBackupAt.collectAsStateWithLifecycle()
     val cloudBusy by viewModel.cloudBusy.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    var showUpdateDialog by remember { mutableStateOf(false) }
-    var showClearCacheConfirm by remember { mutableStateOf(false) }
-    var showLogoutConfirm by remember { mutableStateOf(false) }
-    var showThemeDialog by remember { mutableStateOf(false) }
-    var showCloudLogoutConfirm by remember { mutableStateOf(false) }
-    var showCloudRestoreConfirm by remember { mutableStateOf(false) }
+    var showUpdateDialog by rememberSaveable { mutableStateOf(false) }
+    var showClearCacheConfirm by rememberSaveable { mutableStateOf(false) }
+    var showLogoutConfirm by rememberSaveable { mutableStateOf(false) }
+    var showThemeDialog by rememberSaveable { mutableStateOf(false) }
+    var showCloudLogoutConfirm by rememberSaveable { mutableStateOf(false) }
+    var showCloudRestoreConfirm by rememberSaveable { mutableStateOf(false) }
+
+    // force 弹窗旋转/重建后必须重新弹出：裸 remember 会让"不可跳过"的强更被一次
+    // 旋转甩掉（checkUpdate 只在 VM init 自动跑一次，之后没有重开逻辑）
+    LaunchedEffect(update) {
+        val u = update
+        if (u is UpdateState.Available && u.force) showUpdateDialog = true
+    }
 
     // 云同步操作结果 → Toast（一次性事件，消费即清）
     LaunchedEffect(Unit) {
@@ -501,10 +508,17 @@ fun ProfileScreen(
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        context.openExternal(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(u.url)),
-                            "未找到可打开网页的应用",
-                        )
+                        // 直链 APK + 有签名认证过的摘要：应用内下载→校验→安装；
+                        // 其余（GitHub 页面/旧约定无摘要）保持浏览器链路，
+                        // 依赖系统同签名检查兜底
+                        if (UpdateInstaller.canInstallInApp(u.url, u.apkSha256)) {
+                            UpdateInstaller.downloadAndInstall(context, u.url, u.apkSha256)
+                        } else {
+                            context.openExternal(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(u.url)),
+                                "未找到可打开网页的应用",
+                            )
+                        }
                         if (!u.force) showUpdateDialog = false
                     }) { Text("前往下载") }
                 },

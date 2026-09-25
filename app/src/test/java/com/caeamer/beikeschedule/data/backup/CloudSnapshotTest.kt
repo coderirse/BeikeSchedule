@@ -36,6 +36,22 @@ class CloudSnapshotTest {
     }
 
     @Test
+    fun `decode rejects absurd scale snapshots`() {
+        // R4 审查 R3：被篡改/损坏的快照不该走完恢复流程整表覆盖本机数据
+        val many = List(6000) { CourseDto(name = "课$it") }
+        val text = CloudSnapshot.encode(CloudSnapshot(courses = many))
+        val err = runCatching { CloudSnapshot.decode(text) }.exceptionOrNull()
+        assertTrue("应拒绝超规模快照", err is SerializationException)
+
+        val badSection = CloudSnapshot(sectionTimes = listOf(SectionTimeDto(99, "08:00", "08:45")))
+        assertTrue(
+            "应拒绝非法节次",
+            runCatching { CloudSnapshot.decode(CloudSnapshot.encode(badSection)) }.exceptionOrNull()
+                is SerializationException,
+        )
+    }
+
+    @Test
     fun `decode tolerates unknown fields and missing fields`() {
         // 未来版本加了新字段/新课程字段：当前版本应忽略未知字段、缺失字段取默认值
         val olderJson = """

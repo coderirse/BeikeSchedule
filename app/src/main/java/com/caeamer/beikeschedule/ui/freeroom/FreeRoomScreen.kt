@@ -54,12 +54,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.remote.SmartClassParser
-import kotlinx.coroutines.delay
+import com.caeamer.beikeschedule.ui.common.rememberNow
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -85,17 +84,9 @@ fun FreeRoomScreen(viewModel: FreeRoomViewModel = viewModel()) {
     val listState = rememberLazyListState()
 
     // "现在"每 30 秒复算一次：用于 进行中/已结束 判定与时段自动展开。
-    // 只在 RESUMED 时走时钟——退到后台还继续跑 ticker 是这个项目已经踩过的坑。
-    var now by remember { mutableStateOf(LocalDateTime.now()) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    LaunchedEffect(lifecycleOwner) {
-        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            while (true) {
-                now = LocalDateTime.now()
-                delay(TICK_MS)
-            }
-        }
-    }
+    // 与 ScheduleScreen/TodoScreen 共用 rememberNow（RESUMED-only 时钟）：此前这里
+    // 手写了一套 repeatOnLifecycle ticker，两套时钟并存纯属重复维护。
+    val now = rememberNow(TICK_MS)
 
     // 换楼栋后回到列表顶部：LazyColumn 的 key 是大节 ID（与楼栋无关），
     // 不重置的话用户会被留在上一个楼栋的滚动位置

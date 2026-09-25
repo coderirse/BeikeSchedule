@@ -26,7 +26,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -45,6 +45,12 @@ import com.caeamer.beikeschedule.data.remote.QrAuthApi
 import com.caeamer.beikeschedule.import.CloudLoginBridge
 import com.caeamer.beikeschedule.import.JwWebView
 import com.caeamer.beikeschedule.import.loadAssetScript
+
+/** 等待 WebView 就绪的上限（授权拿到后 WebView 可能正在重建）。 */
+private const val AWAIT_WEBVIEW_TIMEOUT_MS = 1_500L
+
+/** 授权回调跳转后的看门狗时长（秒），见 CloudLoginScreen 内注释。 */
+private const val AUTH_NAV_WATCHDOG_SECONDS = 15
 
 /**
  * 云同步登录页：内嵌教务 WebView 完成统一身份认证（扫码或账密均可），
@@ -60,16 +66,20 @@ fun CloudLoginScreen(
     onLightBackgroundVisible: (Boolean) -> Unit = {},
     viewModel: CloudLoginViewModel = viewModel(),
 ) {
-    val state by viewModel.state.collectAsState()
-    val qrSid by viewModel.qrSid.collectAsState()
-    val qrHint by viewModel.qrHint.collectAsState()
-    val authorizedUrl by viewModel.authorizedUrl.collectAsState()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val qrSid by viewModel.qrSid.collectAsStateWithLifecycle()
+    val qrHint by viewModel.qrHint.collectAsStateWithLifecycle()
+    val authorizedUrl by viewModel.authorizedUrl.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var webView by remember { mutableStateOf<WebView?>(null) }
     var pageError by remember { mutableStateOf<String?>(null) }
     var pageLoading by remember { mutableStateOf(true) }
 
-    BackHandler(enabled = state !is CloudLoginUiState.Done) { onDone() }
+    // 换 token 关键请求中吞掉返回：token 在后台跑完会落盘，放行返回会让界面状态
+    // 与实际登录态脱节（ImportScreen 的 Committing 态同理）
+    BackHandler(enabled = state !is CloudLoginUiState.Done && state !is CloudLoginUiState.SigningIn) {
+        onDone()
+    }
 
     LaunchedEffect(state) {
         if (state is CloudLoginUiState.Done) onDone()
@@ -79,16 +89,30 @@ fun CloudLoginScreen(
     // 之后 SSO 种下会话并跳回教务系统主页 → onMainPage → 自动抓学号。
     // 勿打完整 URL：含 auth_code/rand_token，release 也会进 logcat。
     // WebView 可能尚未创建/正在重建：稍等再 load，避免授权成功却丢了跳转。
+    // authCode 是一次性的：重试耗尽仍没有 WebView 时必须报错并复位，
+    // 否则用户在微信侧点过授权却毫无反应，只能干等。
     LaunchedEffect(authorizedUrl) {
         val url = authorizedUrl ?: return@LaunchedEffect
-        repeat(30) {
-            val wv = webView
-            if (wv != null) {
-                wv.loadUrl(url)
-                return@LaunchedEffect
-            }
-            kotlinx.coroutines.delay(50)
+        val target = kotlinx.coroutines.withTimeoutOrNull(AWAIT_WEBVIEW_TIMEOUT_MS) {
+            while (webView == null) kotlinx.coroutines.delay(50)
+            webView
         }
+        if (target == null) return@LaunchedEffect viewModel.onAuthorizedNavigationLost()
+
+        val before = target.url
+        target.loadUrl(url)
+
+        // 看门狗：这次跳转被 WebView 静默丢弃时（典型是某个重定向被导航策略拒掉——SSO 的
+        // 回调 302 曾指向 http://sso.ustb.edu.cn/...），页面不换、onReceivedError 也不回调，
+        // 界面就会永久停在"授权成功，正在进入教务系统…"。主框架 URL 变了才算真的在走，
+        // 长时间不变就复位授权地址并让微认证页重新出码，用户可以直接重扫，不必杀进程。
+        repeat(AUTH_NAV_WATCHDOG_SECONDS) {
+            kotlinx.coroutines.delay(1_000)
+            val now = webView?.url
+            if (now != null && now != before) return@LaunchedEffect
+        }
+        viewModel.onAuthorizedNavigationLost()
+        webView?.reload()
     }
 
     val showingWebView = state !is CloudLoginUiState.Done
@@ -113,7 +137,8 @@ fun CloudLoginScreen(
             TopAppBar(
                 title = { Text("登录云同步") },
                 navigationIcon = {
-                    IconButton(onClick = onDone) {
+                    // 换 token 期间禁用返回（与 BackHandler 同口径）
+                    IconButton(onClick = onDone, enabled = state !is CloudLoginUiState.SigningIn) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
@@ -180,7 +205,13 @@ fun CloudLoginScreen(
                 if (state is CloudLoginUiState.Browsing || state is CloudLoginUiState.Failed) {
                     JwWebView(
                         bridge = CloudLoginBridge(
-                            onIdentity = { xh, xm -> webView?.post { viewModel.onIdentity(xh, xm) } },
+                            onIdentity = { xh, xm -> webView?.post {
+                                // 平台层桥按 ustb 任意子域放行（JwWebView.BRIDGE_ORIGINS）；
+                                // 身份凭据只信 byyt 本体页当前主框架回传的，其余子域
+                                // （含潜在被 XSS 的页面）一律拒绝——否则伪造学号会把
+                                // 受害者的备份写进攻击者账号
+                                if (isByytHost(webView?.url)) viewModel.onIdentity(xh, xm)
+                            } },
                             onFailure = { msg -> webView?.post { viewModel.onError(msg) } },
                         ),
                         bridgeName = "BeikeIdentity",

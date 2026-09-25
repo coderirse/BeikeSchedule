@@ -56,4 +56,13 @@ class QrAuthCodeExtractTest {
         val obj = el as JsonObject
         assertEquals("zz", QrAuthApi.extractAuthCode(obj["data"]))
     }
+
+    @Test
+    fun `business code and token fields are not mistaken for authCode`() {
+        // 业务响应形态（如 {"code":0,"msg":"ok"} / {"token":"..."}）不得被当授权码
+        assertNull(QrAuthApi.extractAuthCode(buildJsonObject { put("code", 0) }))
+        assertNull(QrAuthApi.extractAuthCode(buildJsonObject { put("token", "t") }))
+        val businessData = buildJsonObject { put("code", 0); put("msg", "ok") }
+        assertNull(QrAuthApi.extractAuthCode(businessData))
+    }
 }

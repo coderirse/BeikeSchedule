@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,10 +65,12 @@ fun SemesterSettingsDialog(
     onRestoreCourse: (Long) -> Unit,
     onRequestNotificationPermission: (onGranted: () -> Unit) -> Unit,
 ) {
-    var name by remember { mutableStateOf(current.name) }
-    var firstMonday by remember { mutableStateOf(current.firstMonday) }
-    var totalWeeks by remember { mutableIntStateOf(current.totalWeeks) }
-    var showDatePicker by remember { mutableStateOf(false) }
+    // 三个输入字段必须 saveable：showSettings 在宿主侧是 rememberSaveable，旋转后对话框
+    // 会重新打开——若字段是裸 remember，得到的是"对话框回来了、输入全丢"的假恢复
+    var name by rememberSaveable { mutableStateOf(current.name) }
+    var firstMonday by rememberSaveable { mutableStateOf(current.firstMonday) }
+    var totalWeeks by rememberSaveable { mutableIntStateOf(current.totalWeeks) }
+    var showDatePicker by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     // 系统层面的开关是同步查询，每次打开设置页现算，保证是最新值
     val notificationsBlocked = remember { notificationsBlocked(context) }

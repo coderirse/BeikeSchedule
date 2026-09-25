@@ -22,18 +22,25 @@ import java.time.LocalDateTime
  *   仍在空转，每分钟让整屏重组一次，而且从进入页面起算的节拍会让跨点时刻最多滞后 60 秒。
  *
  * 列表页/考试倒计时/日程分组这类"用当前时间做判断"的场景统一用它。
+ *
+ * @param tickMillis 刷新节拍：默认对齐整分钟；需要更细粒度（如无课教室的
+ *   "进行中/已结束" 半分钟判定）传更小的值，仍只在 RESUMED 走时钟。
  */
 @Composable
-fun rememberNow(): LocalDateTime {
+fun rememberNow(tickMillis: Long = 60_000L): LocalDateTime {
     var now by remember { mutableStateOf(LocalDateTime.now()) }
     val lifecycleOwner = LocalLifecycleOwner.current
-    LaunchedEffect(lifecycleOwner) {
+    LaunchedEffect(lifecycleOwner, tickMillis) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
                 val current = LocalDateTime.now()
                 now = current
-                // 对齐到下一个整分钟：跨过整分钟（上课/下课/午夜）的时刻不再滞后
-                delay(60_000L - (current.second * 1_000L + current.nano / 1_000_000L))
+                if (tickMillis >= 60_000L) {
+                    // 对齐到下一个整分钟：跨过整分钟（上课/下课/午夜）的时刻不再滞后
+                    delay(60_000L - (current.second * 1_000L + current.nano / 1_000_000L))
+                } else {
+                    delay(tickMillis)
+                }
             }
         }
     }

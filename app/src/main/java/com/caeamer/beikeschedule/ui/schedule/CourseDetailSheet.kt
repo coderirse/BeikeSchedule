@@ -61,8 +61,8 @@ fun CourseDetailSheet(
                 val time = if (start != null && end != null) "（$start - $end）" else ""
                 val bigSection = com.caeamer.beikeschedule.model.SectionMap
                     .describeBigSections(course.startSection, course.endSection)
-                // getOrNull 而非直接下标：JwParser.parseDayOfWeek 的 ^xq(\d)_jc\d+$ 接受 1..9，
-                // 一条 xq8/xq9 的脏数据会让这里抛 IndexOutOfBoundsException 崩掉详情弹层。
+                // getOrNull 而非直接下标：防御历史脏数据（parseDayOfWeek 现已拒绝 1..7
+                // 以外的星期并整行跳过，但库里可能还留着旧版导入的 xq8/xq9 行）。
                 val dayName = WEEKDAY_NAMES.getOrNull(course.dayOfWeek - 1) ?: "?"
                 InfoText("周$dayName $bigSection $time")
             }

@@ -35,6 +35,9 @@ object ExamReminderScheduler {
     const val EXTRA_SEAT = "seat"
     const val EXTRA_TITLE_PREFIX = "titlePrefix"
     private const val REQUEST_CODE_BASE = 8_000_000
+
+    /** 本段槽位数（每场考试占 2 个：考前一天 + 考前一小时），保证不越入 9M 每日脉冲段。 */
+    private const val EXAM_SEGMENT_SLOTS = 500_000
     private const val SCHEDULE_DAYS = 30
 
     /**
@@ -147,9 +150,12 @@ object ExamReminderScheduler {
         return result
     }
 
-    // 8_000_000 段：examId*2(+1)，与上课提醒的 requestCode 空间隔离
+    // 8_000_000 段：examId*2(+1)，与上课提醒的 requestCode 空间隔离。
+    // floorMod 钳进段内：exam.id 是 AUTOINCREMENT（每次抓取 clear+insertAll 都推高），
+    // 不钳制的话 id ≥ 500,000 会越出 [8M,9M) 撞上每日脉冲段
     private fun requestCodeOf(exam: ExamEntity, dayBefore: Boolean): Int =
-        REQUEST_CODE_BASE + (exam.id * 2).toInt() + if (dayBefore) 0 else 1
+        REQUEST_CODE_BASE + ((exam.id * 2).toInt().mod(EXAM_SEGMENT_SLOTS)) +
+            if (dayBefore) 0 else 1
 
     private fun examTimeText(exam: ExamEntity): String = when {
         exam.kssj.isNotBlank() && exam.jssj.isNotBlank() -> "${exam.ksrq} ${exam.kssj}-${exam.jssj}"

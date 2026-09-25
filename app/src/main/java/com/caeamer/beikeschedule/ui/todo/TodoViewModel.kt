@@ -23,6 +23,11 @@ typealias TodoDayGroup = Pair<LocalDate, List<TodoEntity>>
 /** 日程页状态。 */
 data class TodoUiState(
     val groups: List<TodoDayGroup> = emptyList(),
+    /**
+     * 已过期的一次性事项（日期在过去、当天没打卡）：主列表只展示今天起 14 天，
+     * 没有这个出口它们就成了"幽灵数据"——永远不可见、不可编辑、不可删，却仍参与提醒重排。
+     */
+    val expired: List<TodoEntity> = emptyList(),
     /** 今日已打卡完成的事项 id 集合（由 lastDoneDate == 今天 派生）。 */
     val doneIds: Set<Long> = emptySet(),
     val loaded: Boolean = false,
@@ -36,6 +41,11 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
         val today = LocalDate.now()
         TodoUiState(
             groups = TodoPlanner.groupByDate(todos, today, DISPLAY_DAYS),
+            expired = todos.filter { todo ->
+                todo.repeatMode == TodoEntity.REPEAT_ONCE &&
+                    runCatching { LocalDate.parse(todo.date) }.getOrNull()?.isBefore(today) == true &&
+                    todo.lastDoneDate != todo.date
+            }.sortedBy { it.date },
             doneIds = todos.filter { it.isDoneToday(today.toString()) }.map { it.id }.toSet(),
             loaded = true,
         )

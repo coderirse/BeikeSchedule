@@ -59,6 +59,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import kotlinx.serialization.json.Json
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -108,13 +110,20 @@ private fun Modifier.consumeAllScroll(): Modifier = nestedScroll(
     },
 )
 
+/** 成绩详情弹层 Saver：GradeEntity 经 JSON 存入 SavedStateRegistry，旋转后弹层不关。 */
+private val DetailGradeSaver = Saver<GradeEntity?, String>(
+    save = { it?.let(Json::encodeToString) ?: "" },
+    restore = { if (it.isBlank()) null else runCatching { Json.decodeFromString<GradeEntity>(it) }.getOrNull() },
+)
+
 /** 教务 Tab：成绩/考试分段 + 加权/GPA 双模式 + 学期筛选 + 课程勾选 + 学分进度。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var showRefreshConfirm by remember { mutableStateOf(false) }
-    var detailGrade by remember { mutableStateOf<GradeEntity?>(null) }
+    var showRefreshConfirm by rememberSaveable { mutableStateOf(false) }
+    // GradeEntity 可 JSON 序列化：详情弹层旋转后恢复（Saver 见文件顶部）
+    var detailGrade by rememberSaveable(stateSaver = DetailGradeSaver) { mutableStateOf<GradeEntity?>(null) }
 
     Scaffold(
         // 外层 Scaffold 不消费系统栏 inset（见 MainActivity），这里也不消费：
@@ -603,8 +612,11 @@ private fun ExamListContent(
         }
         return
     }
-    val grouped = exams.groupBy { it.ksrq.ifBlank { "时间待定" } }
-        .toSortedMap(compareBy { key -> if (key == "时间待定") LocalDate.MAX else runCatching { LocalDate.parse(key) }.getOrNull() ?: LocalDate.MAX })
+    // remember(exams)：分组+排序放组合体里会随任何无关重组每帧重算
+    val grouped = remember(exams) {
+        exams.groupBy { it.ksrq.ifBlank { "时间待定" } }
+            .toSortedMap(compareBy { key -> if (key == "时间待定") LocalDate.MAX else runCatching { LocalDate.parse(key) }.getOrNull() ?: LocalDate.MAX })
+    }
 
     LazyColumn(Modifier.fillMaxSize()) {
         // 抓取失败的提示必须在列表**顶部**：此前错误行只挂在成绩页列表末尾，

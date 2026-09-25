@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.caeamer.beikeschedule.data.backup.CloudSync
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.remote.CloudApi
+import com.caeamer.beikeschedule.data.remote.JwSessionTicket
 import com.caeamer.beikeschedule.data.remote.QrAuthApi
 import com.caeamer.beikeschedule.data.remote.QrTargetTracker
 import kotlinx.coroutines.CancellationException
@@ -60,6 +61,9 @@ class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
 
     private val pollingJobs = ConcurrentHashMap<String, Job>()
 
+    /** 串行化 ensurePolling 的 check-then-put（WebView IO 线程与主线程并发入口）。 */
+    private val pollingLock = Any()
+
     /**
      * 用户通过「复制授权链接」锁定的 sid：页面刷新换码时**不得**停掉对它的轮询，
      * 否则微信里刚点完授权，App 这边已经没人听结果了（表现为「授权了没反应」）。
@@ -80,11 +84,13 @@ class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
         val keep = tracker.snapshot().takeLast(MAX_POLL_TARGETS)
         val keepSids = keep.map { it.sid }.toSet() + listOfNotNull(pinnedSid, _qrSid.value)
         // 页面会不断刷新二维码，被淘汰的 sid 不再轮询；**已锁定/正在展示的 sid 除外**
-        pollingJobs.entries.filter { it.key !in keepSids }.forEach { (sid, _) ->
-            pollingJobs.remove(sid)?.cancel()
+        synchronized(pollingLock) {
+            pollingJobs.entries.filter { it.key !in keepSids }.forEach { (sid, _) ->
+                pollingJobs.remove(sid)?.cancel()
+            }
+            keep.forEach(::ensurePolling)
+            pinnedSid?.let { pin -> tracker.snapshot().find { it.sid == pin }?.let(::ensurePolling) }
         }
-        keep.forEach(::ensurePolling)
-        pinnedSid?.let { pin -> tracker.snapshot().find { it.sid == pin }?.let(::ensurePolling) }
     }
 
     /** 复制授权链接时锁定该 sid，保证微信侧授权结果一定有人轮询。 */
@@ -95,73 +101,89 @@ class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun ensurePolling(target: QrAuthApi.QrTarget) {
         if (_authorizedUrl.value != null) return
-        if (pollingJobs.containsKey(target.sid)) return
-        pollingJobs[target.sid] = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                var netFailures = 0
-                while (isActive && _authorizedUrl.value == null) {
-                    val qrState = try {
-                        QrAuthApi.pollState(target.sid).also { netFailures = 0 }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        netFailures++
-                        if (netFailures >= 3) {
-                            _qrHint.value = "网络异常，正在重试…（请检查网络/VPN）"
-                        }
-                        if (BuildConfig.DEBUG) {
-                            Log.d(TAG, "qr poll sid=${target.sid} error=${e.message}")
-                        }
-                        delay(POLL_INTERVAL_MS * 2)
-                        continue
-                    }
-                    when (qrState.code) {
-                        1 -> {
-                            val code = qrState.authCode
-                            if (code.isNullOrBlank()) {
-                                // 已授权但还没吐出 code：继续要，绝不能 break（否则永久卡住）
-                                if (BuildConfig.DEBUG) {
-                                    Log.d(TAG, "qr poll sid=${target.sid} code=1 missing authCode")
-                                }
-                                _qrHint.value = "微信已确认授权，正在进入教务系统…"
-                                delay(POLL_INTERVAL_MS)
-                                continue
-                            }
-                            if (BuildConfig.DEBUG) {
-                                Log.d(TAG, "qr poll sid=${target.sid} code=1 -> navigate")
-                            }
-                            _qrHint.value = "授权成功，正在进入教务系统…"
-                            _authorizedUrl.value = QrAuthApi.authorizeUrl(target, code)
-                            break
-                        }
-                        // 二维码失效/sid 非法/方法不允许等：该 sid 到此为止
-                        3, 101, 102, 202, 203 -> {
-                            if (BuildConfig.DEBUG) {
-                                Log.d(TAG, "qr poll sid=${target.sid} dead code=${qrState.code}")
-                            }
-                            if (target.sid != pinnedSid) {
-                                _qrHint.value = "二维码已失效，请点页面上的刷新或重进本页"
+        // containsKey→put 必须原子：本方法会被 WebView IO 线程（onSubresource）与主线程
+        // （pinSidForWeChat）并发调用，竞态下同一 sid 双轮询会互吃 205（并发冲突），
+        // 恰好复现"授权了没反应"
+        synchronized(pollingLock) {
+            if (_authorizedUrl.value != null) return
+            if (pollingJobs.containsKey(target.sid)) return
+            pollingJobs[target.sid] = viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    // 总时长上限：pinned 会话在用户一直不扫时不能永续轮询
+                    val deadline = System.currentTimeMillis() + MAX_POLL_DURATION_MS
+                    var netFailures = 0
+                    while (isActive && _authorizedUrl.value == null) {
+                        if (System.currentTimeMillis() > deadline) {
+                            _qrHint.value = if (target.sid == pinnedSid) {
+                                "授权链接已超时失效，请重新复制链接到微信确认"
                             } else {
-                                _qrHint.value = "授权链接已失效，请重新复制链接到微信确认"
+                                "二维码已超时失效，请点页面上的刷新或重进本页"
                             }
                             break
                         }
-                        // 2=已扫码待确认：给用户一个明确提示（页面不再自己显示状态）
-                        2 -> {
-                            _qrHint.value = "微信已扫码，请在微信里点确认授权"
-                            delay(POLL_INTERVAL_MS)
-                        }
-                        // 4=等待超时、205=并发冲突：继续等
-                        else -> {
-                            if (BuildConfig.DEBUG) {
-                                Log.d(TAG, "qr poll sid=${target.sid} code=${qrState.code}")
+                        val qrState = try {
+                            QrAuthApi.pollState(target.sid).also { netFailures = 0 }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            netFailures++
+                            if (netFailures >= 3) {
+                                _qrHint.value = "网络异常，正在重试…（请检查网络/VPN）"
                             }
-                            delay(POLL_INTERVAL_MS)
+                            if (BuildConfig.DEBUG) {
+                                Log.d(TAG, "qr poll sid=${target.sid} error=${e.message}")
+                            }
+                            delay(POLL_INTERVAL_MS * 2)
+                            continue
+                        }
+                        when (qrState.code) {
+                            1 -> {
+                                val code = qrState.authCode
+                                if (code.isNullOrBlank()) {
+                                    // 已授权但还没吐出 code：继续要，绝不能 break（否则永久卡住）
+                                    if (BuildConfig.DEBUG) {
+                                        Log.d(TAG, "qr poll sid=${target.sid} code=1 missing authCode")
+                                    }
+                                    _qrHint.value = "微信已确认授权，正在进入教务系统…"
+                                    delay(POLL_INTERVAL_MS)
+                                    continue
+                                }
+                                if (BuildConfig.DEBUG) {
+                                    Log.d(TAG, "qr poll sid=${target.sid} code=1 -> navigate")
+                                }
+                                _qrHint.value = "授权成功，正在进入教务系统…"
+                                _authorizedUrl.value = QrAuthApi.authorizeUrl(target, code)
+                                break
+                            }
+                            // 二维码失效/sid 非法/方法不允许等：该 sid 到此为止
+                            3, 101, 102, 202, 203 -> {
+                                if (BuildConfig.DEBUG) {
+                                    Log.d(TAG, "qr poll sid=${target.sid} dead code=${qrState.code}")
+                                }
+                                if (target.sid != pinnedSid) {
+                                    _qrHint.value = "二维码已失效，请点页面上的刷新或重进本页"
+                                } else {
+                                    _qrHint.value = "授权链接已失效，请重新复制链接到微信确认"
+                                }
+                                break
+                            }
+                            // 2=已扫码待确认：给用户一个明确提示（页面不再自己显示状态）
+                            2 -> {
+                                _qrHint.value = "微信已扫码，请在微信里点确认授权"
+                                delay(POLL_INTERVAL_MS)
+                            }
+                            // 4=等待超时、205=并发冲突：继续等（受总时长上限约束）
+                            else -> {
+                                if (BuildConfig.DEBUG) {
+                                    Log.d(TAG, "qr poll sid=${target.sid} code=${qrState.code}")
+                                }
+                                delay(POLL_INTERVAL_MS)
+                            }
                         }
                     }
+                } finally {
+                    pollingJobs.remove(target.sid)
                 }
-            } finally {
-                pollingJobs.remove(target.sid)
             }
         }
     }
@@ -176,7 +198,7 @@ class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = CloudLoginUiState.SigningIn(xh)
         viewModelScope.launch {
             try {
-                val result = withContext(Dispatchers.IO) { CloudApi.login(xh, xm) }
+                val result = withContext(Dispatchers.IO) { CloudApi.login(xh, xm, jwTicket()) }
                 settings.saveCloudAccount(
                     SettingsStore.CloudAccount(xh = result.xh, name = result.name, token = result.token),
                 )
@@ -194,9 +216,33 @@ class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = CloudLoginUiState.Failed(humanizeIdentityError(message))
     }
 
+    /**
+     * 授权回调导航失败（authCode 一次性，WebView 重建等导致没接住）：
+     * 复位授权地址并明示用户重新走授权，而不是静默丢掉微信侧已确认的结果。
+     */
+    fun onAuthorizedNavigationLost() {
+        if (_authorizedUrl.value == null) return
+        _authorizedUrl.value = null
+        _qrHint.value = "授权回调超时，请重新扫码或复制授权链接到微信确认"
+    }
+
     /** 从失败态重试：回 Browsing 重新注入身份脚本（教务会话通常仍在）。 */
     fun retry() {
         _state.value = CloudLoginUiState.Browsing
+    }
+
+    /**
+     * 取教务 SESSION cookie 并密封成 jwTicket，交给服务端去教务系统核实身份。
+     *
+     * 只在 byyt 域取（`/user/me` 是它的同源接口）；取不到就返回 null——服务端此时会
+     * 明确要求"在教务系统登录后重试/更新 App"，而不是退回到"只认学号+姓名"的弱校验。
+     * 调用发生在 IO 线程：CookieManager.getCookie 可能阻塞。
+     */
+    private fun jwTicket(): String? {
+        val cookie = runCatching {
+            android.webkit.CookieManager.getInstance().getCookie(JW_SESSION_ORIGIN)
+        }.getOrNull().orEmpty()
+        return JwSessionTicket.seal(cookie)
     }
 
     /**
@@ -217,8 +263,14 @@ class CloudLoginViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val TAG = "BeikeCloud"
 
+        /** 教务 SESSION 所在 origin（与 [com.caeamer.beikeschedule.import.JwWebView] 的 JW_HOME 一致）。 */
+        const val JW_SESSION_ORIGIN = "https://byyt.ustb.edu.cn"
+
         /** 并发长轮询的 sid 上限（每个 sid 同一时刻只有一条在途请求）。 */
         const val MAX_POLL_TARGETS = 3
         const val POLL_INTERVAL_MS = 600L
+
+        /** 单个 sid 轮询总时长上限（覆盖"复制链接后迟迟不扫"的 pinned 会话）。 */
+        const val MAX_POLL_DURATION_MS = 5 * 60_000L
     }
 }

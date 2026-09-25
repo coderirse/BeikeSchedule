@@ -180,8 +180,12 @@ class SmartClassApi(private val baseUrl: String = DEFAULT_BASE_URL) : SmartClass
     ): RawResponse = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
-            val url = URL(if (signed == null) baseUrl + path else SmartClassCrypto.sign(baseUrl + path, signed.csrkKey, signed.timeMillis))
-            conn = (url.openConnection() as HttpURLConnection).apply {
+            // signOrNull：签名生成失败时**不发请求**直接报错——发无签名的请求必然被
+            // 服务端拒绝，"签名被拒重校"自愈还会把 key 格式坏误判成 key 轮换反复重拉
+            val url = if (signed == null) baseUrl + path
+            else SmartClassCrypto.signOrNull(baseUrl + path, signed.csrkKey, signed.timeMillis)
+                ?: throw java.io.IOException("教务接口签名失败（密钥异常），请稍后重试")
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = CONNECT_TIMEOUT_MS
                 readTimeout = READ_TIMEOUT_MS

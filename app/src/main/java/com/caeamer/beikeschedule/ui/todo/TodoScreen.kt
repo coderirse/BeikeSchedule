@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,7 +43,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +59,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.TodoEntity
 import com.caeamer.beikeschedule.ui.common.rememberNow
@@ -85,7 +88,7 @@ private val EditingSaver = Saver<TodoEntity?, String>(
  */
 @Composable
 fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     // rememberSaveable：旋转/进程回收时表单开关与编辑内容不丢（此前旋转即关表单、输入全丢）
     var editing by rememberSaveable(stateSaver = EditingSaver) { mutableStateOf<TodoEntity?>(null) } // null = 未在编辑
     var showForm by rememberSaveable { mutableStateOf(false) }
@@ -93,7 +96,7 @@ fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
     Box(Modifier.fillMaxSize()) {
         if (!state.loaded) {
             // Room 首次发射前的空窗：不渲染任何内容，避免闪一帧"还没有日程"
-        } else if (state.groups.isEmpty()) {
+        } else if (state.groups.isEmpty() && state.expired.isEmpty()) {
             EmptyTodo(onAdd = { showForm = true })
         } else {
             TodoList(
@@ -194,6 +197,35 @@ private fun TodoList(
                     color = MaterialTheme.colorScheme.outlineVariant,
                 )
             }
+        }
+        item(key = "todo_header_expired") {
+            if (state.expired.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "已过期（未完成）",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+        items(state.expired, key = { "expired_${it.id}" }) { todo ->
+            TodoRow(
+                todo = todo,
+                isToday = false,
+                isPast = true,
+                done = false,
+                onToggleDone = { onToggleDone(todo.id) },
+                onClick = { onClick(todo) },
+            )
+            HorizontalDivider(
+                Modifier.padding(horizontal = 16.dp),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
         }
         item { Spacer(Modifier.height(88.dp)) } // FAB 不遮最后一项
     }
@@ -379,8 +411,10 @@ private fun TodoFormSheet(
                         confirmButton = {
                             TextButton(onClick = {
                                 pickerState.selectedDateMillis?.let { millis ->
+                                    // M3 DatePicker 的 millis 是 UTC 零点口径，必须用 UTC 还原：
+                                    // 用系统时区在负偏移时区会前移一天（与 SemesterSettingsDialog 对齐）
                                     dateText = java.time.Instant.ofEpochMilli(millis)
-                                        .atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString()
+                                        .atZone(java.time.ZoneId.of("UTC")).toLocalDate().toString()
                                 }
                                 showDatePicker = false
                             }) { Text("确定") }
@@ -499,10 +533,13 @@ private fun WeekdaySelector(selected: String, onSelect: (String) -> Unit) {
                 shape = CircleShape,
                 color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier
+                    // 视觉 36dp + minimumInteractiveComponentSize 扩到 48dp 触达；
+                    // 相邻 7 点 SpaceBetween，36dp 裸触区会互相挤占
+                    .minimumInteractiveComponentSize()
                     .width(36.dp)
                     .height(36.dp)
                     .clip(CircleShape)
-                    .clickable {
+                    .clickable(onClickLabel = if (on) "取消周$label" else "选择周$label") {
                         val chars = (selected + "0000000").take(7).toCharArray()
                         chars[i] = if (on) '0' else '1'
                         onSelect(String(chars))
@@ -533,19 +570,27 @@ private fun ColorSelector(selected: Int, onSelect: (Int) -> Unit) {
     ) {
         repeat(10) { i ->
             val (bg, _) = CourseColors.of(i)
+            // 与 CourseEditDialog 的色板同款：视觉 28dp + 扩触达 48dp + selectable 语义
+            // （未选中项 TalkBack 也要能听到"颜色 N"）
             Box(
                 Modifier
+                    .minimumInteractiveComponentSize()
                     .width(28.dp)
                     .height(28.dp)
                     .clip(CircleShape)
                     .background(bg)
-                    .clickable { onSelect(i) },
+                    .selectable(
+                        selected = i == Math.floorMod(selected, 10),
+                        role = Role.RadioButton,
+                        onClick = { onSelect(i) },
+                    )
+                    .semantics { contentDescription = "颜色 ${i + 1}" },
                 contentAlignment = Alignment.Center,
             ) {
                 if (i == Math.floorMod(selected, 10)) {
                     Icon(
                         Icons.Default.Check,
-                        contentDescription = "选中",
+                        contentDescription = null,
                         tint = CourseColors.of(i).second,
                         modifier = Modifier.width(16.dp),
                     )

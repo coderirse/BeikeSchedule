@@ -39,6 +39,12 @@ sealed interface UpdateState {
         val url: String,
         /** 服务端 force 标记：弹窗不可跳过（仅自有服务器接口提供，GitHub 兜底恒为 false）。 */
         val force: Boolean = false,
+        /**
+         * APK 的 SHA-256（hex 小写）。**只在签名覆盖它时非空**（自有源新约定）；
+         * 非空且 url 是直链 APK 时走应用内下载 + 摘要校验 + 安装，
+         * 否则保持浏览器打开的旧链路（依赖系统同签名检查兜底）。
+         */
+        val apkSha256: String = "",
     ) : UpdateState
     data class Failed(val message: String) : UpdateState
 }
@@ -198,9 +204,14 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         val installed = installedVersionCode() ?: return@withContext null
         val latest = CloudApi.latestVersion()
         if (latest.versionCode <= 0 || latest.versionName.isBlank()) return@withContext null
-        if (!UpdateSignature.verify(latest)) return@withContext null
+        // 验签失败 → 整体作废回退 GitHub；旧约定（签名不含 APK 摘要）仍可用，
+        // 但响应里的 apkSha256 不在签名内、必须当不存在处理
+        val coverage = UpdateSignature.verifyDetailed(latest) ?: return@withContext null
+        val trustedSha256 = if (coverage == UpdateSignature.SignatureCoverage.FULL) latest.apkSha256 else ""
         if (latest.versionCode > installed) {
-            UpdateState.Available(latest.versionName, latest.changelog, latest.url, latest.force)
+            UpdateState.Available(
+                latest.versionName, latest.changelog, latest.url, latest.force, trustedSha256,
+            )
         } else {
             UpdateState.UpToDate
         }

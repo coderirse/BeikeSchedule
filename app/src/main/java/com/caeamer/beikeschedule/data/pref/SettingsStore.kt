@@ -296,7 +296,8 @@ class SettingsStore(private val context: Context) {
         CloudAccount(
             xh = p[Keys.CLOUD_XH] ?: "",
             name = p[Keys.CLOUD_NAME] ?: "",
-            token = p[Keys.CLOUD_TOKEN] ?: "",
+            // 落盘格式 "enc:..."（AES-GCM，密钥在 AndroidKeyStore）；无前缀 = 历史明文，下次保存自动迁移
+            token = TokenCipher.decrypt(p[Keys.CLOUD_TOKEN] ?: ""),
         )
     }
 
@@ -304,7 +305,7 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { p ->
             p[Keys.CLOUD_XH] = account.xh
             p[Keys.CLOUD_NAME] = account.name
-            p[Keys.CLOUD_TOKEN] = account.token
+            p[Keys.CLOUD_TOKEN] = TokenCipher.encrypt(account.token)
         }
     }
 

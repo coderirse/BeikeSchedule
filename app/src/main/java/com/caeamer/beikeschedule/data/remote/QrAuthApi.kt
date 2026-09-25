@@ -80,7 +80,7 @@ object QrAuthApi {
     }
 
     /**
-     * 从状态响应里取授权码：兼容字符串 / `data` 为字符串 / `{authCode|auth_code|code}` 对象。
+     * 从状态响应里取授权码：兼容字符串 / `data` 为字符串 / `{authCode|auth_code|data…}` 对象。
      * code=1 但取不到时返回 null（调用方应继续轮询，不能直接放弃）。
      */
     internal fun extractAuthCode(vararg candidates: Any?): String? {
@@ -102,7 +102,13 @@ object QrAuthApi {
         return null
     }
 
-    private val AUTH_CODE_KEYS = listOf("authCode", "auth_code", "authcode", "code", "token", "data")
+    /**
+     * 候选键只收授权码语义的名字。**不含 `code`/`token`**：它们是常见业务字段
+     * （如 `{"code":0,"msg":"ok"}` 的业务状态码），混进来会把业务响应误当授权码，
+     * 拿去拼 authorizeUrl 导航到一个必失败的 SSO 回调。`data` 保留一层嵌套兼容
+     * （服务端有把授权码包在 data 对象里的形态）。
+     */
+    private val AUTH_CODE_KEYS = listOf("authCode", "auth_code", "authcode", "data")
 
     /** `/connect/state` 地址：sid 进 query，特殊字符由 [HttpUrl] 编码。 */
     internal fun pollStateUrl(sid: String): String =

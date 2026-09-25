@@ -1,9 +1,11 @@
 package com.caeamer.beikeschedule.data.local
 
 import androidx.room.Entity
+import kotlinx.serialization.Serializable
 import androidx.room.PrimaryKey
 
 /** 教务成绩条目（来自 /cjgl/grcjcx/grcjcx，覆盖式全量刷新）。 */
+@Serializable
 @Entity(tableName = "grade")
 data class GradeEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

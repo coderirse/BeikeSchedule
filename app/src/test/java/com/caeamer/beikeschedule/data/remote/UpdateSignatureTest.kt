@@ -6,6 +6,7 @@ import java.security.Signature
 import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -17,11 +18,13 @@ class UpdateSignatureTest {
 
     private val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
 
-    private fun sign(body: UpdateSignature.SignedBody, key: PrivateKey = keyPair.private): String {
-        val msg = UpdateSignature.canonicalBytes(body)
+    private fun sign(body: UpdateSignature.SignedBody, key: PrivateKey = keyPair.private): String =
+        signBytes(UpdateSignature.canonicalBytes(body), key)
+
+    private fun signBytes(message: ByteArray, key: PrivateKey = keyPair.private): String {
         val s = Signature.getInstance("Ed25519")
         s.initSign(key)
-        s.update(msg)
+        s.update(message)
         return Base64.getEncoder().encodeToString(s.sign())
     }
 
@@ -48,10 +51,10 @@ class UpdateSignatureTest {
     @Test
     fun `canonical json is compact with fixed key order`() {
         val bytes = UpdateSignature.canonicalBytes(
-            UpdateSignature.SignedBody(42, "1.3.1", "hi", true, 99L, "http://x/a.apk"),
+            UpdateSignature.SignedBody(42, "1.3.1", "hi", true, 99L, "http://x/a.apk", "deadbeef"),
         )
         assertEquals(
-            """{"versionCode":42,"versionName":"1.3.1","changelog":"hi","force":true,"size":99,"url":"http://x/a.apk"}""",
+            """{"versionCode":42,"versionName":"1.3.1","changelog":"hi","force":true,"size":99,"url":"http://x/a.apk","apkSha256":"deadbeef"}""",
             bytes.toString(Charsets.UTF_8),
         )
     }
@@ -99,6 +102,7 @@ class UpdateSignatureTest {
     @Test
     fun `release key accepts openssl reference vector`() {
         // tools/sign_update.py + keystore/update_signing_private.pem 对同一消息的输出
+        // （旧约定：签名不含 apkSha256 字段）
         val latest = CloudApi.LatestVersion(
             versionCode = 42,
             versionName = "1.3.1",
@@ -109,5 +113,57 @@ class UpdateSignatureTest {
             sig = "co3cwl99e74+3+4b0RYKFSM1ZGy97l57pzIztRdRGBQGL1ssqmfqRaW563F+DptHKDlTGABd2DjfWiwU5LaaBA==",
         )
         assertTrue(UpdateSignature.verify(latest))
+        assertEquals(
+            UpdateSignature.SignatureCoverage.METADATA_ONLY,
+            UpdateSignature.verifyDetailed(latest),
+        )
+    }
+
+    @Test
+    fun `full coverage when signature includes apkSha256`() {
+        val body = UpdateSignature.SignedBody(
+            versionCode = 44, versionName = "1.3.3", changelog = "fix", force = false,
+            size = 10L, url = "http://example/a.apk", apkSha256 = "abc123",
+        )
+        val latest = CloudApi.LatestVersion(
+            versionCode = body.versionCode, versionName = body.versionName,
+            changelog = body.changelog, force = body.force, size = body.size,
+            url = body.url, sig = sign(body), apkSha256 = body.apkSha256,
+        )
+        assertEquals(
+            UpdateSignature.SignatureCoverage.FULL,
+            UpdateSignature.verifyDetailed(latest, keyPair.public),
+        )
+    }
+
+    @Test
+    fun `apkSha256 in response is untrusted when signature is legacy`() {
+        // 旧约定签名（6 键消息）+ 响应里带 apkSha256：字段不在签名内，必须按 METADATA_ONLY 处理
+        val unsigned = CloudApi.LatestVersion(
+            versionCode = 44, versionName = "1.3.3", changelog = "fix", force = false,
+            size = 10L, url = "http://example/a.apk",
+        )
+        val latest = unsigned.copy(
+            sig = signBytes(UpdateSignature.canonicalBytesLegacy(unsigned)),
+            apkSha256 = "attacker-chosen",
+        )
+        assertEquals(
+            UpdateSignature.SignatureCoverage.METADATA_ONLY,
+            UpdateSignature.verifyDetailed(latest, keyPair.public),
+        )
+    }
+
+    @Test
+    fun `tampered apkSha256 breaks full-coverage signature`() {
+        val body = UpdateSignature.SignedBody(
+            versionCode = 44, versionName = "1.3.3", changelog = "fix", force = false,
+            size = 10L, url = "http://example/a.apk", apkSha256 = "abc123",
+        )
+        val latest = CloudApi.LatestVersion(
+            versionCode = body.versionCode, versionName = body.versionName,
+            changelog = body.changelog, force = body.force, size = body.size,
+            url = body.url, sig = sign(body), apkSha256 = "ffff",
+        )
+        assertNull(UpdateSignature.verifyDetailed(latest, keyPair.public))
     }
 }

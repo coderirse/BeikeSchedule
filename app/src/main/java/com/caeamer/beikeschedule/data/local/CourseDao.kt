@@ -15,8 +15,9 @@ interface CourseDao {
     @Query("SELECT * FROM course WHERE source = :source")
     suspend fun getBySource(source: Int): List<CourseEntity>
 
-    /** 全部同类课程（含隐藏），用于多时段课程分组编辑。 */
-    @Query("SELECT * FROM course WHERE source IN (:sources) AND name LIKE :name ORDER BY dayOfWeek, startSection")
+    /** 全部同类课程（含隐藏），用于多时段课程分组编辑。等值匹配而非 LIKE：课程名
+     *  含 %/_（如 "100%课堂"）时 LIKE 会过匹配/失配，分组编辑找不到全部行。 */
+    @Query("SELECT * FROM course WHERE source IN (:sources) AND name = :name ORDER BY dayOfWeek, startSection")
     fun observeByNames(sources: List<Int>, name: String): Flow<List<CourseEntity>>
 
     @Query("SELECT * FROM course WHERE id IN (:ids)")

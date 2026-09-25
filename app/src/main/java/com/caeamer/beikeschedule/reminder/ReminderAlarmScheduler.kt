@@ -109,10 +109,17 @@ internal object ReminderAlarmScheduler {
             // 记录是后续取消的唯一线索，丢了之后"用户打卡/明确关掉提醒"就再也取消不到
             // 那条正在 Doze 队列里的闹钟。超出宽限期（投递窗口已过）才真正移除。
             val plannedRecords = planned.map { ScheduledAlarm(it.requestCode, it.triggerAtMillis) }
-            val dueKept = recorded.filter { old ->
-                old.triggerAtMillis != null &&
-                    old.triggerAtMillis <= now &&
-                    old.triggerAtMillis > now - DUE_RECORD_GRACE_MS
+            val dueKept = if (cancelDueAlarms) {
+                // "已到点也一起取消"（用户主动关闭提醒）：这批闹钟已全部摘除，不留记录
+                emptyList()
+            } else {
+                recorded.filter { old ->
+                    old.triggerAtMillis != null &&
+                        old.triggerAtMillis <= now &&
+                        old.triggerAtMillis > now - DUE_RECORD_GRACE_MS &&
+                        // 被定向取消的码不再留记录：闹钟已摘除，留着只是 6 小时"幽灵码"
+                        old.requestCode !in forceCancelCodes
+                }
             }
             persist((plannedRecords + dueKept).distinctBy { it.requestCode })
         }

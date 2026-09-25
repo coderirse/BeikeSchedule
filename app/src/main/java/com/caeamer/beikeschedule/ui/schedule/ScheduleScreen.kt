@@ -92,10 +92,18 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.saveable.Saver
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.serialization.json.Json
 
 private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "日")
+
+/** 课程详情弹层 Saver：CourseEntity 经 JSON 存入 SavedStateRegistry，旋转后弹层不关。 */
+private val DetailCourseSaver = Saver<CourseEntity?, String>(
+    save = { it?.let(Json::encodeToString) ?: "" },
+    restore = { if (it.isBlank()) null else runCatching { Json.decodeFromString<CourseEntity>(it) }.getOrNull() },
+)
 
 /**
  * 无固定时间弹层从第几门课起固定用 Expanded 锚点。
@@ -128,7 +136,9 @@ fun ScheduleScreen(
     val context = LocalContext.current
 
     // 开启上课提醒前需要先拿到通知权限（Android 13+）
-    var pendingEnableReminder by remember { mutableStateOf(false) }
+    // saveable：权限系统弹窗由独立 Activity 承载，期间旋转会重建本组合——裸 remember
+    // 会丢掉"用户要开提醒"的意图，权限给了但开关没打开
+    var pendingEnableReminder by rememberSaveable { mutableStateOf(false) }
     val notificationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -136,17 +146,19 @@ fun ScheduleScreen(
         pendingEnableReminder = false
     }
 
-    var weekMenuExpanded by remember { mutableStateOf(false) }
-    var detailCourse by remember { mutableStateOf<CourseEntity?>(null) }
+    var weekMenuExpanded by rememberSaveable { mutableStateOf(false) }
+    var detailCourse by rememberSaveable(stateSaver = DetailCourseSaver) { mutableStateOf<CourseEntity?>(null) }
     // 多时段课程编辑：存该课的全部行（同「名字+来源」），传给编辑框加载全部时段
     var editCourseGroup by remember { mutableStateOf<List<CourseEntity>?>(null) }
     var prefillSession by remember { mutableStateOf<SessionExpander.Session?>(null) }
     // 编辑框与其中的半填表单不做 rememberSaveable：SessionState 目前没有 Saver，
     // 只恢复"打开"标志会得到"对话框回来了、输入全丢"的假恢复，比关掉更糟（记录在案）。
+    // showEditDialog 与 editCourseGroup 保持成对裸 remember（一起丢）就是这个原因。
     var showEditDialog by remember { mutableStateOf(false) }
-    // 下面两个对话框的全部内容都从 state 现读，旋转后恢复打开态是安全的
+    // 学期设置对话框内容全部从 state 现读，且对话框内部字段已 saveable，旋转恢复打开态安全
     var showSettings by rememberSaveable { mutableStateOf(false) }
-    // 长按空白格后待激活的"添加课程"格子（周几, 大节下标）
+    // 长按空白格后待激活的"添加课程"格子（周几, 大节下标）：Pair 非 Saveable 原生类型，
+    // 旋转后消失属可接受（重新长按即可）
     var pendingSlot by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     // 无固定时间课程弹层
     var showUnscheduledSheet by rememberSaveable { mutableStateOf(false) }

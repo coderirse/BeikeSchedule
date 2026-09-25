@@ -12,9 +12,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
 import androidx.webkit.WebViewCompat
+import com.caeamer.beikeschedule.BuildConfig
 
 private const val JW_HOME = "https://byyt.ustb.edu.cn"
 private const val MAIN_PAGE_MARK = "/authentication/main"
+private const val TAG = "BeikeJwWebView"
 
 /**
  * JS 桥允许注入的 origin 规则。
@@ -36,29 +38,52 @@ private val BRIDGE_ORIGINS = setOf("https://byyt.ustb.edu.cn", "https://*.ustb.e
  * 2. .page{height:100vh} 在此 WebView 中 vh/百分比高度均算出 0（ICB 高度异常），
  *    导致 #app 高度 0 且 overflow:hidden 裁掉全部内容，须用 innerHeight 像素值补上。
  * 页面脚本监听视口变化会自动重算 rem，注入后无需刷新。脚本幂等，每次导航重复注入。
+ *
+ * **为什么不能一进来就置 `__bkPageFixInstalled`**：本脚本会在 onPageStarted 注入，
+ * 此时文档常常还没有根元素（document.head 与 document.documentElement 同时为 null），
+ * 旧写法第 3 行先置标志、第 10 行才 appendChild → 抛 TypeError 中断，而后续
+ * onPageFinished/500ms/1500ms 三次兜底注入全被标志挡掉，修复一次都没生效：
+ * meta 仍是 width=device-width → 本页面 .page{height:100vh} 在此 WebView 算出 0
+ * （实测 vhProbe=0）+ overflow:hidden → 整页裁空成白屏（导入页/成绩页/云登录页通吃）。
+ * 该失败取决于注入时机（实测连续三次导航里挂一次），所以表现为"之前能加载、现在不行"
+ * 这种时好时坏。现在改为：文档根就绪才算装上，没就绪则条件重试。
  */
-private const val PAGE_FIX_JS = """
+internal const val PAGE_FIX_JS = """
 (function () {
   if (window.__bkPageFixInstalled) return;
-  window.__bkPageFixInstalled = true;
+  function root() { return document.head || document.documentElement; }
   function fixAll() {
+    var r = root();
+    // 文档根还没建出来：返回 false 交给条件重试，绝不能在这里把"已安装"标志置上
+    if (!r) return false;
     var m = document.querySelector('meta[name="viewport"]');
     if (!m) {
       m = document.createElement('meta');
       m.name = 'viewport';
-      (document.head || document.documentElement).appendChild(m);
+      r.appendChild(m);
     }
     if (m.getAttribute('content') !== 'width=1440') m.setAttribute('content', 'width=1440');
     var app = document.querySelector('#app');
     if (app && app.getBoundingClientRect().height === 0) {
       app.style.setProperty('height', window.innerHeight + 'px', 'important');
     }
+    // 真正装上（含 MutationObserver）之后才置标志，否则一次失败会把兜底注入全锁死
+    if (!window.__bkPageFixInstalled) {
+      window.__bkPageFixInstalled = true;
+      new MutationObserver(fixAll).observe(document.documentElement, { childList: true, subtree: true });
+      document.addEventListener('DOMContentLoaded', fixAll);
+      setTimeout(fixAll, 500);
+      setTimeout(fixAll, 1500);
+    }
+    return true;
   }
-  fixAll();
-  new MutationObserver(fixAll).observe(document.documentElement, { childList: true, subtree: true });
-  document.addEventListener('DOMContentLoaded', fixAll);
-  setTimeout(fixAll, 500);
-  setTimeout(fixAll, 1500);
+  if (!fixAll()) {
+    // 注入早于文档根：轮询等它出现（60 × 50ms ≈ 3s，覆盖慢网络下的首字节延迟）
+    var tries = 0;
+    var timer = setInterval(function () {
+      if (fixAll() || ++tries > 60) clearInterval(timer);
+    }, 50);
+  }
 })();
 """
 
@@ -151,26 +176,36 @@ fun JwWebView(
                     }
                 }
                 webViewClient = object : WebViewClient() {
-                    // 域名白名单：站外链接一律转交系统浏览器，避免把教务会话带进任意站点。
+                    // 域名白名单：站外链接一律转交系统浏览器，避免把教务会话带进任意站点；
+                    // 站内（ustb.edu.cn 及其子域）的 http 与 https **同等放行**（见 jwNavPolicy）。
                     // （桥的可见范围另有平台级 origin 限定，见 BRIDGE_ORIGINS。）
                     //
-                    // **必须失败关闭**：此前 host 为 null 时 `?: return false` 会放行
-                    // file:/content:/data:/blob: 这类无 host 的 URL 进入 WebView；
-                    // 也没有 scheme 检查，http:// 的站内地址同样能过。
+                    // **必须失败关闭**：host 为 null 的 file:/content:/data:/blob: 与
+                    // 非 http(s) 的 scheme（weixin:/intent: 等）继续拒绝且不交接——
+                    // 这条与"支持 http"无关，是防任意本地/外部 scheme 进 WebView 的底线。
                     override fun shouldOverrideUrlLoading(
                         view: WebView,
                         request: android.webkit.WebResourceRequest,
                     ): Boolean {
                         val url = request.url
-                        if (url.scheme != "https") return true          // 拒绝加载，不交接
-                        val host = url.host?.lowercase() ?: return true // 无 host 一律拒绝
-                        if (isJwHost(host)) return false
-                        return runCatching {
-                            view.context.startActivity(
-                                android.content.Intent(android.content.Intent.ACTION_VIEW, url),
-                            )
-                            true
-                        }.getOrDefault(true)
+                        val host = url.host?.lowercase()
+                        val policy = jwNavPolicy(url.scheme, host)
+                        if (BuildConfig.DEBUG) {
+                            android.util.Log.d(TAG, "nav ${url.scheme}://$host -> $policy")
+                        }
+                        return when (policy) {
+                            // 教务/统一认证站内（http 或 https）：WebView 自己加载
+                            JwNavPolicy.ALLOW_IN_WEBVIEW -> false
+                            // 站外 http/https：交系统浏览器，避免把教务会话带进任意站点
+                            JwNavPolicy.EXTERNAL_BROWSER -> runCatching {
+                                view.context.startActivity(
+                                    android.content.Intent(android.content.Intent.ACTION_VIEW, url),
+                                )
+                                true
+                            }.getOrDefault(true)
+                            // 非 http(s) / 无 host：拒绝加载，也不交接
+                            JwNavPolicy.BLOCK -> true
+                        }
                     }
 
                     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
@@ -255,10 +290,44 @@ fun JwWebView(
 internal fun isJwHost(host: String): Boolean =
     host == "ustb.edu.cn" || host.endsWith(".ustb.edu.cn")
 
+/** [jwNavPolicy] 的判定结果。 */
+internal enum class JwNavPolicy {
+    /** 教务/统一认证站内 http 或 https：放行给 WebView。 */
+    ALLOW_IN_WEBVIEW,
+
+    /** 站外 http/https：转交系统浏览器。 */
+    EXTERNAL_BROWSER,
+
+    /** 无 host 或非 http(s) scheme：拒绝加载且不交接。 */
+    BLOCK,
+}
+
+/**
+ * 导航策略（纯逻辑，JVM 可单测）。
+ *
+ * 站内按 host 白名单收口，**http 与 https 同等放行**：学校部分服务/跳转只有 http
+ * （微认证授权成功后 SSO 的回调 302 就指向 http://sso.ustb.edu.cn/idp/thirdAuth/...），
+ * 一律拒绝 https 之外的 scheme 会把这类跳转静默丢掉，表现为云登录永久卡在"授权成功"。
+ * 代价是站内明文可被中间人窃听/篡改，因此只对 ustb.edu.cn 子域放开；
+ * 站外仍然只交系统浏览器，无 host / 非 http(s) 一律不加载。
+ */
+internal fun jwNavPolicy(scheme: String?, host: String?): JwNavPolicy {
+    val h = host?.lowercase()
+    val jw = h != null && isJwHost(h)
+    return when {
+        jw && isHttpScheme(scheme) -> JwNavPolicy.ALLOW_IN_WEBVIEW
+        h != null && isHttpScheme(scheme) -> JwNavPolicy.EXTERNAL_BROWSER
+        else -> JwNavPolicy.BLOCK
+    }
+}
+
+/** 站内页面允许的 scheme：http 与 https 等价（学校部分服务只有 http）。 */
+internal fun isHttpScheme(scheme: String?): Boolean = scheme == "http" || scheme == "https"
+
 /** 教务系统本体域（页面缩放修正 PAGE_FIX_JS 只对它注入，见 JwWebView 注释）。 */
 private fun isByytUrl(url: String): Boolean =
     runCatching { android.net.Uri.parse(url) }.getOrNull()
-        ?.takeIf { it.scheme == "https" }
+        ?.takeIf { isHttpScheme(it.scheme) }
         ?.host?.lowercase() == "byyt.ustb.edu.cn"
 
 /**
@@ -269,7 +338,7 @@ private fun isByytUrl(url: String): Boolean =
  */
 private fun isMainPageUrl(url: String): Boolean {
     val uri = runCatching { android.net.Uri.parse(url) }.getOrNull() ?: return false
-    if (uri.scheme != "https") return false
+    if (!isHttpScheme(uri.scheme)) return false
     val host = uri.host?.lowercase() ?: return false
     if (!isJwHost(host)) return false
     return uri.path == MAIN_PAGE_MARK

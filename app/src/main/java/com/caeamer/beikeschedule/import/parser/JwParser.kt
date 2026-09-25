@@ -25,11 +25,20 @@ object JwParser {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * 行级解析失败日志钩子。本对象不依赖 Android（需可 JVM 单测），App 入口
+     * （JwImportBridge）把它接到 android.util.Log：教务改字段格式导致整行/整表
+     * 被静默跳过时，logcat 里有据可查，而不是用户只看到空课表。
+     */
+    var rowErrorLogger: ((row: String, error: Throwable) -> Unit)? = null
+
     /** 解析 /xszykb/queryxszykbzong 返回（顶层为 JSON 数组）。 */
     fun parseCourses(jsonText: String): List<CourseEntity> {
         val root = json.parseToJsonElement(jsonText).jsonArray
         return root.mapNotNull { elem ->
-            runCatching { toCourse(elem.jsonObject) }.getOrNull()
+            runCatching { toCourse(elem.jsonObject) }
+                .onFailure { rowErrorLogger?.invoke(elem.toString().take(300), it) }
+                .getOrNull()
         }
     }
 
@@ -88,6 +97,14 @@ object JwParser {
         }?.sortedBy { it.first } ?: emptyList()
         // 按 zc 顺序展开为下标列表，zc 必须从 1 开始；中间缺失的周用前一周 +7 天补齐（防御性）
         if (weeks.isEmpty() || weeks.first().first != 1) return WeekCalendar(emptyList(), totalWeeks)
+        // 脏数据防御 1：zc 是教务/脚本产出的自由数字，脏值（如 1e5）会生成十万级列表
+        if (weeks.last().first > MAX_TOTAL_WEEKS) return WeekCalendar(emptyList(), totalWeeks)
+        // 脏数据防御 2：monday 原样入库后，WeekResolver 对坏串 parse 失败会"用最后一个
+        // 已知周一倒推"，其后所有周整体错位——日期串必须先验证合法
+        if (weeks.any { runCatching { java.time.LocalDate.parse(it.second) }.isFailure }) {
+            rowErrorLogger?.invoke("weekCalendar monday invalid", IllegalArgumentException("monday 格式异常"))
+            return WeekCalendar(emptyList(), totalWeeks)
+        }
         val mondays = arrayListOf<String>()
         var lastMonday = ""
         for (i in 1..weeks.last().first) {
@@ -118,6 +135,12 @@ object JwParser {
         val keyRange = key?.let { keySectionRange(it) }
         val startSection = if (unscheduled) 0 else obj["KSJC"]?.jsonPrimitive?.intOrNull ?: keyRange?.first ?: 0
         val endSection = if (unscheduled) 0 else obj["JSJC"]?.jsonPrimitive?.intOrNull ?: keyRange?.second ?: startSection
+        // 节次全缺且 KEY 也没有 jc 段时兜底出的 0 会让编辑框把课程映射到第六大节
+        // （SectionMap.bigIndexOf(0) → 11-12 节），用户一保存课程就被永久搬走——
+        // 宁可整行跳过并留日志，也不要产出必错的行
+        if (!unscheduled && startSection <= 0) {
+            throw IllegalArgumentException("课程行缺失节次: key=$key SKSJ=$sksj")
+        }
 
         val (name, teacher, location) = splitSksj(sksj, unscheduled)
 
@@ -147,6 +170,9 @@ object JwParser {
             ?.takeIf { it in 1..SectionMap.BIG_SECTIONS.size }
             ?.let { big -> SectionMap.BIG_SECTIONS[big - 1].let { it.first to it.last } }
 
+    /** 周历 zc 合理上限（真实学期 ≤ 30 周，放一倍余量），超过按脏数据整体回退。 */
+    private const val MAX_TOTAL_WEEKS = 60
+
     /** 从备注文本解析周数（"机械设计 5-7周"、"微机原理与应用B 15,16周"），生成长度 34 的位图。 */
     internal fun parseNoteWeeks(sksj: String): String {
         val m = Regex("([\\d,\\-]+)周").find(sksj) ?: return ""
@@ -163,11 +189,13 @@ object JwParser {
         return sb.toString()
     }
 
-    /** KEY 形如 "xq2_jc1"，提取星期 N（1..7）。 */
+    /** KEY 形如 "xq2_jc1"，提取星期 N（1..7）；越界（xq0/xq8 等）视为脏数据抛出整行跳过——
+     *  否则 dayOfWeek=8 的行在任何周布局里都不可见，整门课静默消失。 */
     internal fun parseDayOfWeek(key: String): Int {
         val match = Regex("^xq(\\d)_jc\\d+$").find(key)
             ?: throw IllegalArgumentException("无法识别的 KEY: $key")
-        return match.groupValues[1].toInt()
+        return match.groupValues[1].toInt().takeIf { it in 1..7 }
+            ?: throw IllegalArgumentException("非法星期（须 1..7）: $key")
     }
 
     /**
@@ -193,8 +221,16 @@ object JwParser {
         }
         val lines = sksj.lines().map { it.trim() }.filter { it.isNotEmpty() }
         val name = lines.getOrElse(0) { "未命名课程" }
-        val teacher = lines.getOrElse(1) { "" }
-        val location = lines.firstOrNull { it.startsWith("【") }.orEmpty()
+        // 教师不能按固定行号取：某行缺教师时 lines[1] 实际是周数行，教师栏会显示 "1-16周"。
+        // 规则：跳过周数行（"1-16周"）、地点行（【校区】开头）、节次行（"第X-Y节"）
+        val isWeeksLine = Regex("^[\\d,\\-]+周$")
+        val teacher = lines.drop(1).firstOrNull {
+            !isWeeksLine.matches(it) && !it.startsWith("【") && !Regex("^第\\d+").matches(it)
+        } ?: ""
+        // 地点优先认【校区】前缀；没有时兜底取最后一个非周数/非教师/非节次行
+        val location = lines.firstOrNull { it.startsWith("【") }
+            ?: lines.lastOrNull { it != name && it != teacher && !isWeeksLine.matches(it) && !Regex("^第\\d+").matches(it) }
+                .orEmpty()
         return Triple(name, teacher, location)
     }
 }

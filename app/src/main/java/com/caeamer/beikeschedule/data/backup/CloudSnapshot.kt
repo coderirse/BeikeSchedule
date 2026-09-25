@@ -57,6 +57,20 @@ data class CloudSnapshot(
             if (snapshot.schemaVersion > SCHEMA_VERSION) {
                 throw SerializationException("云端备份由更新版本的 App 创建，请先升级本应用")
             }
+            // 规模合理性校验：decode 靠 ignoreUnknownKeys + 默认值对未知字段宽容，
+            // 但被篡改/损坏的快照（如 courses: []、十万级条目）不该走完恢复流程
+            // 去整表覆盖本机数据。上限按真实规模（几百行）放大一个数量级。
+            fun requireScale(name: String, size: Int, max: Int) {
+                if (size > max) throw SerializationException("云端备份的$name 数量异常（$size），已拒绝恢复")
+            }
+            requireScale("课程", snapshot.courses.size, 5_000)
+            requireScale("日程", snapshot.todos.size, 20_000)
+            requireScale("成绩", snapshot.grades.size, 20_000)
+            requireScale("考试", snapshot.exams.size, 2_000)
+            requireScale("节次", snapshot.sectionTimes.size, 100)
+            if (snapshot.sectionTimes.any { it.section !in 1..30 }) {
+                throw SerializationException("云端备份的节次数据异常，已拒绝恢复")
+            }
             return snapshot
         }
     }
@@ -160,54 +174,63 @@ data class StudentProfileDto(
 /** 快照 ↔ 本地数据（Room 五表 + DataStore 配置）的双向转换。 */
 object CloudSnapshotCodec {
 
-    /** 读取本机全部数据组装快照（IO 挂起，调用方自行选调度器）。 */
+    /**
+     * 读取本机全部数据组装快照（IO 挂起，调用方自行选调度器）。
+     *
+     * **一致性**：五张 Room 表的读取包在同一个只读事务里（否则成绩抓取落库/用户编辑
+     * 日志与构建并发时会产生"成绩是新表课程是旧表"式撕裂快照）；DataStore 各键仍逐个
+     * first()（DataStore 无多键事务，撕裂风险由 CloudSync 上传后的脏标记复查兜底）。
+     */
     suspend fun build(context: Context): CloudSnapshot {
         val repo = ScheduleRepository(context)
         val settings = repo.settings
-        val semester = settings.semester.first()
-        val profile = settings.studentProfile.first()
-        return CloudSnapshot(
-            exportedAt = System.currentTimeMillis(),
-            courses = repo.courses.first().map { it.toDto() },
-            sectionTimes = repo.sectionTimes.first().map { SectionTimeDto(it.section, it.startTime, it.endTime) },
-            grades = repo.grades.first().map {
-                GradeDto(
-                    kcdm = it.kcdm, kcmc = it.kcmc, xnxq = it.xnxq, xnxqmc = it.xnxqmc,
-                    kcxz = it.kcxz, kclb = it.kclb, xf = it.xf, zzcj = it.zzcj, bkcx = it.bkcx,
-                    yxmc = it.yxmc, sffx = it.sffx, pm = it.pm, zrs = it.zrs, khfs = it.khfs,
-                )
-            },
-            exams = repo.exams.first().map {
-                ExamDto(
-                    kcdm = it.kcdm, kcmc = it.kcmc, kslx = it.kslx, kssjms = it.kssjms,
-                    ksrq = it.ksrq, kssj = it.kssj, jssj = it.jssj, cdmc = it.cdmc,
-                    zwh = it.zwh, jkjsbz = it.jkjsbz, kkyxmc = it.kkyxmc, xnxq = it.xnxq,
-                )
-            },
-            todos = repo.todos.first(),
-            settings = SettingsDto(
-                semester = SemesterDto(
-                    xn = semester.xn, xq = semester.xq, name = semester.name,
-                    firstMonday = semester.firstMonday, totalWeeks = semester.totalWeeks,
-                    weekMondays = semester.weekMondays,
+        val db = AppDatabase.get(context)
+        return db.withTransaction {
+            val semester = settings.semester.first()
+            val profile = settings.studentProfile.first()
+            CloudSnapshot(
+                exportedAt = System.currentTimeMillis(),
+                courses = repo.courses.first().map { it.toDto() },
+                sectionTimes = repo.sectionTimes.first().map { SectionTimeDto(it.section, it.startTime, it.endTime) },
+                grades = repo.grades.first().map {
+                    GradeDto(
+                        kcdm = it.kcdm, kcmc = it.kcmc, xnxq = it.xnxq, xnxqmc = it.xnxqmc,
+                        kcxz = it.kcxz, kclb = it.kclb, xf = it.xf, zzcj = it.zzcj, bkcx = it.bkcx,
+                        yxmc = it.yxmc, sffx = it.sffx, pm = it.pm, zrs = it.zrs, khfs = it.khfs,
+                    )
+                },
+                exams = repo.exams.first().map {
+                    ExamDto(
+                        kcdm = it.kcdm, kcmc = it.kcmc, kslx = it.kslx, kssjms = it.kssjms,
+                        ksrq = it.ksrq, kssj = it.kssj, jssj = it.jssj, cdmc = it.cdmc,
+                        zwh = it.zwh, jkjsbz = it.jkjsbz, kkyxmc = it.kkyxmc, xnxq = it.xnxq,
+                    )
+                },
+                todos = repo.todos.first(),
+                settings = SettingsDto(
+                    semester = SemesterDto(
+                        xn = semester.xn, xq = semester.xq, name = semester.name,
+                        firstMonday = semester.firstMonday, totalWeeks = semester.totalWeeks,
+                        weekMondays = semester.weekMondays,
+                    ),
+                    reminderEnabled = settings.reminderEnabled.first(),
+                    reminderMinutes = settings.reminderMinutes.first(),
+                    themeMode = settings.themeMode.first().name,
+                    gpaJson = settings.gpaCache.first(),
+                    gradesFetchedAt = settings.gradesFetchedAt.first(),
+                    xflbyqJson = settings.xflbyqJson.first(),
+                    bxkqkJson = settings.bxkqkJson.first(),
+                    studentProfile = StudentProfileDto(
+                        xm = profile.xm, xh = profile.xh, yxmc = profile.yxmc, zymc = profile.zymc,
+                        bjmc = profile.bjmc, njmc = profile.njmc, xjsfzx = profile.xjsfzx, xjsfzc = profile.xjsfzc,
+                    ),
+                    weightedSemester = settings.weightedSemesterFilter.first(),
+                    weightedExcluded = settings.weightedExcludedKcdm.first().toList(),
+                    hideWeekend = settings.hideWeekend.first(),
+                    hideInactiveCourses = settings.hideInactiveCourses.first(),
                 ),
-                reminderEnabled = settings.reminderEnabled.first(),
-                reminderMinutes = settings.reminderMinutes.first(),
-                themeMode = settings.themeMode.first().name,
-                gpaJson = settings.gpaCache.first(),
-                gradesFetchedAt = settings.gradesFetchedAt.first(),
-                xflbyqJson = settings.xflbyqJson.first(),
-                bxkqkJson = settings.bxkqkJson.first(),
-                studentProfile = StudentProfileDto(
-                    xm = profile.xm, xh = profile.xh, yxmc = profile.yxmc, zymc = profile.zymc,
-                    bjmc = profile.bjmc, njmc = profile.njmc, xjsfzx = profile.xjsfzx, xjsfzc = profile.xjsfzc,
-                ),
-                weightedSemester = settings.weightedSemesterFilter.first(),
-                weightedExcluded = settings.weightedExcludedKcdm.first().toList(),
-                hideWeekend = settings.hideWeekend.first(),
-                hideInactiveCourses = settings.hideInactiveCourses.first(),
-            ),
-        )
+            )
+        }
     }
 
     /**
