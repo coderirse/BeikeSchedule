@@ -42,6 +42,7 @@ App 内「我的 → 检查更新」走自有更新源（`/api/bs/app/latest`）
 - Room（课程 / 节次时间 / 成绩 / 考试 / 日程）+ DataStore（学期配置 / 教学周日历 / 提醒 / 主题 / 隐私开关）
 - AlarmManager（上课 / 考试 / 日程提醒调度）
 - OkHttp + kotlinx.serialization（云同步 REST，api.caeamer.com 的 /api/bs 模块；无 Retrofit）
+- 云同步全链路 HTTPS：源站不暴露任何公网端口，由 **Cloudflare Tunnel**（cloudflared 主动出连）承接 `api.caeamer.com`；客户端不再有明文 HTTP 通道
 - 教务适配层：WebView 注入 JS 复用登录会话，直接调教务结构化 JSON 接口（无需解析 HTML）
 - AndroidKeyStore（AES-GCM）加密保存云 token；Ed25519 验签（自有更新源元数据 + 云备份快照）
 - 云登录：教务统一认证 → SSO（`sso.ustb.edu.cn/ac-h5`）扫码 → 微认证二维码（`sis.ustb.edu.cn/connect/qrpage|qrimg|state`）。App 用 `shouldInterceptRequest` 原生捕获二维码 sid 并自行长轮询，不依赖页面自带轮询（慢网下它会超时→reload→换码）
@@ -73,7 +74,7 @@ App 内「我的 → 检查更新」走自有更新源（`/api/bs/app/latest`）
 
 **本机数据**：课表/成绩/日程默认仅保存在本机，不上传云端。登录会话由系统 WebView 保存，学号等学籍信息会随成绩抓取缓存在本机用于离线展示；如需终止会话，可在「我的」→「退出教务登录」清除。
 
-**云同步（opt-in，默认关闭）**：在「我的」→「云同步」用教务统一认证（扫码或账密）登录后才会开启。账号即学号、无密码——统一认证成功本身即是身份验证。开启后课表、日程、成绩、考试与相关设置会整包备份到开发者自有服务器（仅用于备份恢复，不做任何分析或共享；`api.caeamer.com` 未备案被云厂商拦截，过渡期经 `http://112.125.88.178` IP 直连明文 HTTP，备案完成后切回 HTTPS 域名），关闭开关或退出云账号即停止上传；云端备份在退出云账号后保留，重新登录即可找回。
+**云同步（opt-in，默认关闭）**：在「我的」→「云同步」用教务统一认证（扫码或账密）登录后才会开启。账号即学号、无密码——统一认证成功本身即是身份验证。开启后课表、日程、成绩、考试与相关设置会整包备份到开发者自有服务器（仅用于备份恢复，不做任何分析或共享），**全程 HTTPS**：`https://api.caeamer.com` 由 Cloudflare 承接，源站不开放任何公网入站端口（cloudflared 从服务器主动向 Cloudflare 出连，请求经隧道回到本机 `127.0.0.1:3000`）。关闭开关或退出云账号即停止上传；云端备份在退出云账号后保留，重新登录即可找回。
 
 **云账号的身份校验**：登录时 App 会把本次教务会话（SESSION cookie）用服务端 RSA 公钥密封（RSA-OAEP-SHA256，密文上传，链路上拿不到明文，也不会被记录），服务端解开后立即向教务系统 `/user/me` 核实"请求方确实持有该学号的教务会话"，核实完即丢弃；只凭"学号+姓名"无法再换到 token（这两项在班级名单/群文件里总是成对出现）。云 token 本身用 AndroidKeyStore 的 AES-256-GCM 加密后落盘，换设备无法解密复用。
 

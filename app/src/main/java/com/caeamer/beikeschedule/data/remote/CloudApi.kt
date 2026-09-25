@@ -30,10 +30,11 @@ import javax.net.ssl.SSLException
  */
 object CloudApi {
 
-    // api.caeamer.com 未做 ICP 备案，阿里云拦截走域名的流量（HTTPS 握手被 reset），
-    // 备案完成前与 showwe 客户端同策略：IP 直连明文 HTTP（仅此 IP 在
-    // network_security_config.xml 中放行明文）。备案后换回 https://api.caeamer.com。
-    private const val BASE_URL = "http://112.125.88.178"
+    // 域名未备案时阿里云会拦截"客户端直连源站域名"的 TLS（握手被 reset），
+    // 因此源站改由 Cloudflare Tunnel 承接：cloudflared 从实例主动向外建连，
+    // 公网只看到 Cloudflare 边缘，客户端全程 HTTPS。旧版客户端仍走
+    // http://112.125.88.178（服务端保留该入口直到老版本退场）。
+    private const val BASE_URL = "https://api.caeamer.com"
     private const val PATH_LATEST = "/api/bs/app/latest"
     private const val PATH_LOGIN = "/api/bs/auth/login"
     private const val PATH_BACKUP = "/api/bs/backup"
