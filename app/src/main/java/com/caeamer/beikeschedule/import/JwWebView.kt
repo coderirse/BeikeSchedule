@@ -15,6 +15,14 @@ import androidx.webkit.WebViewCompat
 import com.caeamer.beikeschedule.BuildConfig
 
 private const val JW_HOME = "https://byyt.ustb.edu.cn"
+
+/**
+ * 统一认证入口：教务登录页那颗"统一身份认证登录"按钮跳的就是这个地址。
+ *
+ * 一键同步页用它作为 WebView 起始地址——有教务会话时 SSO 会立刻带 code 跳回教务主页
+ * （用户看不到任何登录界面），没有会话时直接进 SSO 移动版扫码页，省掉"先看登录页再手点"。
+ */
+internal const val JW_SSO_ENTRY_URL = "$JW_HOME/oauth/login/code"
 private const val MAIN_PAGE_MARK = "/authentication/main"
 private const val TAG = "BeikeJwWebView"
 
@@ -99,9 +107,15 @@ internal const val PAGE_FIX_JS = """
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun JwWebView(
-    bridge: JwBridge,
-    bridgeName: String,
+    /**
+     * 具名桥列表（桥名 ↔ 桥实现）。一键同步页同时注册三个脚本的桥：
+     * `BeikeImport` / `BeikeGrades` / `BeikeIdentity`，每个桥自带失败回调，
+     * 脚本报错因此能落到具体步骤上。
+     */
+    bridges: List<Pair<String, JwBridge>>,
     onMainPage: () -> Unit,
+    /** 起始地址；一键同步页传 [JW_SSO_ENTRY_URL] 直达统一认证，其余场景保持教务首页。 */
+    startUrl: String = JW_HOME,
     onCreated: (WebView) -> Unit = {},
     onPageStarted: () -> Unit = {},
     onPageError: (String) -> Unit = {},
@@ -158,15 +172,17 @@ fun JwWebView(
                 // 桥：平台按 origin 限定可见范围（见类注释），回调里再校验主框架 + 教务域名。
                 // 两条 origin 规则覆盖"教务站点本体"与"统一认证可能用到的其它 ustb 子域"，
                 // 保证登录页上手动抓取失败时仍能把错误经桥报回界面（而不是静默无反应）。
-                WebViewCompat.addWebMessageListener(
-                    this,
-                    bridgeName,
-                    BRIDGE_ORIGINS,
-                ) { _, message, sourceOrigin, isMainFrame, _ ->
-                    if (!isMainFrame) return@addWebMessageListener
-                    val host = sourceOrigin.host?.lowercase() ?: return@addWebMessageListener
-                    if (!isJwHost(host)) return@addWebMessageListener
-                    message.data?.let(bridge::dispatch)
+                bridges.forEach { (name, bridge) ->
+                    WebViewCompat.addWebMessageListener(
+                        this,
+                        name,
+                        BRIDGE_ORIGINS,
+                    ) { _, message, sourceOrigin, isMainFrame, _ ->
+                        if (!isMainFrame) return@addWebMessageListener
+                        val host = sourceOrigin.host?.lowercase() ?: return@addWebMessageListener
+                        if (!isJwHost(host)) return@addWebMessageListener
+                        message.data?.let(bridge::dispatch)
+                    }
                 }
                 // document-start 脚本：平台保证在匹配 origin 的每个 frame（含 iframe）
                 // 的页面脚本之前执行；句柄记下来供离开组合时移除
@@ -270,7 +286,7 @@ fun JwWebView(
                         onPageProgress(newProgress)
                     }
                 }
-                loadUrl(JW_HOME)
+                loadUrl(startUrl)
                 onCreated(this)
             }
         },
@@ -278,7 +294,9 @@ fun JwWebView(
         // WebView 与其 JS 定时器（PAGE_FIX_JS 里的 MutationObserver / setTimeout）会一起泄漏。
         // 导入页的"预览 → 重新抓取"会反复创建新实例，成绩页每次抓取完成后也会销毁一个。
         onRelease = { view ->
-            runCatching { WebViewCompat.removeWebMessageListener(view, bridgeName) }
+            bridges.forEach { (name, _) ->
+                runCatching { WebViewCompat.removeWebMessageListener(view, name) }
+            }
             runCatching { view.stopLoading() }
             runCatching { view.loadUrl("about:blank") }
             runCatching { view.destroy() }
@@ -286,9 +304,47 @@ fun JwWebView(
     )
 }
 
+/** 单桥便捷重载：保持原有调用方式（桥名 + 桥实现）。 */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun JwWebView(
+    bridge: JwBridge,
+    bridgeName: String,
+    onMainPage: () -> Unit,
+    onCreated: (WebView) -> Unit = {},
+    onPageStarted: () -> Unit = {},
+    onPageError: (String) -> Unit = {},
+    onPageProgress: (Int) -> Unit = {},
+    onSubresourceRequest: ((android.webkit.WebResourceRequest) -> Unit)? = null,
+    documentStartScripts: List<Pair<Set<String>, String>> = emptyList(),
+) = JwWebView(
+    bridges = listOf(bridgeName to bridge),
+    onMainPage = onMainPage,
+    startUrl = JW_HOME,
+    onCreated = onCreated,
+    onPageStarted = onPageStarted,
+    onPageError = onPageError,
+    onPageProgress = onPageProgress,
+    onSubresourceRequest = onSubresourceRequest,
+    documentStartScripts = documentStartScripts,
+)
+
 /** 教务系统域名白名单：ustb.edu.cn 及其子域。前导点保证 evilustb.edu.cn 不匹配。 */
 internal fun isJwHost(host: String): Boolean =
     host == "ustb.edu.cn" || host.endsWith(".ustb.edu.cn")
+
+/**
+ * 当前页是否为教务本体域（byyt）——三个抓取脚本只允许在这里运行。
+ *
+ * 脚本内全是相对路径（`/user/me`、`/xszykb/...`、`/cjgl/...`），注入到 SSO 或微认证域
+ * 会打到错误站点拿到 404；此外平台层桥按 ustb 任意子域放行，所以"主框架 + byyt 域"
+ * 是脚本结果可信的必要条件（否则被 XSS 的子域可伪造抓取结果）。
+ */
+internal fun isByytHost(url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    val host = runCatching { java.net.URI(url).host?.lowercase() }.getOrNull()
+    return host == "byyt.ustb.edu.cn"
+}
 
 /** [jwNavPolicy] 的判定结果。 */
 internal enum class JwNavPolicy {

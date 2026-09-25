@@ -50,9 +50,7 @@ import com.caeamer.beikeschedule.data.backup.CloudSync
 import com.caeamer.beikeschedule.data.pref.AppSession
 import com.caeamer.beikeschedule.data.pref.ScorePrivacy
 import com.caeamer.beikeschedule.data.pref.SettingsStore
-import com.caeamer.beikeschedule.import.ImportScreen
-import com.caeamer.beikeschedule.import.ImportViewModel
-import com.caeamer.beikeschedule.ui.cloud.CloudLoginScreen
+import com.caeamer.beikeschedule.ui.sync.UnifiedSyncScreen
 import com.caeamer.beikeschedule.ui.grades.GradesScreen
 import com.caeamer.beikeschedule.ui.profile.ProfileScreen
 import com.caeamer.beikeschedule.ui.schedule.ScheduleScreen
@@ -165,22 +163,18 @@ class MainActivity : ComponentActivity() {
                 SettingsStore.ThemeMode.DARK -> true
                 SettingsStore.ThemeMode.SYSTEM -> isSystemInDarkTheme()
             }
-            // 导入 ViewModel 提到宿主：进入导入前要清掉上一次流程的终态（见 resetIfFinished），
-            // 否则成功导入后同一进程内再也进不去导入页（会被 Done 终态立刻弹出来）
-            val importViewModel: ImportViewModel = viewModel()
             BeikeScheduleTheme(darkTheme = darkTheme) {
                 var tab by rememberSaveable { mutableStateOf("schedule") }
-                var showImport by rememberSaveable { mutableStateOf(false) }
-                var showCloudLogin by rememberSaveable { mutableStateOf(false) }
-                // 导入页/云登录页的 WebView 展示的是浅底教务页面，需要临时切成深色状态栏图标
-                var importLightPage by remember { mutableStateOf(false) }
-                var cloudLightPage by remember { mutableStateOf(false) }
+                // 一键同步（登录 + 课表/成绩/云同步）为全屏流程，不显示底部 Tab
+                var showSync by rememberSaveable { mutableStateOf(false) }
+                // 同步页的 WebView 展示的是浅底教务页面，需要临时切成深色状态栏图标
+                var syncLightPage by remember { mutableStateOf(false) }
 
                 // 状态栏/导航栏图标明暗：themeMode 只是 Compose 内部的主题选择，
                 // 不会改资源 uiMode，而 enableEdgeToEdge() 的 SystemBarStyle.auto 只看 uiMode
                 // （本应用主题是 android:Theme.Material.Light.NoActionBar，恒为 notnight），
                 // 所以必须自己按 darkTheme 设置，否则"系统浅色 + 应用深色"时是深图标压在近黑渐变上。
-                val darkIcons = if ((showImport && importLightPage) || (showCloudLogin && cloudLightPage)) true else !darkTheme
+                val darkIcons = if (showSync && syncLightPage) true else !darkTheme
                 SideEffect {
                     WindowCompat.getInsetsController(window, window.decorView).apply {
                         isAppearanceLightStatusBars = darkIcons
@@ -188,18 +182,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                if (showImport) {
-                    // 导入为全屏流程，不显示底部 Tab；返回键由 ImportScreen 内的 BackHandler 接管
-                    ImportScreen(
-                        onDone = { showImport = false },
-                        onLightBackgroundVisible = { importLightPage = it },
-                        viewModel = importViewModel,
-                    )
-                } else if (showCloudLogin) {
-                    // 云登录同样为全屏流程：内嵌教务 WebView，登录成功抓到学号即完成云登录
-                    CloudLoginScreen(
-                        onDone = { showCloudLogin = false },
-                        onLightBackgroundVisible = { cloudLightPage = it },
+                if (showSync) {
+                    // 一次扫码跑完课表导入 + 成绩抓取 + 云账号登录（必要时上传备份）
+                    UnifiedSyncScreen(
+                        onDone = { showSync = false },
+                        onLightBackgroundVisible = { syncLightPage = it },
                     )
                 } else {
                     // 整屏渐变仅在「课表页」开启：浅色暖渐变/暗色暗渐变，其他页用主题默认背景
@@ -248,13 +235,10 @@ class MainActivity : ComponentActivity() {
                         ) { padding ->
                             Box(Modifier.padding(padding)) {
                                 when (tab) {
-                                    "jw" -> GradesScreen()
-                                    "mine" -> ProfileScreen(onCloudLoginClick = { showCloudLogin = true })
+                                    "jw" -> GradesScreen(onResync = { showSync = true })
+                                    "mine" -> ProfileScreen(onCloudLoginClick = { showSync = true })
                                     else -> ScheduleScreen(
-                                        onImportClick = {
-                                            importViewModel.resetIfFinished()
-                                            showImport = true
-                                        },
+                                        onImportClick = { showSync = true },
                                     )
                                 }
                             }
