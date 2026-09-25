@@ -14,8 +14,9 @@ import kotlinx.serialization.Serializable
  *
  * 时间是单个时间点（HH:mm），列表按时间点排序。提醒提前量按事项自定义。
  *
- * @Serializable：仅供日程表单的 rememberSaveable Saver 做进程内快照（旋转屏幕不丢编辑中状态），
- * 不落盘、不参与网络传输。
+ * @Serializable：进程内快照（表单 rememberSaveable）+ 云同步整包快照复用
+ * （CloudSnapshot.todos，含本地自增 id）。它已经是**网络契约的一部分**：
+ * 新增字段必须带默认值（解码端 ignoreUnknownKeys + 默认值，老快照仍可恢复）。
  */
 @Serializable
 @Entity(tableName = "todo")

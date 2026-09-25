@@ -1,6 +1,7 @@
 package com.caeamer.beikeschedule.import
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.caeamer.beikeschedule.data.local.CourseEntity
@@ -72,6 +73,13 @@ class ImportViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onFetchStart() {
         _state.value = ImportUiState.Fetching
+    }
+
+    init {
+        // 行级解析失败接到 logcat：教务改字段格式导致整行/整表被静默跳过时有据可查
+        JwParser.rowErrorLogger = { row, error ->
+            Log.w("BeikeImport", "课表行解析失败，已跳过: $row", error)
+        }
     }
 
     /** JsBridge 回调：脚本抓取完成（可能在 WebView 线程，切到主线程状态更新即可）。 */

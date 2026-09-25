@@ -2,11 +2,16 @@ package com.caeamer.beikeschedule.data.local
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import kotlinx.serialization.Serializable
 
 /**
  * 课程块。字段与 docs/TECH_DESIGN.md 第 5 节一致：
  * 周次采用教务 32 位位图（weekBitmap），无固定时间课程 dayOfWeek=0。
+ *
+ * @Serializable 供 UI 层 rememberSaveable 用（如课程详情弹层旋转恢复）；
+ * 未来若参与云端快照，新增字段必须带默认值（与 CloudSnapshot 的 DTO 兼容策略一致）。
  */
+@Serializable
 @Entity(tableName = "course")
 data class CourseEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

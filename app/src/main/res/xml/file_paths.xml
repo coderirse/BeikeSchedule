@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 应用内更新 APK 的共享路径（仅外部私有目录，别放开更多） -->
+<paths>
+    <external-files-path name="update_apk" path="." />
+</paths>

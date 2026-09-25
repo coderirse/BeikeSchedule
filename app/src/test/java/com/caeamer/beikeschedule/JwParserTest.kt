@@ -199,4 +199,33 @@ class JwParserTest {
         assertEquals(18, JwParser.parseWeekCalendar("""{"totalWeeks":18,"weeks":[]}""").totalWeeks)
         assertEquals(0, JwParser.parseWeekCalendar("not json").weekMondays.size)
     }
+
+    // ——— R4 审查：脏数据防御（非法行整行跳过并留日志，不产出必错数据） ———
+
+    @Test
+    fun `非法星期 xq8 整行跳过`() {
+        val json = """[{"RWH":"R1","KEY":"xq8_jc1","SKSJ":"脏课\n张三\n1-16周\n【校本部】楼101\n第1-2节","XB":"1","ZC":"01111111111111111111111111111111","KSJC":1,"JSJC":2}]"""
+        assertTrue(JwParser.parseCourses(json).isEmpty())
+    }
+
+    @Test
+    fun `节次全缺且 KEY 无 jc 段的行跳过`() {
+        val json = """[{"RWH":"R1","KEY":"xq2_jc1","SKSJ":"高数\n张三\n1-16周\n【校本部】楼101\n第1-2节"}]"""
+        // KEY 有 jc 段 → 从 KEY 推导，正常解析
+        assertEquals(1, JwParser.parseCourses(json).size)
+    }
+
+    @Test
+    fun `周历 monday 非法日期整体回退`() {
+        val json = """{"totalWeeks":2,"weeks":[{"zc":1,"monday":"2026/09/07"},{"zc":2,"monday":"2026-09-14"}]}"""
+        val calendar = JwParser.parseWeekCalendar(json)
+        assertTrue(calendar.weekMondays.isEmpty())
+    }
+
+    @Test
+    fun `周历脏 zc 超上限整体回退`() {
+        val json = """{"totalWeeks":100000,"weeks":[{"zc":1,"monday":"2026-09-07"},{"zc":100000,"monday":"2038-01-01"}]}"""
+        val calendar = JwParser.parseWeekCalendar(json)
+        assertTrue(calendar.weekMondays.isEmpty())
+    }
 }

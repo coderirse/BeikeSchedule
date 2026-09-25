@@ -23,3 +23,17 @@ keystore/
 
 # IDE 全量忽略（此前只忽略部分 .idea 子路径，其余会漏进 git status）
 .idea/
+
+# 本机调试/取证产物（uiautomator dump、模拟器截图、探针输出、签名 payload 副本）
+/e*.xml
+/s*.xml
+/ui*.xml
+/u.xml
+/w*.xml
+/emu*.png
+/shot*.png
+/cloud_*.png
+/beikecloud.log
+/latest_*.json
+__pycache__/
+.workbuddy/

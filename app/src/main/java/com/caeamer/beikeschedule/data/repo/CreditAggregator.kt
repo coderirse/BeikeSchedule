@@ -27,7 +27,8 @@ object CreditAggregator {
     fun sumPassedByCategory(grades: List<GradeEntity>): Map<String, Double> =
         GradeRows.bestPerCourse(grades)
             .filter { it.isPassed && it.kclb.isNotBlank() }
-            .distinctBy { it.kcdm }
+            // 与 bestPerCourse 同口径：空 kcdm 按课程名去重，别把不同课程折叠成一门
+            .distinctBy { it.kcdm.ifBlank { it.kcmc } }
             .groupBy { it.kclb }
             .mapValues { (_, rows) -> rows.sumOf { it.xf } }
 

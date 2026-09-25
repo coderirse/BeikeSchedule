@@ -25,6 +25,11 @@ import javax.crypto.spec.SecretKeySpec
  * 这组参数是逆向站点 `hberJs` bundle 里的 `enHelp.De` 后实测确认的，**不是猜的**。
  * 注意站点实现里的一个坑：`enHelp.aa` 初看像字面量 `"8!0y"`，实际那是 RC4 的密钥，
  * 真正的 Key 是 RC4 解出来的 `"80bd…d41b"`（32 字符）。按字面量取会一直解不开。
+ *
+ * **安全边界（R4 审查备注）**：本对象的 AES-256-CBC Key/IV 与 csrkKey 都是编译期常量
+ * （逆向所得，无法避免），`genToken` 按可预测的时间戳逐位取 key 字符——等于公开算法。
+ * 它只有防滥用价值，**没有保密性/完整性价值**；绝不要把这个模式（固定 IV + 硬编码密钥）
+ * 复用到云同步等真实凭证场景。
  */
 object SmartClassCrypto {
 
@@ -99,10 +104,18 @@ object SmartClassCrypto {
 
     /**
      * 把 URL 加上 `csrkToken` 查询参数（已有查询串时用 `&` 连接）。
-     * token 生成失败时原样返回（上层会因服务端报错而走兜底）。
+     * token 生成失败时原样返回（兼容入口；调用方应优先用 [signOrNull] 短路失败请求）。
      */
-    fun sign(url: String, csrkKey: String, timeMillis: Long): String {
-        val token = genToken(csrkKey, timeMillis) ?: return url
+    fun sign(url: String, csrkKey: String, timeMillis: Long): String =
+        signOrNull(url, csrkKey, timeMillis) ?: url
+
+    /**
+     * 同 [sign]，但 token 生成失败（key 非法/时间戳异常）返回 null：调用方应据此
+     * **不发请求**直接失败，而不是发一个没有 csrkToken 的请求去挨服务端拒绝——
+     * 那样既多耗一次 RTT，"签名被拒重校"自愈路径还会把"key 格式坏"误判为"key 轮换"反复重拉。
+     */
+    fun signOrNull(url: String, csrkKey: String, timeMillis: Long): String? {
+        val token = genToken(csrkKey, timeMillis) ?: return null
         val sep = if (url.contains('?')) '&' else '?'
         return "$url$sep" + "csrkToken=$token"
     }

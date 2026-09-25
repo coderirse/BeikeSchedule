@@ -23,8 +23,8 @@ android {
         applicationId = "com.caeamer.beikeschedule"
         minSdk = 34
         targetSdk = 37
-        versionCode = 40
-        versionName = "1.2.5"
+        versionCode = 48
+        versionName = "1.3.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -39,9 +39,19 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 独立包名：调试包可与正式包并存，真机排查线上问题时不必卸载丢数据
+            applicationIdSuffix = ".debug"
+        }
         release {
-            // 开启 R8 压缩/优化（依赖库均自带 consumer keep 规则：Compose/Room/kotlinx.serialization）
+            // 开启 R8 压缩/优化（依赖库均自带 consumer keep 规则：Compose/Room/kotlinx.serialization）。
+            // 规则文件必须显式声明：此前未声明 proguardFiles，R8 只靠 consumer rules 裸跑，
+            // 将来引入的反射/序列化多态只会在 release 运行时炸
             isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             // 资源裁剪：与 R8 配套，去掉未被引用的资源（APK 体积的主因仍是
             // material-icons-extended，这一步只收窄剩余部分）
             isShrinkResources = true
@@ -62,6 +72,8 @@ android {
     }
     buildFeatures {
         compose = true
+        // 云登录等调试日志用 BuildConfig.DEBUG 门控，release 不输出
+        buildConfig = true
     }
 }
 
@@ -88,6 +100,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.webkit)
+    // 云同步 / 检查更新（api.caeamer.com）
+    implementation(libs.okhttp)
     testImplementation(libs.junit)
     // org.json 在 JVM 单测里是 Android SDK 的 stub（方法返回 null/抛异常），
     // 解析器单测必须用真实实现替换它

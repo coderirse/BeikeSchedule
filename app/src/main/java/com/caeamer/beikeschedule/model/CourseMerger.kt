@@ -15,17 +15,33 @@ object CourseMerger {
 
     fun mergeSameSlot(courses: List<CourseEntity>): List<CourseEntity> =
         courses.groupBy { SlotKey(it.name, it.dayOfWeek, it.startSection, it.endSection) }
-            .map { (_, rows) -> merge(rows) }
+            .flatMap { (_, rows) -> merge(rows) }
 
     private data class SlotKey(val name: String, val day: Int, val start: Int, val end: Int)
 
-    private fun merge(rows: List<CourseEntity>): CourseEntity {
-        if (rows.size == 1) return rows[0]
-        // 基准行取地点信息最完整的。
-        //
-        // 判据必须**剥掉【校区】前缀**再比较：真实教务数据的调课行地点是 "【校本部】-"
-        // （既不是空白也不等于裸 "-"），原先的 `!= "-"` 一行都拦不住，卡片上会显示
-        // 这个幽灵地点。测试原本用裸 "-" 作 fixture，所以缺陷一直没被发现。
+    /**
+     * 同一时段的行合并。**地点不同的真实行不合并**：教务拆行不只因地点写 "-"，也可能是
+     * 调课换教室（1-6 周 A 楼、7 周起 B 楼）——若按周次并集合成一张卡，B 楼会被基准行的
+     * A 楼覆盖，提醒与详情把用户指去错误教室。占位符行（"-" / "【校区】-"/空）无地点信息，
+     * 仍并入其所属地点组；同地点多行合并为一张卡、周次取并集。
+     */
+    private fun merge(rows: List<CourseEntity>): List<CourseEntity> {
+        if (rows.size <= 1) return rows
+        val realRows = rows.filter { plausibleLocation(it.location) }
+        if (realRows.isEmpty()) return listOf(mergeGroup(rows))
+        val baseLocation = stripCampusPrefix(realRows.first().location)
+        val baseGroup = rows.filter {
+            !plausibleLocation(it.location) || stripCampusPrefix(it.location) == baseLocation
+        }
+        val otherGroups = realRows
+            .filter { stripCampusPrefix(it.location) != baseLocation }
+            .groupBy { stripCampusPrefix(it.location) }
+        return listOf(mergeGroup(baseGroup)) + otherGroups.values.map { mergeGroup(it) }
+    }
+
+    /** 同地点多行 → 一张卡：地点取**首个有真实地点**的行（占位符行可能排在前面），
+     *  教师取第一个非空，周次并集。 */
+    private fun mergeGroup(rows: List<CourseEntity>): CourseEntity {
         val base = rows.firstOrNull { plausibleLocation(it.location) } ?: rows.first()
         return base.copy(
             teacher = rows.firstOrNull { it.teacher.isNotBlank() }?.teacher ?: base.teacher,

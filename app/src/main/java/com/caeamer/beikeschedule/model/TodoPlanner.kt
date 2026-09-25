@@ -82,7 +82,10 @@ object TodoPlanner {
         (0 until days)
             .map { today.plusDays(it.toLong()) }
             .mapNotNull { date ->
-                val dayTodos = todos.filter { occursOn(it, date) }.sortedBy { it.time }
+                // 与 upcomingReminders 同口径先 parse 再排序：非零填充的 "9:00" 按
+                // 字符串排会落到 "10:00" 之后；解析失败的沉底
+                val dayTodos = todos.filter { occursOn(it, date) }
+                    .sortedBy { runCatching { LocalTime.parse(it.time) }.getOrDefault(LocalTime.MAX) }
                 if (dayTodos.isEmpty()) null else date to dayTodos
             }
 }

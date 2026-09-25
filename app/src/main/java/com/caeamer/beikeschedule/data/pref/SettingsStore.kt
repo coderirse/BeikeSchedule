@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.caeamer.beikeschedule.data.backup.CloudSync
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -86,6 +87,14 @@ class SettingsStore(private val context: Context) {
         val TODO_REMINDER_CODES = stringPreferencesKey("todo_reminder_codes")
         val FREE_ROOM_BUILDING = stringPreferencesKey("free_room_building")
         val FREE_ROOM_TAB_INDEX = intPreferencesKey("free_room_tab_index")
+
+        // —— 云同步（api.caeamer.com，账号 = 学号，opt-in 默认关闭）——
+        val CLOUD_XH = stringPreferencesKey("cloud_xh")
+        val CLOUD_NAME = stringPreferencesKey("cloud_name")
+        val CLOUD_TOKEN = stringPreferencesKey("cloud_token")
+        val CLOUD_ENABLED = booleanPreferencesKey("cloud_sync_enabled")
+        val CLOUD_DIRTY = booleanPreferencesKey("cloud_dirty")
+        val CLOUD_LAST_BACKUP_AT = longPreferencesKey("cloud_last_backup_at")
     }
 
     val semester: Flow<SemesterConfig> = context.dataStore.data.map { p ->
@@ -100,6 +109,7 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun saveSemester(config: SemesterConfig) {
+        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.XN] = config.xn
             p[Keys.XQ] = config.xq
@@ -117,6 +127,7 @@ class SettingsStore(private val context: Context) {
         context.dataStore.data.map { it[Keys.REMINDER_MINUTES] ?: 15 }
 
     suspend fun setReminder(enabled: Boolean, minutesBefore: Int) {
+        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.REMINDER_ENABLED] = enabled
             p[Keys.REMINDER_MINUTES] = minutesBefore
@@ -152,6 +163,7 @@ class SettingsStore(private val context: Context) {
     val bxkqkJson: Flow<String> = context.dataStore.data.map { p -> p[Keys.BXKQK_JSON] ?: "" }
 
     suspend fun saveCreditMeta(xflbyqJson: String, bxkqkJson: String) {
+        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.XFLBYQ_JSON] = xflbyqJson
             p[Keys.BXKQK_JSON] = bxkqkJson
@@ -163,6 +175,7 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun setThemeMode(mode: ThemeMode) {
+        noteCloudDirty()
         context.dataStore.edit { p -> p[Keys.THEME_MODE] = mode.name }
     }
 
@@ -171,6 +184,7 @@ class SettingsStore(private val context: Context) {
     val gradesFetchedAt: Flow<Long> = context.dataStore.data.map { p -> p[Keys.GRADES_FETCHED_AT] ?: 0L }
 
     suspend fun saveGradesMeta(gpaJson: String, fetchedAt: Long) {
+        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.GPA_CACHE] = gpaJson
             p[Keys.GRADES_FETCHED_AT] = fetchedAt
@@ -192,6 +206,7 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun saveStudentProfile(profile: StudentProfile) {
+        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.SP_XM] = profile.xm
             p[Keys.SP_XH] = profile.xh
@@ -214,6 +229,7 @@ class SettingsStore(private val context: Context) {
         }
 
     suspend fun saveWeightedFilter(semester: String, excluded: Set<String>) {
+        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.WEIGHT_SEMESTER] = semester
             p[Keys.WEIGHT_EXCLUDED] = excluded.joinToString(",")
@@ -224,6 +240,7 @@ class SettingsStore(private val context: Context) {
     val hideWeekend: Flow<Boolean> = context.dataStore.data.map { it[Keys.HIDE_WEEKEND] ?: false }
 
     suspend fun setHideWeekend(hidden: Boolean) {
+        noteCloudDirty()
         context.dataStore.edit { p -> p[Keys.HIDE_WEEKEND] = hidden }
     }
 
@@ -236,6 +253,7 @@ class SettingsStore(private val context: Context) {
         context.dataStore.data.map { it[Keys.HIDE_INACTIVE_COURSES] ?: false }
 
     suspend fun setHideInactiveCourses(hidden: Boolean) {
+        noteCloudDirty()
         context.dataStore.edit { p -> p[Keys.HIDE_INACTIVE_COURSES] = hidden }
     }
 
@@ -262,6 +280,76 @@ class SettingsStore(private val context: Context) {
     suspend fun setGradesTabIndex(index: Int) {
         context.dataStore.edit { p -> p[Keys.FREE_ROOM_TAB_INDEX] = index }
     }
+
+    // —— 云同步（账号 = 学号，token 存本机；快照上传/下载见 data/backup）——
+
+    /** 云账号：教务统一认证登录成功后由服务端签发 token。token 非空 = 已登录。 */
+    data class CloudAccount(
+        val xh: String = "",
+        val name: String = "",
+        val token: String = "",
+    ) {
+        val isLoggedIn: Boolean get() = token.isNotBlank() && xh.isNotBlank()
+    }
+
+    val cloudAccount: Flow<CloudAccount> = context.dataStore.data.map { p ->
+        CloudAccount(
+            xh = p[Keys.CLOUD_XH] ?: "",
+            name = p[Keys.CLOUD_NAME] ?: "",
+            // 落盘格式 "enc:..."（AES-GCM，密钥在 AndroidKeyStore）；无前缀 = 历史明文，下次保存自动迁移
+            token = TokenCipher.decrypt(p[Keys.CLOUD_TOKEN] ?: ""),
+        )
+    }
+
+    suspend fun saveCloudAccount(account: CloudAccount) {
+        context.dataStore.edit { p ->
+            p[Keys.CLOUD_XH] = account.xh
+            p[Keys.CLOUD_NAME] = account.name
+            p[Keys.CLOUD_TOKEN] = TokenCipher.encrypt(account.token)
+        }
+    }
+
+    /** 退出云账号：清 token 与姓名，保留开关状态（下次登录不必再打开）。 */
+    suspend fun clearCloudAccount() {
+        context.dataStore.edit { p ->
+            p[Keys.CLOUD_XH] = ""
+            p[Keys.CLOUD_NAME] = ""
+            p[Keys.CLOUD_TOKEN] = ""
+        }
+    }
+
+    val cloudSyncEnabled: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.CLOUD_ENABLED] ?: false }
+
+    suspend fun setCloudSyncEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.CLOUD_ENABLED] = enabled }
+    }
+
+    /** 本机数据相对云端是否有未上传的改动（进程被杀后下次启动仍可补传）。 */
+    val cloudDirty: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.CLOUD_DIRTY] ?: false }
+
+    suspend fun markCloudDirty() {
+        context.dataStore.edit { it[Keys.CLOUD_DIRTY] = true }
+    }
+
+    suspend fun clearCloudDirty() {
+        context.dataStore.edit { it[Keys.CLOUD_DIRTY] = false }
+    }
+
+    val cloudLastBackupAt: Flow<Long> =
+        context.dataStore.data.map { it[Keys.CLOUD_LAST_BACKUP_AT] ?: 0L }
+
+    suspend fun setCloudLastBackupAt(at: Long) {
+        context.dataStore.edit { it[Keys.CLOUD_LAST_BACKUP_AT] = at }
+    }
+
+    /**
+     * 进快照的内容型配置变更时打云同步脏标记（见 data/backup/CloudSync）。
+     * 独立小函数而非直接调 CloudSync.markDirty：便于这里只依赖"通知"语义，
+     * 也避免将来 DataStore 自身的云簿记键（脏标记/上次备份时间）误触发上传。
+     */
+    private fun noteCloudDirty() = CloudSync.markDirty(context)
 
     private companion object {
         fun String?.toWeekMondays(): List<String> =
