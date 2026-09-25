@@ -52,8 +52,6 @@ enum class GradesSection { FREE_ROOM, TODO, SCORES, EXAMS }
 data class CreditRow(val category: CreditCategory, val completed: Double)
 
 data class GradesUiState(
-    val showWebView: Boolean = false,
-    val fetching: Boolean = false,
     /** null = 分段偏好还没从 DataStore 读到（冷启动最初几帧），此时不渲染任何分段页。 */
     val section: GradesSection? = null,
     val grades: List<GradeEntity> = emptyList(),
@@ -223,9 +221,6 @@ data class GradesUiState(
 class GradesViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = ScheduleRepository(app)
-    private val showWebView = MutableStateFlow(false)
-    private val fetching = MutableStateFlow(false)
-    private val gpaFromCache = MutableStateFlow<GpaInfo?>(null)
     private val error = MutableStateFlow<String?>(null)
     private val scoreMode = MutableStateFlow(ScoreMode.WEIGHTED)
     private val semesterFilter = MutableStateFlow("")
@@ -241,6 +236,16 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         GradesSection.entries.getOrElse(index) { GradesSection.FREE_ROOM }
     }
 
+    /**
+     * GPA 概览：跟随落盘的缓存 JSON。
+     *
+     * 抓取已经搬到「一键同步」页（由那边写盘），这里若还用"进页面读一次"的内存态，
+     * 同步完成后 GPA 会一直显示旧值直到进程重启。
+     */
+    private val gpaFromCache: Flow<GpaInfo?> = repo.settings.gpaCache
+        .map { GradesParser.parseGpa(it) }
+        .distinctUntilChanged()
+
     /** 会被 combine 合并的本地 UI 偏好（gpa 必须在流内，否则刷新后有 GPA 不刷新的竞态）。 */
     private data class UiPrefs(
         val gpa: GpaInfo?,
@@ -253,8 +258,6 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
 
     private data class FetchInfo(
         val fetchedAt: Long,
-        val showWebView: Boolean,
-        val fetching: Boolean,
         val section: GradesSection,
         val hideScores: Boolean,
     )
@@ -278,17 +281,14 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         repo.exams,
         creditParsed,
         combine(
-            repo.settings.gradesFetchedAt, showWebView, fetching, section,
-            ScorePrivacy.hidden,
-        ) { a, b, c, d, e -> FetchInfo(a, b, c, d, e) },
+            repo.settings.gradesFetchedAt, section, ScorePrivacy.hidden,
+        ) { a, b, c -> FetchInfo(a, b, c) },
         combine(
             gpaFromCache, error, scoreMode, semesterFilter,
             combine(schoolYearFilter, excludedKcdm) { y, x -> y to x },
         ) { g, e, m, f, (y, x) -> UiPrefs(g, e, m, f, y, x) },
     ) { grades, exams, credit, info, prefs ->
         GradesUiState(
-            showWebView = info.showWebView,
-            fetching = info.fetching,
             section = info.section,
             grades = grades,
             exams = exams,
@@ -321,13 +321,6 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         )
 
     init {
-        viewModelScope.launch {
-            gpaFromCache.value = parseCachedGpa()
-            // 从未抓取过 → 进入即走抓取流程
-            if (repo.grades.first().isEmpty() && repo.settings.gradesFetchedAt.first() == 0L) {
-                showWebView.value = true
-            }
-        }
         // todo 表任何变更（新增/编辑/删除/打卡）→ 全量重排日程提醒。
         // 与上课提醒同理按值去重：reschedule 内部会把已排 requestCode 写回 DataStore(TODO_REMINDER_CODES)，
         // 而本收集器源自同一 dataStore.data，不去重会形成「重排→写 codes→重发→重排」自激循环。
@@ -340,107 +333,6 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
                         .onFailure { e -> if (e is CancellationException) throw e }
                 }
         }
-    }
-
-    private suspend fun parseCachedGpa(): GpaInfo? =
-        GradesParser.parseGpa(repo.settings.gpaCache.first())
-
-    fun onFetchStart() {
-        fetching.value = true
-        error.value = null
-    }
-
-    /**
-     * 页面开始加载时调用：把卡住的抓取态复位。
-     * 脚本可能因重入标志直接 return、或在桥不可用的页面上静默失败，
-     * 桥回调不会再来——不复位就会一直显示"抓取中"的进度条。
-     */
-    fun onPageStarted() {
-        fetching.value = false
-    }
-
-    /** GradesBridge 回调：成绩+GPA+学籍+当前学期+考试+学业进度，一次会话全量。 */
-    fun onFetchResult(
-        gpaJson: String,
-        gradesJson: String,
-        userJson: String,
-        xsxxJson: String,
-        semJson: String,
-        examsJson: String,
-        xflbyqJson: String,
-        bxkqkJson: String,
-    ) {
-        viewModelScope.launch {
-            try {
-                val grades = GradesParser.parseGrades(gradesJson)
-                if (grades.isNotEmpty()) {
-                    repo.replaceGrades(grades)
-                    repo.settings.saveGradesMeta(gpaJson, System.currentTimeMillis())
-                    gpaFromCache.value = GradesParser.parseGpa(gpaJson)
-                }
-                // 成绩为空是合法的（新生/评教未完成）：只影响"成绩表"这一件事，
-                // 不能因此丢掉同一次已抓成功的考试、学籍与学业进度。
-                // 错误文案在末尾统一汇总（见 buildList）。
-                // 以下四项与成绩无关，各自独立判定（此前全被 else 包住，
-                // 大一新生第一学期永远看不到考试安排、学籍信息与学业进度）。
-                // 学籍快照顺手存（"我的"页离线展示）
-                GradesParser.parseStudentProfile(userJson, xsxxJson)?.let {
-                    repo.settings.saveStudentProfile(it)
-                }
-                // 考试安排（仅当前学期）。
-                // **不能无条件覆盖**：jw_grades.js 对考试子请求失败会返回空串，
-                // 而 parseExams("") 得到空列表，replaceExams 是 clear + insertAll ——
-                // 一次子请求失败就会静默清空已有考试安排与考前提醒。
-                val (semXn, semXq, _) = JwParser.parseCurrentSemester(semJson)
-                val examsFromServer = examsJson.isNotBlank()
-                val exams = ExamsParser.parseExams(examsJson, semXn + semXq)
-                if (examsFromServer) repo.replaceExams(exams)
-                // 学业进度缓存
-                if (xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()) {
-                    repo.settings.saveCreditMeta(xflbyqJson, bxkqkJson)
-                }
-                // 考试请求成功时无论如何都重排（空列表 = 取消未来的考试提醒，用于学期结束等场景）；
-                // 请求失败时**不动**闹钟，否则会把仍然有效的考试提醒一并取消。
-                if (examsFromServer) ExamReminderScheduler.reschedule(getApplication())
-                error.value = buildList {
-                    if (grades.isEmpty()) add("未解析到成绩，请确认已在教务系统完成评教/成绩发布后重试")
-                    if (!examsFromServer) add("考试安排获取失败，已保留上次数据")
-                }.joinToString("；").ifEmpty { null }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                error.value = "解析失败：${e.message}"
-            } finally {
-                fetching.value = false
-                showWebView.value = false
-            }
-        }
-    }
-
-    fun onFetchError(message: String) {
-        fetching.value = false
-        showWebView.value = false
-        error.value = "抓取失败：$message"
-    }
-
-    /**
-     * 开始一次成绩抓取。
-     *
-     * 必须同时把分段切到成绩：抓取用的 WebView 只属于成绩/考试段，
-     * 停在无课教室段时 `showWebView = true` 不会有任何可见效果
-     * （WebView 不组合、脚本不注入、请求根本不会发出），
-     * 用户却会看到确认框说"将进入教务系统重新抓取"。
-     */
-    fun startRefresh() {
-        error.value = null
-        showWebView.value = true
-        viewModelScope.launch { repo.settings.setGradesTabIndex(GradesSection.SCORES.ordinal) }
-    }
-
-    /** 放弃本次抓取（退出全屏登录页），回到分段内容。 */
-    fun cancelFetch() {
-        showWebView.value = false
-        fetching.value = false
     }
 
     fun dismissError() {

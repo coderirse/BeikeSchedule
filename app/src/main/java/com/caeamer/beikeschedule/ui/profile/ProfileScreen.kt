@@ -229,7 +229,7 @@ fun ProfileScreen(
                 SettingsItemRow(
                     icon = { Icon(Icons.Default.CloudOff, null, Modifier.size(20.dp)) },
                     title = "云同步",
-                    value = "未登录 · 用教务账号（统一身份认证）登录后可备份与恢复课表、日程、成绩",
+                    value = "未登录 · 一次扫码即可导入课表、抓取成绩并开启云备份",
                     trailing = {
                         Icon(
                             Icons.AutoMirrored.Filled.KeyboardArrowRight,

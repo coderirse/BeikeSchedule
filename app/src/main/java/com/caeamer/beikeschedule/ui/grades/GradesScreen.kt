@@ -116,10 +116,15 @@ private val DetailGradeSaver = Saver<GradeEntity?, String>(
     restore = { if (it.isBlank()) null else runCatching { Json.decodeFromString<GradeEntity>(it) }.getOrNull() },
 )
 
-/** 教务 Tab：成绩/考试分段 + 加权/GPA 双模式 + 学期筛选 + 课程勾选 + 学分进度。 */
+/**
+ * 教务 Tab：成绩/考试分段 + 加权/GPA 双模式 + 学期筛选 + 课程勾选 + 学分进度。
+ *
+ * 抓取本身已合并到「一键同步」页（一次扫码同时导入课表与成绩），这里的「重新抓取」
+ * 只是把用户领到那个页面；本页保留列表展示与筛选。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
+fun GradesScreen(onResync: () -> Unit, viewModel: GradesViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showRefreshConfirm by rememberSaveable { mutableStateOf(false) }
     // GradeEntity 可 JSON 序列化：详情弹层旋转后恢复（Saver 见文件顶部）
@@ -142,9 +147,7 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                 ) {
                     Text("教务", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     // 「重新抓取」是成绩/考试段自己的动作：显示在无课教室/日程段会误导用户
-                    // （点了之后抓取并不会开始，因为 WebView 只属于成绩/考试段）
-                    if (!state.showWebView &&
-                        state.section != null &&
+                    if (state.section != null &&
                         state.section != GradesSection.FREE_ROOM &&
                         state.section != GradesSection.TODO
                     ) {
@@ -161,40 +164,26 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                 AlertDialog(
                     onDismissRequest = { showRefreshConfirm = false },
                     title = { Text("重新抓取") },
-                    text = { Text("将进入教务系统重新抓取成绩、GPA、考试安排与学业进度，当前本地数据会保留到抓取成功。是否继续？") },
+                    text = {
+                        Text(
+                            "将进入教务系统：一次扫码同时导入课表、抓取成绩/GPA/考试安排/学业进度，" +
+                                "并登录云账号（云端已有备份时会让你选择以哪边为准）。当前本地数据会保留到抓取成功。是否继续？",
+                        )
+                    },
                     confirmButton = {
                         TextButton(onClick = {
                             showRefreshConfirm = false
-                            viewModel.startRefresh()
+                            onResync()
                         }) { Text("继续") }
                     },
                     dismissButton = { TextButton(onClick = { showRefreshConfirm = false }) { Text("取消") } },
                 )
             }
-            // 成绩抓取用的 WebView 只在成绩/考试段显示。
-            // 它会在首次进入（无历史成绩）时由 ViewModel 自动置起；而默认段现在是
-            // 无课教室，若不限段就会出现"打开教务弹出登录页"盖住空教室页面的错乱。
-            //
-            // 分段控件必须在**所有**分支之上（此前只在最后一个 else 里，导致抓取页
-            // 和"还没有成绩数据"页都没有切换入口：进得去、出不来，而段位是持久化的，
-            // 重启后仍会被送回登录页）。
+            // 分段控件必须在**所有**分支之上，否则空态页会失去切换入口。
             Column(Modifier.fillMaxSize()) {
                 SectionTabs(section = state.section, onSelect = viewModel::setSection)
 
-                val fetchingPane = state.showWebView &&
-                    (state.section == GradesSection.SCORES || state.section == GradesSection.EXAMS)
                 when {
-                    fetchingPane -> WebViewFetch(
-                        fetching = state.fetching,
-                        onFetchStart = { viewModel.onFetchStart() },
-                        onCancel = { viewModel.cancelFetch() },
-                        onPageStarted = { viewModel.onPageStarted() },
-                        onResult = { gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk ->
-                            viewModel.onFetchResult(gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk)
-                        },
-                        onError = { viewModel.onFetchError(it) },
-                    )
-
                     // 分段偏好还没从 DataStore 读到（冷启动最初几帧）：只显示上面的分段行。
                     // 不能先用"无课教室"占位——那会立刻把 FreeRoomViewModel 创建出来并
                     // 发出 4 个外网请求，而用户上次停的可能是成绩段，这些请求白做。
@@ -212,12 +201,12 @@ fun GradesScreen(viewModel: GradesViewModel = viewModel()) {
                         exams = state.examsSorted,
                         error = state.error,
                         fetchedAt = state.fetchedAt,
-                        onFetch = viewModel::startRefresh,
+                        onFetch = onResync,
                         onDismissError = viewModel::dismissError,
                     )
 
                     state.grades.isEmpty() && state.exams.isEmpty() ->
-                        NoGradesYet(error = state.error, onFetch = viewModel::startRefresh)
+                        NoGradesYet(error = state.error, onFetch = onResync)
 
                     else -> GradesContent(
                         state = state,
@@ -299,71 +288,6 @@ private fun NoGradesYet(error: String?, onFetch: () -> Unit) {
             Spacer(Modifier.height(16.dp))
         }
         Button(onClick = onFetch) { Text("去获取") }
-    }
-}
-
-/** WebView 登录 + 自动抓取。 */
-@Composable
-private fun WebViewFetch(
-    fetching: Boolean,
-    onFetchStart: () -> Unit,
-    onCancel: () -> Unit,
-    onPageStarted: () -> Unit,
-    onResult: (String, String, String, String, String, String, String, String) -> Unit,
-    onError: (String) -> Unit,
-) {
-    val context = LocalContext.current
-    var pageLoading by remember { mutableStateOf(true) }
-    var pageError by remember { mutableStateOf<String?>(null) }
-    var webView by remember { mutableStateOf<WebView?>(null) }
-
-    val runScript: () -> Unit = {
-        onFetchStart()
-        // webView 为 null（onMainPage 早于 onCreated 触发）时静默失败会让用户停在登录页
-        // 且没有任何提示——与 ImportScreen 同款守卫
-        val wv = webView
-        if (wv == null) {
-            onError("页面尚未就绪，请稍候再试")
-        } else {
-            wv.evaluateJavascript(loadAssetScript(context, "import/jw_grades.js"), null)
-        }
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        Surface(color = MaterialTheme.colorScheme.secondaryContainer) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    pageError ?: "登录教务系统后将自动获取成绩、考试与学业进度",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (pageError != null) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.weight(1f).padding(vertical = 8.dp),
-                )
-                // 取消出口：不想现在登录、或进错了段位时，不必杀进程
-                TextButton(onClick = onCancel) { Text("取消") }
-            }
-        }
-        if (fetching || pageLoading) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
-        JwWebView(
-            bridge = GradesBridge(
-                onResult = { gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk ->
-                    webView?.post { onResult(gpa, grades, user, xsxx, sem, exams, xflbyq, bxkqk) }
-                },
-                onFailure = { msg -> webView?.post { onError(msg) } },
-            ),
-            bridgeName = "BeikeGrades",
-            onMainPage = runScript,
-            onCreated = { webView = it },
-            onPageError = { pageError = it },
-            onPageProgress = { pageLoading = it < 100 },
-            // 抓取中页面又导航时桥回调不会再来，复位抓取态避免进度条一直转
-            onPageStarted = onPageStarted,
-        )
     }
 }
 

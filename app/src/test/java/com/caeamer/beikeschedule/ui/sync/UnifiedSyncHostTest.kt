@@ -1,11 +1,15 @@
-package com.caeamer.beikeschedule.ui.cloud
+package com.caeamer.beikeschedule.ui.sync
 
+import com.caeamer.beikeschedule.import.isByytHost
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** 云登录身份脚本只能在 byyt 主域注入，否则相对路径 /user/me 会 404。 */
-class CloudLoginHostTest {
+/**
+ * 抓取脚本只能在 byyt 本体域运行（脚本内全是相对路径，注入到 SSO/微认证域会 404；
+ * 平台层桥按 ustb 任意子域放行，所以"主框架 + byyt"也是结果可信的必要条件）。
+ */
+class UnifiedSyncHostTest {
 
     @Test
     fun `byyt main and paths are allowed`() {

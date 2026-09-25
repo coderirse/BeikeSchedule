@@ -313,7 +313,7 @@ fun ScheduleScreen(
                         }
                     }
                     IconButton(onClick = onImportClick) {
-                        Icon(Icons.Default.CloudDownload, contentDescription = "从教务系统导入")
+                        Icon(Icons.Default.CloudDownload, contentDescription = "登录并同步")
                     }
                 }
             }
@@ -495,7 +495,7 @@ private fun EmptyState(onLoadSample: () -> Unit, onImportClick: () -> Unit, onAd
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(24.dp))
-        TextButton(onClick = onImportClick) { Text("从教务系统导入") }
+        TextButton(onClick = onImportClick) { Text("登录并同步课表与成绩") }
         TextButton(onClick = onLoadSample) { Text("载入示例课表") }
         TextButton(onClick = onAdd) { Text("手动添加课程") }
     }
