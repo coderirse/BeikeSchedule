@@ -74,9 +74,10 @@ class SyncPlanTest {
             SyncStep.CLOUD_TOKEN to SyncStepResult(SyncStep.CLOUD_TOKEN, SyncStatus.FAILED, "超时"),
             SyncStep.TIMETABLE to SyncStepResult(SyncStep.TIMETABLE, SyncStatus.OK),
         )
+        assertEquals(listOf(SyncStep.CLOUD_TOKEN), SyncPlanner.retryHead(results))
         assertEquals(
-            listOf(SyncStep.CLOUD_TOKEN, SyncStep.GRADES, SyncStep.BACKUP),
-            SyncPlanner.retrySteps(CloudMode.UPLOAD, results),
+            listOf(SyncStep.GRADES, SyncStep.BACKUP),
+            SyncPlanner.retryTail(CloudMode.UPLOAD, results),
         )
     }
 
@@ -89,7 +90,8 @@ class SyncPlanTest {
             SyncStep.TIMETABLE to SyncStepResult(SyncStep.TIMETABLE, SyncStatus.SKIPPED, "已跳过（用云端数据）"),
             SyncStep.GRADES to SyncStepResult(SyncStep.GRADES, SyncStatus.SKIPPED, "已跳过（用云端数据）"),
         )
-        assertTrue(SyncPlanner.retrySteps(CloudMode.RESTORE, results).isEmpty())
+        assertTrue(SyncPlanner.retryHead(results).isEmpty())
+        assertTrue(SyncPlanner.retryTail(CloudMode.RESTORE, results).isEmpty())
     }
 
     @Test
@@ -98,9 +100,54 @@ class SyncPlanTest {
             SyncStep.IDENTITY to SyncStepResult(SyncStep.IDENTITY, SyncStatus.FAILED, "未获取到学号"),
             SyncStep.CLOUD_TOKEN to SyncStepResult(SyncStep.CLOUD_TOKEN, SyncStatus.FAILED, "未取得学号"),
         )
+        assertEquals(listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN), SyncPlanner.retryHead(results))
         assertEquals(
-            listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN, SyncStep.TIMETABLE, SyncStep.GRADES),
-            SyncPlanner.retrySteps(CloudMode.NO_UPLOAD, results),
+            listOf(SyncStep.TIMETABLE, SyncStep.GRADES),
+            SyncPlanner.retryTail(CloudMode.NO_UPLOAD, results),
         )
+    }
+
+    /**
+     * 首轮云账号失败时方向还是 UNDECIDED，重试跑完前半段才决策出 UPLOAD/RESTORE。
+     * 后半段必须按**新**方向现算，否则云端那一半永远不会补跑。
+     */
+    @Test
+    fun `重试时决策出上传会补跑上传步骤`() {
+        val results = mapOf(
+            SyncStep.IDENTITY to SyncStepResult(SyncStep.IDENTITY, SyncStatus.OK),
+            SyncStep.CLOUD_TOKEN to SyncStepResult(SyncStep.CLOUD_TOKEN, SyncStatus.FAILED, "超时"),
+            SyncStep.TIMETABLE to SyncStepResult(SyncStep.TIMETABLE, SyncStatus.OK),
+            SyncStep.GRADES to SyncStepResult(SyncStep.GRADES, SyncStatus.OK),
+        )
+        assertEquals(listOf(SyncStep.CLOUD_TOKEN), SyncPlanner.retryHead(results))
+        // 重试中云账号成功 → mode 变 UPLOAD：抓取两项已 OK 不重跑，只补上传
+        assertEquals(listOf(SyncStep.BACKUP), SyncPlanner.retryTail(CloudMode.UPLOAD, results))
+    }
+
+    @Test
+    fun `重试时决策出恢复不会拿本机抓取覆盖用户选择`() {
+        val results = mapOf(
+            SyncStep.IDENTITY to SyncStepResult(SyncStep.IDENTITY, SyncStatus.OK),
+            SyncStep.CLOUD_TOKEN to SyncStepResult(SyncStep.CLOUD_TOKEN, SyncStatus.FAILED, "超时"),
+            SyncStep.TIMETABLE to SyncStepResult(SyncStep.TIMETABLE, SyncStatus.FAILED, "会话失效"),
+            SyncStep.GRADES to SyncStepResult(SyncStep.GRADES, SyncStatus.FAILED, "会话失效"),
+        )
+        val tail = SyncPlanner.retryTail(CloudMode.RESTORE, results)
+        assertEquals(listOf(SyncStep.RESTORE), tail)
+        assertFalse(tail.contains(SyncStep.TIMETABLE))
+        assertFalse(tail.contains(SyncStep.GRADES))
+    }
+
+    @Test
+    fun `只剩上传失败时重试不重跑身份与抓取`() {
+        val results = mapOf(
+            SyncStep.IDENTITY to SyncStepResult(SyncStep.IDENTITY, SyncStatus.OK),
+            SyncStep.CLOUD_TOKEN to SyncStepResult(SyncStep.CLOUD_TOKEN, SyncStatus.OK),
+            SyncStep.TIMETABLE to SyncStepResult(SyncStep.TIMETABLE, SyncStatus.OK),
+            SyncStep.GRADES to SyncStepResult(SyncStep.GRADES, SyncStatus.OK),
+            SyncStep.BACKUP to SyncStepResult(SyncStep.BACKUP, SyncStatus.FAILED, "网络中断"),
+        )
+        assertTrue(SyncPlanner.retryHead(results).isEmpty())
+        assertEquals(listOf(SyncStep.BACKUP), SyncPlanner.retryTail(CloudMode.UPLOAD, results))
     }
 }

@@ -27,14 +27,12 @@ private const val MAIN_PAGE_MARK = "/authentication/main"
 private const val TAG = "BeikeJwWebView"
 
 /**
- * JS 桥允许注入的 origin 规则。
+ * JS 桥允许注入的 origin 规则：**仅 https**（教务站点本体 + ustb.edu.cn 其它子域）。
  *
- * 收口目标是"只有教务系统自己的页面能调用桥"：
- * - 教务站点本体（脚本实际注入的页面）；
- * - ustb.edu.cn 其它子域（统一身份认证可能在别的子域，登录页上手动抓取失败时
- *   仍需要把错误经桥报回界面，否则用户看到的是"点了没反应"）。
- *
- * 第三方 iframe（非 ustb 域）拿不到桥对象；回调里再要求主框架，双保险。
+ * 站内 http 页面（统一认证授权成功后的回调 302 就指向 `http://sso.ustb.edu.cn/idp/thirdAuth/...`）
+ * 按 [jwNavPolicy] 能在 WebView 里加载，但拿不到桥——三个抓取脚本只注入 byyt 的 https 页面，
+ * 明文页面上本来也不该跑带会话的抓取。第三方 iframe（非 ustb 域）同样拿不到桥；
+ * 回调里再要求主框架，双保险。
  */
 private val BRIDGE_ORIGINS = setOf("https://byyt.ustb.edu.cn", "https://*.ustb.edu.cn")
 
@@ -52,7 +50,7 @@ private val BRIDGE_ORIGINS = setOf("https://byyt.ustb.edu.cn", "https://*.ustb.e
  * 旧写法第 3 行先置标志、第 10 行才 appendChild → 抛 TypeError 中断，而后续
  * onPageFinished/500ms/1500ms 三次兜底注入全被标志挡掉，修复一次都没生效：
  * meta 仍是 width=device-width → 本页面 .page{height:100vh} 在此 WebView 算出 0
- * （实测 vhProbe=0）+ overflow:hidden → 整页裁空成白屏（导入页/成绩页/云登录页通吃）。
+ * （实测 vhProbe=0）+ overflow:hidden → 整页裁空成白屏。
  * 该失败取决于注入时机（实测连续三次导航里挂一次），所以表现为"之前能加载、现在不行"
  * 这种时好时坏。现在改为：文档根就绪才算装上，没就绪则条件重试。
  */
@@ -96,10 +94,10 @@ internal const val PAGE_FIX_JS = """
 """
 
 /**
- * 教务系统 WebView（导入页/成绩页共用）：
- * 登录统一认证 → 到达主页后回调 onMainPage（由调用方注入抓取脚本）。
+ * 教务系统 WebView（一键同步页用）：登录统一认证 → 到达主页后回调 onMainPage
+ * （由调用方注入抓取脚本）。
  *
- * JS 桥（[bridge]/[bridgeName]）走 `WebViewCompat.addWebMessageListener`：
+ * JS 桥（[bridges]）走 `WebViewCompat.addWebMessageListener`：
  * 对象只注入给下面的 [BRIDGE_ORIGINS] 列出的 origin，且回调里再校验"主框架 + 教务域名"。
  * 此前用 `addJavascriptInterface`，它对 WebView 里**每个 frame** 生效，
  * 白名单页面内嵌的第三方 iframe 能直接调用桥伪造数据（导航白名单管不到 iframe 与重定向）。
@@ -122,13 +120,13 @@ fun JwWebView(
     onPageProgress: (Int) -> Unit = {},
     /**
      * 每次子资源请求回调（含 iframe 内请求）。
-     * 云登录页用它监听贝壳教学平台微认证 iframe 的 qrpage/qrimg 请求，
-     * 原生取到二维码 sid（不依赖注入脚本与页面自身轮询，见 CloudLoginViewModel）。
+     * 一键同步页用它监听贝壳教学平台微认证 iframe 的 qrpage/qrimg 请求，
+     * 原生取到二维码 sid（不依赖注入脚本与页面自身轮询，见 UnifiedSyncViewModel）。
      */
     onSubresourceRequest: ((android.webkit.WebResourceRequest) -> Unit)? = null,
     /**
      * document-start 注入脚本（按 origin 规则，**含 iframe**）：用于在页面脚本运行前
-     * 改写其行为。云登录页用它禁用微认证页自带的二维码轮询（该轮询与 App 原生轮询
+     * 改写其行为。一键同步页用它禁用微认证页自带的二维码轮询（该轮询与 App 原生轮询
      * 会互相触发 205 并发冲突，页面把 205 当"二维码已失效"处理并停止轮询）。
      */
     documentStartScripts: List<Pair<Set<String>, String>> = emptyList(),
@@ -136,12 +134,21 @@ fun JwWebView(
     val context = LocalContext.current
     // document-start 脚本句柄：离开组合时要移除，否则 WebView 复用时脚本重复注入
     val scriptHandlers = remember { mutableListOf<androidx.webkit.ScriptHandler>() }
+    // 主页面回调的待执行 post：离开组合时必须撤销（见 onPageFinished 处的注释）
+    val pendingMainPage = remember { java.util.concurrent.atomic.AtomicReference<Runnable?>(null) }
+    // 主框架当前 URL：onReceivedSslError 不带 WebResourceRequest，只能靠它区分主文档与子资源
+    val mainFrameUrl = remember { java.util.concurrent.atomic.AtomicReference<String?>(null) }
     DisposableEffect(documentStartScripts) {
         onDispose {
             scriptHandlers.forEach { runCatching { it.remove() } }
             scriptHandlers.clear()
         }
     }
+
+    fun cancelPendingMainPage(view: WebView) {
+        pendingMainPage.getAndSet(null)?.let { runCatching { view.removeCallbacks(it) } }
+    }
+
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = {
@@ -166,12 +173,11 @@ fun JwWebView(
                 settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 settings.javaScriptCanOpenWindowsAutomatically = false
                 CookieManager.getInstance().setAcceptCookie(true)
-                // 第三方 cookie 不必要：jw_import.js / jw_grades.js 的所有 fetch 都是
-                // credentials: 'same-origin'，关掉它只减少暴露面。
+                // 第三方 cookie 不必要：三个注入脚本（jw_import / jw_grades / jw_identity）的
+                // fetch 全是 credentials: 'same-origin'，关掉它只减少暴露面。
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
-                // 桥：平台按 origin 限定可见范围（见类注释），回调里再校验主框架 + 教务域名。
-                // 两条 origin 规则覆盖"教务站点本体"与"统一认证可能用到的其它 ustb 子域"，
-                // 保证登录页上手动抓取失败时仍能把错误经桥报回界面（而不是静默无反应）。
+                // 桥：平台按 origin 限定可见范围（**仅 https**，见 BRIDGE_ORIGINS），
+                // 回调里再校验主框架 + 教务域名。
                 bridges.forEach { (name, bridge) ->
                     WebViewCompat.addWebMessageListener(
                         this,
@@ -225,6 +231,9 @@ fun JwWebView(
                     }
 
                     override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                        mainFrameUrl.set(url)
+                        // 新导航开始：上一页排的主页面回调作废（否则它会驱动一次已无人消费的同步）
+                        cancelPendingMainPage(view)
                         onPageStarted()
                         // 尽早注入，MutationObserver 会在 meta 标签解析出来时立即改写。
                         // 只对教务本体域注入：SSO 的 ac-h5 是移动版页面，改写 viewport 反而会把
@@ -239,7 +248,17 @@ fun JwWebView(
                         // 此前是 url.contains("/authentication/main")，任意域名下含该路径的
                         // URL（如 https://evil.example/authentication/main）都会触发抓取脚本注入。
                         if (isMainPageUrl(url)) {
-                            view.post { onMainPage() }
+                            // post 而非直接调用：让 WebView 的回调先返回，避免在加载回调里
+                            // 反过来驱动同步流程。代价是这个 runnable 会活过本页面的组合生命周期，
+                            // 所以必须记下来，在 onRelease / 下次导航时撤销——否则用户退出页面后
+                            // 它仍会启动一次无人消费的同步（ViewModel 是 Activity 级、脚本收集者
+                            // 已取消，每一步只能干等 30s 超时，再进来看到的是无人驱动的 Running）。
+                            val callback = Runnable {
+                                pendingMainPage.set(null)
+                                onMainPage()
+                            }
+                            pendingMainPage.set(callback)
+                            view.post(callback)
                         }
                     }
 
@@ -277,8 +296,20 @@ fun JwWebView(
                         handler: android.webkit.SslErrorHandler,
                         error: android.net.http.SslError,
                     ) {
+                        // 一律 cancel（绝不 proceed），但只有**主文档**证书失败才算页面失败：
+                        // 子资源（图片/脚本/iframe）失败若也报上去，整个一键同步页会被打进 Failed
+                        // 态、登录横幅变红要求重扫，而主文档其实是好的（onReceivedError 与
+                        // onReceivedHttpError 都先判 isForMainFrame，就是这个口径）。
+                        // 本回调不带 WebResourceRequest，只能与 onPageStarted 记下的主框架 URL 比对；
+                        // 还没开始加载时按主文档处理——宁可多报一次，也不能让用户对着空白页干等。
                         handler.cancel()
-                        onPageError("SSL 证书校验失败（${error.primaryError}），请检查网络/VPN")
+                        val mainUrl = mainFrameUrl.get()
+                        if (mainUrl == null || error.url == mainUrl) {
+                            onPageError("SSL 证书校验失败（${error.primaryError}），请检查网络/VPN")
+                        } else {
+                            // 不打 URL：教务/SSO 的查询串里可能带会话参数
+                            android.util.Log.w(TAG, "子资源 SSL 校验失败，已忽略（${error.primaryError}）")
+                        }
                     }
                 }
                 webChromeClient = object : android.webkit.WebChromeClient() {
@@ -292,8 +323,10 @@ fun JwWebView(
         },
         // WebView 必须显式销毁：AndroidView 离开组合时若只丢掉引用，持有 Activity context 的
         // WebView 与其 JS 定时器（PAGE_FIX_JS 里的 MutationObserver / setTimeout）会一起泄漏。
-        // 导入页的"预览 → 重新抓取"会反复创建新实例，成绩页每次抓取完成后也会销毁一个。
+        // 一键同步页每次进入/退出都会创建与销毁一个实例。
         onRelease = { view ->
+            cancelPendingMainPage(view)
+            mainFrameUrl.set(null)
             bridges.forEach { (name, _) ->
                 runCatching { WebViewCompat.removeWebMessageListener(view, name) }
             }

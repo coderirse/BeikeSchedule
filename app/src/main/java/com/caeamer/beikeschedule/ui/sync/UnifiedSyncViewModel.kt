@@ -258,23 +258,20 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
                 xm = ""
                 token = null
             }
-            // 首轮先跑"身份 + 云账号"（后者包含云端探测与决策），再按最终方向补齐后续步骤；
-            // 重试则只跑失败项（planner 保证顺序与跳过规则一致）
-            val head = if (retryOnlyFailed) {
-                SyncPlanner.retrySteps(mode, results)
-            } else {
-                listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN)
-            }
+            // 两段式：先跑"身份 + 云账号"（后者包含云端探测与决策），再按**最终**方向取后续步骤。
+            // 重试同样分两段——首轮云账号失败时方向还没定，只有 head 跑完才知道该上传还是该恢复。
+            val head = if (retryOnlyFailed) SyncPlanner.retryHead(results) else SyncPlanner.head
             head.forEach { executeStep(it) }
-            if (!retryOnlyFailed) {
-                SyncPlanner.steps(mode).drop(2).forEach { executeStep(it) }
-                if (mode == CloudMode.RESTORE) {
-                    // 抓取按设计跳过：汇总里标出来，避免用户以为"这两步没跑"
-                    results[SyncStep.TIMETABLE] =
-                        SyncStepResult(SyncStep.TIMETABLE, SyncStatus.SKIPPED, "已跳过（用云端数据）")
-                    results[SyncStep.GRADES] =
-                        SyncStepResult(SyncStep.GRADES, SyncStatus.SKIPPED, "已跳过（用云端数据）")
-                }
+            val tail = if (retryOnlyFailed) SyncPlanner.retryTail(mode, results) else SyncPlanner.tail(mode)
+            tail.forEach { executeStep(it) }
+            if (mode == CloudMode.RESTORE) {
+                // 抓取按设计跳过：汇总里标出来，避免用户以为"这两步没跑"。
+                // 已成功的保持原样（那是上几轮真抓过的结果，改写成跳过等于篡改历史）。
+                listOf(SyncStep.TIMETABLE, SyncStep.GRADES)
+                    .filter { results[it]?.status != SyncStatus.OK }
+                    .forEach {
+                        results[it] = SyncStepResult(it, SyncStatus.SKIPPED, "已跳过（用云端数据）")
+                    }
             }
             // 按步骤固有顺序展示（RESTORE 模式下抓取两项被标记跳过，插在最后才自然）
             _state.value = UnifiedSyncUiState.Done(results.values.sortedBy { it.step.ordinal }, runNote)
