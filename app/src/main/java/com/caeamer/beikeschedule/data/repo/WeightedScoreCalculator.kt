@@ -17,16 +17,18 @@ object WeightedScoreCalculator {
     )
 
     /**
-     * @param courses 已按 kcdm 收敛的成绩行 (kcdm, xf 学分, zzcj 成绩, kcxz 课程性质)
-     * @param excludedKcdm 用户手动排除的课程代码集合
+     * @param courses 已收敛的成绩行（[GradeTriple.identity] = [com.caeamer.beikeschedule.data.local.GradeEntity.identityKey]，
+     *   另含 xf 学分、zzcj 成绩、kcxz 课程性质）
+     * @param excluded 用户手动排除的课程身份键集合
      *
-     * 排除用**课程代码**而非下标：下标是"用位置当身份"，一旦上游筛选/排序变化就会
+     * 排除用**课程身份**而非下标：下标是"用位置当身份"，一旦上游筛选/排序变化就会
      * 静默排除错的课（此前 ViewModel 用 mapIndexedNotNull 生成下标集合，计算器内部
-     * 再对同一列表 filter 一遍，属于隐式契约）。
+     * 再对同一列表 filter 一遍，属于隐式契约）。身份也不能用裸 kcdm：kcdm 缺失的行
+     * 会共享 "" 这一个键，排除一门等于排除全部空 kcdm 课程。
      */
-    fun calculate(courses: List<GradeTriple>, excludedKcdm: Set<String> = emptySet()): WeightedResult? {
+    fun calculate(courses: List<GradeTriple>, excluded: Set<String> = emptySet()): WeightedResult? {
         val included = courses.filter { c ->
-            c.kcdm !in excludedKcdm &&
+            c.identity !in excluded &&
                 c.kcxz == "必修" &&
                 c.score != null &&
                 c.score.isFinite() &&
@@ -43,8 +45,9 @@ object WeightedScoreCalculator {
         return WeightedResult(score, sumCredits, scored.size)
     }
 
+    /** 参与加权的一行：[identity] 是排除口径用的课程身份键（kcdm，缺失时为课程名）。 */
     data class GradeTriple(
-        val kcdm: String,
+        val identity: String,
         val xf: Double,
         val score: Double?,
         val kcxz: String,

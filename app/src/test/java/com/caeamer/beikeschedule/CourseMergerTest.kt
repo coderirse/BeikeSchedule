@@ -16,10 +16,11 @@ class CourseMergerTest {
         zc: String,
         location: String = "机械楼720",
         teacher: String = "韩天",
+        source: Int = CourseEntity.SOURCE_IMPORT,
     ) = CourseEntity(
         taskId = "RWH1", name = name, teacher = teacher, location = location,
         dayOfWeek = day, startSection = start, endSection = end,
-        weekBitmap = zc, colorIndex = 1, source = CourseEntity.SOURCE_IMPORT,
+        weekBitmap = zc, colorIndex = 1, source = source,
     )
 
     @Test
@@ -112,5 +113,41 @@ class CourseMergerTest {
         val merged = CourseMerger.mergeSameSlot(listOf(course("机械设计", zc = "0111111000000000000000000000000000")))
         assertEquals(1, merged.size)
         assertEquals("机械楼720", merged[0].location)
+    }
+
+    /**
+     * 回归：合并键必须含来源。隐藏/删除/编辑都按「课程名 + 来源」取行组
+     * （ScheduleScreen.groupOf），跨来源合并成一张卡后另一来源的行不在组内——
+     * 隐藏了卡片还留在网格上、编辑只改到一半。触发路径：手动添加一门与教务导入课
+     * 同名同时段的课（教务漏排时用户会这么做）。
+     */
+    @Test
+    fun `同名同段但来源不同 - 不合并`() {
+        val merged = CourseMerger.mergeSameSlot(
+            listOf(
+                course("机械设计", zc = "0111111000000000000000000000000000"),
+                course(
+                    "机械设计", zc = "0111111000000000000000000000000000",
+                    source = CourseEntity.SOURCE_MANUAL, teacher = "",
+                ),
+            ),
+        )
+        assertEquals(2, merged.size)
+        assertEquals(
+            setOf(CourseEntity.SOURCE_IMPORT, CourseEntity.SOURCE_MANUAL),
+            merged.map { it.source }.toSet(),
+        )
+    }
+
+    @Test
+    fun `同来源的拆分行仍照常合并`() {
+        val merged = CourseMerger.mergeSameSlot(
+            listOf(
+                course("机电传动控制", zc = "0111111000000000000000000000000000"),
+                course("机电传动控制", zc = "0000000100000000000000000000000000"),
+            ),
+        )
+        assertEquals(1, merged.size)
+        assertEquals("0111111100000000000000000000000000", merged[0].weekBitmap)
     }
 }

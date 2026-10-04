@@ -64,8 +64,8 @@ data class GradesUiState(
     val semesterFilter: String = "",
     /** 学年筛选：空=全部；值如 "2024-2025"（含该学年1/2学期）；"-3" 代表小学期单独一组。 */
     val schoolYearFilter: String = "",
-    /** 用户手动排除出加权计算的课程代码集合。 */
-    val excludedKcdm: Set<String> = emptySet(),
+    /** 用户手动排除出加权计算的课程身份键集合（见 [GradeEntity.identityKey]）。 */
+    val excludedCourses: Set<String> = emptySet(),
     /** 学分类别要求（queryXflbyq）。 */
     val creditCategories: List<CreditCategory> = emptyList(),
     /** 毕业总进度（queryBxkqk）。 */
@@ -187,7 +187,7 @@ data class GradesUiState(
         return true
     }
 
-    /** 当前筛选下、已按 kcdm 收敛的成绩行（加权与勾选列表共用，两者必须口径一致）。 */
+    /** 当前筛选下、已按课程身份收敛的成绩行（加权与勾选列表共用，两者必须口径一致）。 */
     private val filteredBestRows: List<GradeEntity> by lazy(LazyThreadSafetyMode.NONE) {
         GradeRows.bestPerCourse(grades.filter { matchesFilter(it) })
     }
@@ -196,20 +196,20 @@ data class GradesUiState(
     val weightedResult: WeightedScoreCalculator.WeightedResult? by lazy(LazyThreadSafetyMode.NONE) {
         val triples = filteredBestRows.map {
             WeightedScoreCalculator.GradeTriple(
-                kcdm = it.kcdm,
+                identity = it.identityKey,
                 xf = it.xf,
                 score = it.numericScore,
                 kcxz = it.kcxz,
             )
         }
-        WeightedScoreCalculator.calculate(triples, excludedKcdm)
+        WeightedScoreCalculator.calculate(triples, excludedCourses)
     }
 
     /** 当前筛选下参与加权计算的课程（UI 勾选列表用）。 */
     val weightEligible: List<Pair<GradeEntity, Boolean>> by lazy(LazyThreadSafetyMode.NONE) {
         filteredBestRows
             .filter { it.kcxz == "必修" && it.numericScore != null && it.xf > 0.0 }
-            .map { it to (it.kcdm !in excludedKcdm) }
+            .map { it to (it.identityKey !in excludedCourses) }
     }
 
     private companion object {
@@ -225,7 +225,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
     private val scoreMode = MutableStateFlow(ScoreMode.WEIGHTED)
     private val semesterFilter = MutableStateFlow("")
     private val schoolYearFilter = MutableStateFlow("")
-    private val excludedKcdm = MutableStateFlow<Set<String>>(emptySet())
+    private val excludedCourses = MutableStateFlow<Set<String>>(emptySet())
 
     /**
      * 当前分段：从 DataStore 读取（"记住上次选择"），默认无课教室。
@@ -285,7 +285,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         ) { a, b, c -> FetchInfo(a, b, c) },
         combine(
             gpaFromCache, error, scoreMode, semesterFilter,
-            combine(schoolYearFilter, excludedKcdm) { y, x -> y to x },
+            combine(schoolYearFilter, excludedCourses) { y, x -> y to x },
         ) { g, e, m, f, (y, x) -> UiPrefs(g, e, m, f, y, x) },
     ) { grades, exams, credit, info, prefs ->
         GradesUiState(
@@ -298,7 +298,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
             scoreMode = prefs.mode,
             semesterFilter = prefs.filter,
             schoolYearFilter = prefs.schoolYear,
-            excludedKcdm = prefs.excluded,
+            excludedCourses = prefs.excluded,
             creditCategories = credit.first,
             gradProgress = credit.second,
             hideScores = info.hideScores,
@@ -363,9 +363,9 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         semesterFilter.value = ""
     }
 
-    /** 切换课程是否纳入加权计算。 */
-    fun toggleExcluded(kcdm: String) {
-        excludedKcdm.value = if (kcdm in excludedKcdm.value) excludedKcdm.value - kcdm
-        else excludedKcdm.value + kcdm
+    /** 切换课程是否纳入加权计算（[identity] = [GradeEntity.identityKey]）。 */
+    fun toggleExcluded(identity: String) {
+        excludedCourses.value = if (identity in excludedCourses.value) excludedCourses.value - identity
+        else excludedCourses.value + identity
     }
 }
