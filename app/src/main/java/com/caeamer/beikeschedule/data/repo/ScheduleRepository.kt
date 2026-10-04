@@ -109,28 +109,9 @@ class ScheduleRepository(private val context: Context) {
             courseDao.insertAll(inserts)
         }.also { markCloudDirty() }
 
-    /**
-     * 教务课程颜色去重：
-     * - 同名课程（多时段）共享同一颜色；
-     * - 有原始 XB 色值（且在色板索引内）的课程优先保留该色；
-     * - 同一色值被多门不同课程占用时，后者顺延到下一个未占用的色板下标；
-     * - 无固定时间课程（原 99999/无 KEY）不再用 name 哈希撞色，统一走分配。
-     */
-    suspend fun addManualCourse(course: CourseEntity) =
-        courseDao.insert(course.copy(source = CourseEntity.SOURCE_MANUAL, taskId = ""))
-            .also { markCloudDirty() }
-
-    /** 原样插入课程行（保留 source，用于编辑展开后的多行写回）。 */
+    /** 原样插入课程行（保留 source，用于编辑展开后的多行写回与云恢复）。 */
     suspend fun insertCourses(courses: List<CourseEntity>) =
         courseDao.insertAll(courses).also { markCloudDirty() }
-
-    /** 更新单行课程（手动课程编辑走保存替换时较少用；编辑展开用 insertCourses+deleteCourse）。 */
-    suspend fun updateCourse(course: CourseEntity) =
-        courseDao.update(course).also { markCloudDirty() }
-
-    /** 删除一门课的指定 id（手动课程删除；编辑替换旧行时也用它）。 */
-    suspend fun deleteCourse(id: Long) =
-        courseDao.deleteById(id).also { markCloudDirty() }
 
     // —— 日程 ——
 
@@ -146,17 +127,13 @@ class ScheduleRepository(private val context: Context) {
     suspend fun setTodoDone(id: Long, doneDate: String) =
         todoDao.setDoneDate(id, doneDate).also { markCloudDirty() }
 
-    /** 隐藏/恢复教务导入课程（隐藏 = 不显示但保留；手动/示例删除用 deleteCourse）。 */
+    /** 隐藏/恢复教务导入课程（隐藏 = 不显示但保留；手动/示例课程走删除，见 replaceCourses）。 */
     suspend fun setCourseHidden(id: Long, hidden: Boolean) =
         courseDao.setHidden(id, hidden).also { markCloudDirty() }
 
     /** 整组隐藏/恢复：单条 UPDATE，不会出现"同一张卡一半隐藏一半显示"的中间态。 */
     suspend fun setCoursesHidden(ids: List<Long>, hidden: Boolean) =
         courseDao.setHiddenForIds(ids, hidden).also { markCloudDirty() }
-
-    /** 按源 + 课程名取全部行（含隐藏），用于多时段课程的整体编辑。 */
-    fun observeCourseByName(sources: List<Int>, name: String): Flow<List<CourseEntity>> =
-        courseDao.observeByNames(sources, name)
 
     /** 载入示例课表（assets 内置的真实教务样本），source=SOURCE_SAMPLE 便于一键清除。 */
     suspend fun loadSampleData(courses: List<CourseEntity>, sectionTimes: List<SectionTimeEntity>) =

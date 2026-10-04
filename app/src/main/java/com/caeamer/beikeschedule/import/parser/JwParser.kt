@@ -149,6 +149,12 @@ object JwParser {
         if (unscheduled && weekBitmap.isEmpty()) {
             weekBitmap = parseNoteWeeks(sksj)
         }
+        // 固定时间行缺 ZC 会落成空位图：整行照常入库，却在任何周都不渲染——正是本文件反复
+        // 要避免的"课程静默消失"。与上面缺节次同口径：宁可整行跳过并留痕（parseCourses
+        // 把失败接到 rowErrorLogger），也不要产出一条永远看不见的行。
+        if (!unscheduled && weekBitmap.isEmpty()) {
+            throw IllegalArgumentException("课程行缺失周次: key=$key SKSJ=$sksj")
+        }
 
         return CourseEntity(
             taskId = obj["RWH"]?.jsonPrimitive?.contentOrNull.orEmpty(),
@@ -179,8 +185,10 @@ object JwParser {
         val weeks = mutableSetOf<Int>()
         m.groupValues[1].split(",").forEach { part ->
             val range = part.split("-")
-            val a = range.getOrNull(0)?.toIntOrNull() ?: return@forEach
-            val b = range.getOrNull(1)?.toIntOrNull() ?: a
+            // 区间两端都夹到 1..MAX_TOTAL_WEEKS：正则抓到的是自由数字串，脏数据（"1-99999999周"）
+            // 会把整个区间逐元素展开进 Set，内存与耗时无界（与 zc 字段的同类防御一个口径）
+            val a = range.getOrNull(0)?.toIntOrNull()?.coerceIn(1, MAX_TOTAL_WEEKS) ?: return@forEach
+            val b = (range.getOrNull(1)?.toIntOrNull() ?: a).coerceIn(1, MAX_TOTAL_WEEKS)
             weeks += a..b
         }
         if (weeks.isEmpty()) return ""

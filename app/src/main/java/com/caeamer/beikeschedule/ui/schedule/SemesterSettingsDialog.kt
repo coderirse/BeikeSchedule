@@ -38,6 +38,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.reminder.ClassReminderScheduler
@@ -72,11 +74,14 @@ fun SemesterSettingsDialog(
     var totalWeeks by rememberSaveable { mutableIntStateOf(current.totalWeeks) }
     var showDatePicker by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
-    // 系统层面的开关是同步查询，每次打开设置页现算，保证是最新值
-    val notificationsBlocked = remember { notificationsBlocked(context) }
-    val exactAlarmBlocked = remember {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            !context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+    // 权限诊断必须在**每次回到前台**时重算：点「去开启通知 / 去开启精确闹钟」跳系统设置
+    // 授权后返回，Activity 通常不重建、组合原样保留，裸 remember 只在进入组合时算一次，
+    // 对话框会一直挂着"已被系统关闭"的过期结论，用户得关掉重开才看到真相。
+    var notificationsBlocked by remember { mutableStateOf(areNotificationsBlocked(context)) }
+    var exactAlarmBlocked by remember { mutableStateOf(isExactAlarmBlocked(context)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        notificationsBlocked = areNotificationsBlocked(context)
+        exactAlarmBlocked = isExactAlarmBlocked(context)
     }
 
     AlertDialog(
@@ -313,12 +318,17 @@ private fun courseSourceLabel(course: CourseEntity): String = when (course.sourc
 }
 
 /** 通知是否被系统挡掉：应用级通知开关（含权限）被关，或「上课提醒」渠道被设为"关闭"。 */
-private fun notificationsBlocked(context: Context): Boolean {
+private fun areNotificationsBlocked(context: Context): Boolean {
     if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return true
     val channel = context.getSystemService(NotificationManager::class.java)
         .getNotificationChannel(ClassReminderScheduler.CHANNEL_ID)
     return channel != null && channel.importance == NotificationManager.IMPORTANCE_NONE
 }
+
+/** 精确闹钟权限是否缺失（Android 12 起是独立开关，缺失时提醒会推迟到维护窗口才弹）。 */
+private fun isExactAlarmBlocked(context: Context): Boolean =
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        !context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
 
 private fun openNotificationSettings(context: Context) {
     // 隐式 Intent 一律兜住：个别 ROM / 精简系统没有这个设置页

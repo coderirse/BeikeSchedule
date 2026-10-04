@@ -14,6 +14,9 @@ import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -34,6 +37,15 @@ object UpdateInstaller {
     private const val DOWNLOAD_NAME = "beikeschedule-update.apk"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private val _downloading = MutableStateFlow(false)
+
+    /** 是否有更新包正在下载（界面据此禁用「前往下载」，见 ProfileScreen 的强更弹窗）。 */
+    val downloading: StateFlow<Boolean> = _downloading.asStateFlow()
+
+    /** 在跑的下载 id：连点去重用（[downloading] 只是它的界面投影）。 */
+    @Volatile
+    private var activeDownloadId: Long? = null
+
     /** 是否可走应用内下载链路：直链 APK 且有已认证的摘要。 */
     fun canInstallInApp(url: String, sha256Hex: String): Boolean =
         sha256Hex.isNotBlank() && url.substringBefore('?').lowercase().endsWith(".apk")
@@ -48,6 +60,22 @@ object UpdateInstaller {
             toast(app, "下载服务不可用，请改用浏览器下载")
             return
         }
+        // 连点去重：两次 enqueue 会带来两个完成广播、两次并发的摘要校验与两次拉起安装器。
+        // 用 DownloadManager 的真实状态判断而不是只看标志位——广播万一丢了，标志位会一直
+        // 卡住"下载中"，那就再也点不动了。
+        activeDownloadId?.let { id ->
+            if (isInFlight(dm, id)) {
+                toast(app, "更新包正在下载中，请看通知栏进度")
+                return
+            }
+            activeDownloadId = null
+        }
+        // 清掉上一次更新留下的已完成条目（通知 + APK）。目标文件名固定，残留会让
+        // DownloadManager 把新包改名成 beikeschedule-update-1.apk，而后面校验摘要读的是
+        // beikeschedule-update.apk —— 校验的可能是上一个版本的包。
+        // 成功安装后不能立刻 remove（它会连文件一起删，而安装器是异步读取的），
+        // 所以只能留到下一次更新时收拾。
+        runCatching { removeCompletedDownloads(dm) }
         val request = DownloadManager.Request(Uri.parse(url))
             .setTitle("贝壳课表更新包")
             .setDescription("下载完成后自动校验并安装")
@@ -56,6 +84,8 @@ object UpdateInstaller {
             .setDestinationInExternalFilesDir(app, Environment.DIRECTORY_DOWNLOADS, DOWNLOAD_NAME)
             .setAllowedOverMetered(true)
         val id = dm.enqueue(request)
+        activeDownloadId = id
+        _downloading.value = true
 
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -72,12 +102,38 @@ object UpdateInstaller {
         )
     }
 
+    /** 该下载是否仍在进行（等待/暂停/下载中）。条目已不存在时视为不在进行。 */
+    private fun isInFlight(dm: DownloadManager, id: Long): Boolean {
+        val query = DownloadManager.Query().setFilterById(id)
+        return dm.query(query).use { cursor ->
+            cursor.moveToFirst() && cursor.getInt(
+                cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS),
+            ).let {
+                it == DownloadManager.STATUS_PENDING ||
+                    it == DownloadManager.STATUS_RUNNING ||
+                    it == DownloadManager.STATUS_PAUSED
+            }
+        }
+    }
+
+    /** 清掉本应用所有已完成的下载条目（只用于更新包，本应用没有别的 DownloadManager 用途）。 */
+    private fun removeCompletedDownloads(dm: DownloadManager) {
+        val query = DownloadManager.Query().setFilterByStatus(DownloadManager.STATUS_SUCCESSFUL)
+        dm.query(query).use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
+            while (cursor.moveToNext()) dm.remove(cursor.getLong(idColumn))
+        }
+    }
+
     private suspend fun finishAndInstall(app: Context, dm: DownloadManager, id: Long, sha256Hex: String) {
+        activeDownloadId = null
+        _downloading.value = false
         val query = DownloadManager.Query().setFilterById(id)
         dm.query(query).use { cursor ->
             if (!cursor.moveToFirst()) return
             val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
             if (status != DownloadManager.STATUS_SUCCESSFUL) {
+                // remove 连带删掉半成品文件与通知栏条目
                 dm.remove(id)
                 toastMain(app, "下载未完成，请重试")
                 return
@@ -85,16 +141,18 @@ object UpdateInstaller {
         }
         val file = File(app.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), DOWNLOAD_NAME)
         if (!file.exists()) {
+            dm.remove(id)
             toastMain(app, "下载文件缺失，请重试")
             return
         }
         val actual = withContext(Dispatchers.IO) { sha256HexOf(file) }
         if (!actual.equals(sha256Hex, ignoreCase = true)) {
-            file.delete()
-            // 摘要不符 = 下载被篡改或服务端包与签名不一致，宁可拒绝安装
+            // 摘要不符 = 下载被篡改或服务端包与签名不一致，宁可拒绝安装（remove 连带删文件）
+            dm.remove(id)
             toastMain(app, "更新包校验失败，已取消安装（请稍后重试或到 GitHub 下载）")
             return
         }
+        // 成功路径**不**调 dm.remove：安装器还要读这个文件。残留由下一次更新清理。
         val uri = FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", file)
         val install = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, MIME_APK)

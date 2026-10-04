@@ -337,31 +337,6 @@ fun JwWebView(
     )
 }
 
-/** 单桥便捷重载：保持原有调用方式（桥名 + 桥实现）。 */
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-fun JwWebView(
-    bridge: JwBridge,
-    bridgeName: String,
-    onMainPage: () -> Unit,
-    onCreated: (WebView) -> Unit = {},
-    onPageStarted: () -> Unit = {},
-    onPageError: (String) -> Unit = {},
-    onPageProgress: (Int) -> Unit = {},
-    onSubresourceRequest: ((android.webkit.WebResourceRequest) -> Unit)? = null,
-    documentStartScripts: List<Pair<Set<String>, String>> = emptyList(),
-) = JwWebView(
-    bridges = listOf(bridgeName to bridge),
-    onMainPage = onMainPage,
-    startUrl = JW_HOME,
-    onCreated = onCreated,
-    onPageStarted = onPageStarted,
-    onPageError = onPageError,
-    onPageProgress = onPageProgress,
-    onSubresourceRequest = onSubresourceRequest,
-    documentStartScripts = documentStartScripts,
-)
-
 /** 教务系统域名白名单：ustb.edu.cn 及其子域。前导点保证 evilustb.edu.cn 不匹配。 */
 internal fun isJwHost(host: String): Boolean =
     host == "ustb.edu.cn" || host.endsWith(".ustb.edu.cn")

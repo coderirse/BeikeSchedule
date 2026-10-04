@@ -38,6 +38,7 @@ object CloudApi {
     private const val PATH_LATEST = "/api/bs/app/latest"
     private const val PATH_LOGIN = "/api/bs/auth/login"
     private const val PATH_BACKUP = "/api/bs/backup"
+    private const val TAG = "BeikeCloudApi"
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -193,7 +194,10 @@ object CloudApi {
         if (!resp.isSuccessful) throw httpError(resp, authRequired, path)
         val text = resp.body?.string().orEmpty()
         runCatching { parse(text) }.getOrElse {
-            throw IOException("$path 响应格式异常")
+            // message 会被上层原样拼进 Toast（"备份失败：…"），所以必须是用户文案；
+            // 接口路径这类实现细节进日志，别泄露到界面上
+            android.util.Log.w(TAG, "响应解析失败 $path: ${it.message}")
+            throw IOException("服务器响应格式异常，请稍后重试")
         }
     }
 

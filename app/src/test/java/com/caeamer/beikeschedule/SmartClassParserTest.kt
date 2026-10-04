@@ -179,4 +179,30 @@ class SmartClassParserTest {
         val body = """{"code":0,"data":[{"id":"a","name":"A"},123,null,{"id":"b","name":"B"}]}"""
         assertEquals(listOf("A", "B"), SmartClassParser.parseBuildings(body).map { it.name })
     }
+
+    /**
+     * 回归：org.json 的 `optString` 对**显式 JSON null** 返回字面量 `"null"`（不是空串），
+     * `isBlank()` 判不住——服务端把 name 下发为 null 时，界面上会出现一栋叫 "null" 的教学楼、
+     * 一间叫 "null" 的教室，错误提示也会变成 "null"。
+     */
+    @Test
+    fun `字符串字段为 JSON null 时按缺失处理`() {
+        val buildings = SmartClassParser.parseBuildings(
+            """{"code":0,"data":[{"id":"a","name":null},{"id":null,"name":"B"},{"id":"c","name":"C"}]}""",
+        )
+        assertEquals(listOf("C"), buildings.map { it.name })
+
+        val slots = SmartClassParser.parseRoomSlots(
+            """{"code":0,"data":[{"nodeId":null,"nodeName":"第一大节","startTime":null,"endTime":null,
+               "classroomItems":[{"classroomId":1,"classroomName":null,"seatCount":10},
+                                 {"classroomId":2,"classroomName":"教学楼503","seatCount":20}]}]}""".trimIndent(),
+        )
+        assertEquals(1, slots.size)
+        assertEquals("", slots[0].nodeId)
+        assertEquals("", slots[0].startHm)
+        assertEquals(listOf("教学楼503"), slots[0].rooms.map { it.name })
+
+        // msg 为 null 时回"未知错误"，而不是把 "null" 当错误文案显示给用户
+        assertEquals("未知错误", SmartClassParser.errorMessage("""{"code":1,"msg":null}"""))
+    }
 }

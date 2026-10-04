@@ -184,7 +184,10 @@ class SmartClassApi(private val baseUrl: String = DEFAULT_BASE_URL) : SmartClass
             // 服务端拒绝，"签名被拒重校"自愈还会把 key 格式坏误判成 key 轮换反复重拉
             val url = if (signed == null) baseUrl + path
             else SmartClassCrypto.signOrNull(baseUrl + path, signed.csrkKey, signed.timeMillis)
-                ?: throw java.io.IOException("教务接口签名失败（密钥异常），请稍后重试")
+                // SmartClassException 而不是 IOException：message 是要给用户看的文案，
+                // 而 networkMessage 只对它原样透传（普通 IOException 会被 else 分支整体
+                // 替换成通用"网络请求失败"，这句精心写的原因就永远到不了用户面前）
+                ?: throw SmartClassException("教务接口签名失败（密钥异常），请稍后重试")
             conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = CONNECT_TIMEOUT_MS
@@ -215,8 +218,13 @@ class SmartClassApi(private val baseUrl: String = DEFAULT_BASE_URL) : SmartClass
         }
     }
 
-    /** 把传输层异常翻成用户能行动的中文；不再是统一的"网络请求失败"。 */
+    /**
+     * 把传输层异常翻成用户能行动的中文；不再是统一的"网络请求失败"。
+     *
+     * [SmartClassException] 的 message 本身就是用户文案（签名失败等原因），原样透传。
+     */
     private fun networkMessage(e: Exception?): String = when (e) {
+        is SmartClassException -> e.message
         is UnknownHostException -> "网络不可用，请检查网络连接后重试"
         is SocketTimeoutException -> "连接超时，请稍后重试"
         is ConnectException -> "无法连接到服务器，请稍后重试"

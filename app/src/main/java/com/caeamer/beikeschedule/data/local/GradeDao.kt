@@ -11,9 +11,6 @@ interface GradeDao {
     @Query("SELECT * FROM grade ORDER BY xnxq DESC, id ASC")
     fun observeAll(): Flow<List<GradeEntity>>
 
-    @Query("SELECT COUNT(*) FROM grade")
-    suspend fun count(): Int
-
     @Insert
     suspend fun insertAll(grades: List<GradeEntity>)
 
