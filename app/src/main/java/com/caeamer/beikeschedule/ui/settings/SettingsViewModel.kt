@@ -162,21 +162,28 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { settings.setThemeMode(mode) }
     }
 
-    /** 清除成绩本地缓存（含考试安排与学业进度，下次进教务 Tab 重新抓取）。 */
+    /**
+     * 清除成绩本地缓存（含考试安排与学业进度，下次同步重新抓取）。
+     *
+     * 全程 [CloudSync.withoutDirtyMarking]：清掉的只是本机缓存，照常置脏会在 8 秒后把
+     * "成绩/考试/GPA 全空"整包传上去覆盖云端备份，之后从云端也恢复不回来。
+     */
     fun clearGradesCache() {
         viewModelScope.launch {
             val repo = ScheduleRepository(getApplication())
-            settings.saveGradesMeta("", 0L)
-            settings.saveCreditMeta("", "")
-            repo.replaceGrades(emptyList())
-            repo.replaceExams(emptyList())
-            // 考试数据已清空 → 同步取消已排的考前提醒
-            // （否则成绩清完了，旧的"明天考试"闹钟还会带着地点/座位号弹出来）。
-            // cancelDueAlarms = true：用户显式清空，连"已到点但系统还没投递"的那条
-            // 也不要再弹；日常重排必须保持默认 false，否则会丢掉 Doze 下未投递的提醒。
-            // runCatching：重排异常逃出 viewModelScope 会崩进程，这里只允许"本轮不重排"。
-            runCatching { ExamReminderScheduler.reschedule(getApplication(), cancelDueAlarms = true) }
-                .onFailure { e -> if (e is CancellationException) throw e }
+            CloudSync.withoutDirtyMarking {
+                settings.saveGradesMeta("", 0L)
+                settings.saveCreditMeta("", "")
+                repo.replaceGrades(emptyList())
+                repo.replaceExams(emptyList())
+                // 考试数据已清空 → 同步取消已排的考前提醒
+                // （否则成绩清完了，旧的"明天考试"闹钟还会带着地点/座位号弹出来）。
+                // cancelDueAlarms = true：用户显式清空，连"已到点但系统还没投递"的那条
+                // 也不要再弹；日常重排必须保持默认 false，否则会丢掉 Doze 下未投递的提醒。
+                // runCatching：重排异常逃出 viewModelScope 会崩进程，这里只允许"本轮不重排"。
+                runCatching { ExamReminderScheduler.reschedule(getApplication(), cancelDueAlarms = true) }
+                    .onFailure { e -> if (e is CancellationException) throw e }
+            }
         }
     }
 

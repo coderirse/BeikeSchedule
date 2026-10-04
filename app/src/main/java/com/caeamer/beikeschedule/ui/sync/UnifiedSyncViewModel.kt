@@ -463,20 +463,22 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
             // 成绩为空是合法的（新生/评教未完成）：不能因此丢掉同一次已抓到的学籍/考试/学业进度
             GradesParser.parseStudentProfile(userJson, xsxxJson)?.let { settings.saveStudentProfile(it) }
             val (semXn, semXq, _) = JwParser.parseCurrentSemester(semJson)
-            val examsFromServer = examsJson.isNotBlank()
-            if (examsFromServer) repo.replaceExams(ExamsParser.parseExams(examsJson, semXn + semXq))
+            // null = 没拿到考试数据（错误体/登录页 HTML/空响应），空列表 = 确实没有考试。
+            // 只有后者才允许覆盖本地考试表——覆盖式写入把失败当"无考试"会连带取消未来提醒。
+            val exams = ExamsParser.parseExams(examsJson, semXn + semXq)
+            if (exams != null) repo.replaceExams(exams)
             if (xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()) {
                 settings.saveCreditMeta(xflbyqJson, bxkqkJson)
             }
-            // 考试请求成功时无论如何重排（空列表=取消未来提醒）；失败时不动闹钟，
+            // 考试数据确实取到时无论如何重排（空列表=取消未来提醒）；没取到时不动闹钟，
             // 否则会把仍然有效的考试提醒一并取消。
-            if (examsFromServer) ExamReminderScheduler.reschedule(getApplication())
+            if (exams != null) ExamReminderScheduler.reschedule(getApplication())
 
             val notes = buildList {
                 if (grades.isEmpty()) add("未解析到成绩（可能未评教或成绩未发布）")
-                if (!examsFromServer) add("考试安排获取失败，已保留上次数据")
+                if (exams == null) add("考试安排获取失败，已保留上次数据")
             }
-            val savedSomething = grades.isNotEmpty() || examsFromServer ||
+            val savedSomething = grades.isNotEmpty() || exams != null ||
                 xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()
             val detail = listOfNotNull(
                 grades.size.takeIf { it > 0 }?.let { "成绩 $it 门" },

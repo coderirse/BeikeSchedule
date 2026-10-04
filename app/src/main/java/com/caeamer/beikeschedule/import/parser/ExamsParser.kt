@@ -27,11 +27,17 @@ object ExamsParser {
             "(?:[^0-9]{1,6}(\\d{1,2}):(\\d{2})(?::\\d{2})?)?",
     )
 
-    fun parseExams(jsonText: String, xnxq: String): List<ExamEntity> {
-        if (jsonText.isBlank()) return emptyList()
+    /**
+     * @return `null` = 没拿到考试数据（输入为空、响应不是 `{total,list:[...]}` 结构、或返回的
+     * 是错误体/登录页 HTML）；空列表 = 确实没有考试。二者必须可区分：调用方对考试表是
+     * clear + insertAll 的覆盖式写入，把失败折叠成空列表会清空已存考试安排并取消未来提醒，
+     * 而用户看到的只是"这次没抓到"。
+     */
+    fun parseExams(jsonText: String, xnxq: String): List<ExamEntity>? {
+        if (jsonText.isBlank()) return null
         val list = runCatching {
             json.parseToJsonElement(jsonText).jsonObject["list"]?.jsonArray
-        }.getOrNull() ?: return emptyList()
+        }.getOrNull() ?: return null
         return list.mapNotNull { elem ->
             runCatching {
                 val o = elem.jsonObject
