@@ -176,4 +176,50 @@ class TodoPlannerTest {
         val groups = TodoPlanner.groupByDate(todos, thu, 3) // 周四~周六
         assertEquals(listOf(fri), groups.map { it.first })
     }
+
+    // —— expiredOnce（已过期未完成的一次性事项）——
+
+    @Test
+    fun `过期 未完成的一次性事项在列`() {
+        val todos = listOf(once("2026-09-10"), once("2026-09-18"))
+        assertEquals(listOf("2026-09-10"), TodoPlanner.expiredOnce(todos, thu).map { it.date })
+    }
+
+    /**
+     * 回归：补打卡写入的 lastDoneDate 是**今天**，永远不等于过去的 date。此前只判
+     * `lastDoneDate != date`，于是过期区的勾选既不让条目消失、勾选框也恒显示未勾，
+     * 成了一条点了没反应的无效交互。
+     */
+    @Test
+    fun `过期 打卡后离开过期区`() {
+        val todo = once("2026-09-10")
+        assertEquals(1, TodoPlanner.expiredOnce(listOf(todo), thu).size)
+        // 今天在过期区补打卡
+        assertTrue(TodoPlanner.expiredOnce(listOf(todo.copy(lastDoneDate = thu.toString())), thu).isEmpty())
+        // 当天按时完成过
+        assertTrue(TodoPlanner.expiredOnce(listOf(todo.copy(lastDoneDate = todo.date)), thu).isEmpty())
+    }
+
+    @Test
+    fun `过期 只收一次性事项_重复与未来与坏日期都不算`() {
+        val todos = listOf(
+            daily().copy(date = "2026-09-01"),
+            weekly("1111100").copy(date = "2026-09-01"),
+            once("2026-09-30"),
+            once("日期坏了"),
+        )
+        assertTrue(TodoPlanner.expiredOnce(todos, thu).isEmpty())
+    }
+
+    @Test
+    fun `每周重复默认位图点亮周一到周五`() {
+        // 位图索引 0=周一（occursOn 用 dayOfWeek.value - 1 取位）：
+        // 此前的默认值 "0111110" 按周日索引制才等于周一~五，在周一索引制下点亮的是周二~周六
+        assertEquals("1111100", TodoEntity.DEFAULT_WEEKDAYS)
+        val todo = weekly(TodoEntity.DEFAULT_WEEKDAYS)
+        assertTrue(TodoPlanner.occursOn(todo, mon))
+        assertTrue(TodoPlanner.occursOn(todo, thu))
+        assertFalse(TodoPlanner.occursOn(todo, sat))
+        assertFalse(TodoPlanner.occursOn(todo, sun))
+    }
 }

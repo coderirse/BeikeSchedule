@@ -15,10 +15,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -43,6 +45,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +72,7 @@ import com.caeamer.beikeschedule.ui.schedule.DropdownField
 import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.serialization.json.Json
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -89,6 +93,11 @@ private val EditingSaver = Saver<TodoEntity?, String>(
 @Composable
 fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    // rememberNow 只在 RESUMED 走时钟、每分钟对齐推进一次，日期一变就把 ViewModel 的"今天"
+    // 基准推一次：分组/打卡态/过期判定全以它为准，而 Room 只在 todo 表变化时才发射，
+    // 前台跨夜不推进就会一直拿昨天的基准算（昨日打卡的每日事项今天仍显示已完成）。
+    val now = rememberNow()
+    LaunchedEffect(now.toLocalDate()) { viewModel.refreshToday() }
     // rememberSaveable：旋转/进程回收时表单开关与编辑内容不丢（此前旋转即关表单、输入全丢）
     var editing by rememberSaveable(stateSaver = EditingSaver) { mutableStateOf<TodoEntity?>(null) } // null = 未在编辑
     var showForm by rememberSaveable { mutableStateOf(false) }
@@ -101,6 +110,7 @@ fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
         } else {
             TodoList(
                 state = state,
+                now = now,
                 onToggleDone = viewModel::toggleDone,
                 onClick = { editing = it; showForm = true },
             )
@@ -156,11 +166,10 @@ private fun EmptyTodo(onAdd: () -> Unit) {
 @Composable
 private fun TodoList(
     state: TodoUiState,
+    now: LocalDateTime,
     onToggleDone: (Long) -> Unit,
     onClick: (TodoEntity) -> Unit,
 ) {
-    // rememberNow：跨午夜后"今天/明天"分组标签与"已过时间"淡化要跟着变
-    val now = rememberNow()
     val today = now.toLocalDate()
     val nowTime = now.toLocalTime()
     LazyColumn(Modifier.fillMaxSize()) {
@@ -218,7 +227,9 @@ private fun TodoList(
                 todo = todo,
                 isToday = false,
                 isPast = true,
-                done = false,
+                // 勾选态照实读：过期区的打卡是"补打卡"，打完这条就该从过期区消失
+                // （规则在 TodoPlanner.expiredOnce），硬编码 false 会让点击看起来毫无反应
+                done = todo.id in state.doneIds,
                 onToggleDone = { onToggleDone(todo.id) },
                 onClick = { onClick(todo) },
             )
@@ -334,7 +345,7 @@ private fun TodoFormSheet(
     var title by rememberSaveable { mutableStateOf(initial?.title.orEmpty()) }
     var note by rememberSaveable { mutableStateOf(initial?.note.orEmpty()) }
     var repeatMode by rememberSaveable { mutableStateOf(initial?.repeatMode ?: TodoEntity.REPEAT_DAILY) }
-    var weekdays by rememberSaveable { mutableStateOf(initial?.weekdays ?: "0111110") }
+    var weekdays by rememberSaveable { mutableStateOf(initial?.weekdays ?: TodoEntity.DEFAULT_WEEKDAYS) }
     var dateText by rememberSaveable {
         mutableStateOf(initial?.date?.takeIf { it.isNotBlank() } ?: LocalDate.now().toString())
     }
@@ -352,9 +363,13 @@ private fun TodoFormSheet(
     val canSave = title.isNotBlank()
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
+        // 内容槽不会自动滚动：表单固有高度约 500dp（标题 + 2 个输入框 + 下拉 + 星期/日期条件块
+        // + 时间与提前分钟 + 10 色色板 + 删除/取消/保存），小屏、横屏或键盘展开时底部那行
+        // 操作按钮会被直接裁掉、无法触达（与 CourseEditDialog 同款处理）
         Column(
             Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp),
         ) {
@@ -539,11 +554,14 @@ private fun WeekdaySelector(selected: String, onSelect: (String) -> Unit) {
                     .width(36.dp)
                     .height(36.dp)
                     .clip(CircleShape)
-                    .clickable(onClickLabel = if (on) "取消周$label" else "选择周$label") {
+                    // selectable + Role.Checkbox 而非 clickable：TalkBack 要能读出圆点的选中态
+                    // （同文件 ColorSelector 早已是这个写法，两处口径必须一致）
+                    .selectable(selected = on, role = Role.Checkbox) {
                         val chars = (selected + "0000000").take(7).toCharArray()
                         chars[i] = if (on) '0' else '1'
                         onSelect(String(chars))
-                    },
+                    }
+                    .semantics { contentDescription = "周$label" },
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(

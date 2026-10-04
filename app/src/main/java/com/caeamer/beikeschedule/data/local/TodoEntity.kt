@@ -26,7 +26,7 @@ data class TodoEntity(
     val note: String = "",          // 备注，可空
     val repeatMode: Int = REPEAT_DAILY,
     /** 7 位位图，索引 0=周一 … 6=周日，'1'=该天出现；仅 [REPEAT_WEEKLY] 使用。 */
-    val weekdays: String = "0111110",
+    val weekdays: String = DEFAULT_WEEKDAYS,
     /** yyyy-MM-dd；仅 [REPEAT_ONCE] 使用。 */
     val date: String = "",
     /** HH:mm 计划时间点。 */
@@ -45,5 +45,14 @@ data class TodoEntity(
         const val REPEAT_DAILY = 0
         const val REPEAT_WEEKLY = 1
         const val REPEAT_ONCE = 2
+
+        /**
+         * 「每周」重复的默认位图 = 周一~周五。
+         *
+         * 索引 0 是**周一**（TodoPlanner 用 `dayOfWeek.value - 1` 取位，WeekdaySelector 的
+         * 第 0 个圆点也是"一"），所以字面值必须是 "1111100"；此前写的 "0111110" 按周日索引制
+         * 才等于周一~五，在周一索引制下点亮的是周二~周六。
+         */
+        const val DEFAULT_WEEKDAYS = "1111100"
     }
 }
