@@ -260,12 +260,26 @@ class ScheduleRepository(private val context: Context) {
         )
 
         /**
+         * 解析官方校历（下标+1 = 教学周）。**任一日期串非法即整表作废**（返回 null）：
+         * 逐条丢弃会让后续元素下标整体前移，`i + 1` 算出的教学周序号全部错位（丢第 2 周后
+         * 真实第 3 周被当成第 2 周），上课提醒按错误周排期且用户看不到任何异常。
+         * 与 JwParser 导入时的整表拒绝同一口径。
+         */
+        internal fun parseWeekMondays(weekMondays: List<String>): List<LocalDate>? {
+            if (weekMondays.isEmpty()) return null
+            val parsed = ArrayList<LocalDate>(weekMondays.size)
+            for (raw in weekMondays) {
+                parsed += runCatching { LocalDate.parse(raw) }.getOrNull() ?: return null
+            }
+            return parsed
+        }
+
+        /**
          * 用官方教学周日历定位今天：周→周一映射精确反映长假跳周（如国庆周不占序号）。
          * weekMondays 下标+1 = 教学周。未开学视为第 1 周（beforeStart=true）；学期结束返回 week=null（afterEnd=true）。
          */
         fun locateWeek(weekMondays: List<String>, today: LocalDate = LocalDate.now()): WeekLocation {
-            val mondays = weekMondays.mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
-            if (mondays.isEmpty()) return WeekLocation(null, false, null)
+            val mondays = parseWeekMondays(weekMondays) ?: return WeekLocation(null, false, null)
             if (today.isBefore(mondays.first())) return WeekLocation(1, false, null, beforeStart = true)
             mondays.forEachIndexed { i, monday ->
                 val sunday = monday.plusDays(6)
@@ -281,14 +295,24 @@ class ScheduleRepository(private val context: Context) {
         }
 
         /**
-         * 严格判定日期属于第几教学周：开学前、假期跳周、学期结束后都返回 null。
+         * 严格判定日期属于第几教学周：开学前、校历**内部**的假期跳周、超出 [totalWeeks] 都返回 null。
          * 用于上课提醒排期（显示场景的"未开学视为第1周"语义在这里不适用）。
+         *
+         * 校历短于总周数时（教务校历只到第 N 周，或用户把总周数调大），超出校历覆盖的周按
+         * 最后一个校历周一顺延——与 [com.caeamer.beikeschedule.model.WeekResolver.weekMonday]
+         * 同口径。不顺延的话这些周上的课会整段停排提醒、"下一节课"图钉也消失，而课表网格
+         * 照着位图仍认为有课。
          */
-        fun teachingWeekOf(weekMondays: List<String>, date: LocalDate): Int? {
-            val mondays = weekMondays.mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
-            if (mondays.isEmpty() || date.isBefore(mondays.first())) return null
+        fun teachingWeekOf(weekMondays: List<String>, totalWeeks: Int, date: LocalDate): Int? {
+            val mondays = parseWeekMondays(weekMondays) ?: return null
+            if (date.isBefore(mondays.first())) return null
             mondays.forEachIndexed { i, monday ->
                 if (!date.isBefore(monday) && !date.isAfter(monday.plusDays(6))) return i + 1
+            }
+            val last = mondays.last()
+            if (date.isAfter(last.plusDays(6))) {
+                val week = mondays.size + (ChronoUnit.DAYS.between(last, date) / 7).toInt()
+                return week.takeIf { week in 1..totalWeeks }
             }
             return null
         }

@@ -170,8 +170,8 @@ object JwParser {
             ?.takeIf { it in 1..SectionMap.BIG_SECTIONS.size }
             ?.let { big -> SectionMap.BIG_SECTIONS[big - 1].let { it.first to it.last } }
 
-    /** 周历 zc 合理上限（真实学期 ≤ 30 周，放一倍余量），超过按脏数据整体回退。 */
-    private const val MAX_TOTAL_WEEKS = 60
+    /** 周历 zc 合理上限（真实学期 ≤ 30 周，放一倍余量），超过按脏数据整体回退。云恢复清洗同用此界。 */
+    internal const val MAX_TOTAL_WEEKS = 60
 
     /** 从备注文本解析周数（"机械设计 5-7周"、"微机原理与应用B 15,16周"），生成长度 34 的位图。 */
     internal fun parseNoteWeeks(sksj: String): String {

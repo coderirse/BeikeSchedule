@@ -107,7 +107,9 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
             courses = courses,
             sectionTimes = sections,
             semester = semester,
-            selectedWeek = resolved.coerceIn(1, semester.totalWeeks),
+            // totalWeeks 兜底 ≥1：coerceIn 在 min>max 时抛 IllegalArgumentException，而它位于
+            // stateIn 的共享协程里、坏值又已持久化 → 会变成每次启动都崩的循环
+            selectedWeek = resolved.coerceIn(1, semester.totalWeeks.coerceAtLeast(1)),
             currentWeek = location.week,
             inHoliday = location.isHoliday,
             nextWeekMonday = location.nextWeekMonday,
