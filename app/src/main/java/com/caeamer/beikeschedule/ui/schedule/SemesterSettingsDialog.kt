@@ -4,7 +4,6 @@ import android.app.AlarmManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 import androidx.compose.foundation.layout.Arrangement
@@ -327,8 +326,7 @@ private fun areNotificationsBlocked(context: Context): Boolean {
 
 /** 精确闹钟权限是否缺失（Android 12 起是独立开关，缺失时提醒会推迟到维护窗口才弹）。 */
 private fun isExactAlarmBlocked(context: Context): Boolean =
-    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-        !context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+    !context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
 
 private fun openNotificationSettings(context: Context) {
     // 隐式 Intent 一律兜住：个别 ROM / 精简系统没有这个设置页
