@@ -57,13 +57,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.TodoEntity
@@ -544,32 +547,41 @@ private fun WeekdaySelector(selected: String, onSelect: (String) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         days.forEachIndexed { i, label ->
             val on = selected.getOrNull(i) == '1'
-            Surface(
-                shape = CircleShape,
-                color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier
+            // 与同文件 ColorSelector 逐字同构：尺寸/裁圆/底色/交互语义全在同一个 Box 上。
+            // 曾用 Surface 包一层——Surface 会把 modifier 链的语义与内层内容拆成两个无障碍节点
+            // （外层有勾选态没名字、内层有名字没状态），TalkBack 读不全，实测确认。
+            Box(
+                Modifier
                     // 视觉 36dp + minimumInteractiveComponentSize 扩到 48dp 触达；
                     // 相邻 7 点 SpaceBetween，36dp 裸触区会互相挤占
                     .minimumInteractiveComponentSize()
                     .width(36.dp)
                     .height(36.dp)
                     .clip(CircleShape)
-                    // selectable + Role.Checkbox 而非 clickable：TalkBack 要能读出圆点的选中态
-                    // （同文件 ColorSelector 早已是这个写法，两处口径必须一致）
-                    .selectable(selected = on, role = Role.Checkbox) {
-                        val chars = (selected + "0000000").take(7).toCharArray()
-                        chars[i] = if (on) '0' else '1'
-                        onSelect(String(chars))
-                    }
-                    .semantics { contentDescription = "周$label" },
+                    .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                    // 名字/角色/勾选态/动作写进同一个语义块；名字挂在子 Text 上靠
+                    // mergeDescendants 上提——直接写在本块里会被落到内层布局节点上，
+                    // 与勾选态拆成两个无障碍节点（实测三种交互 modifier 组合都如此）
+                    .semantics(mergeDescendants = true) {
+                        role = Role.Checkbox
+                        // this. 不能省：外层参数也叫 selected（String），不显式指定 receiver
+                        // 会赋值到参数上而不是语义属性
+                        this.selected = on
+                        onClick(label = if (on) "取消周$label" else "选择周$label") {
+                            val chars = (selected + "0000000").take(7).toCharArray()
+                            chars[i] = if (on) '0' else '1'
+                            onSelect(String(chars))
+                            true
+                        }
+                    },
+                contentAlignment = Alignment.Center,
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.semantics { contentDescription = "周$label" },
+                )
             }
         }
     }

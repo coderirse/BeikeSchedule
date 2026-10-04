@@ -176,7 +176,12 @@
 - **Todo 默认 weekdays**：`"0111110"` → `"1111100"`，提为 `TodoEntity.DEFAULT_WEEKDAYS`（表单与实体同源）；既有数据不迁移。
 - **toggleDone 非原子**：加 `Mutex` 串行化——只"读最新值"关不掉窗口，读与写之间仍有挂起点。
 - **uiState 时间基准**：`today` 独立成流与 `repo.todos` combine，由页面已有的 `rememberNow`（每分钟、仅 RESUMED）推进；不引后台时钟，也不新造第二套时钟（时钟上提到 `TodoScreen`，`TodoList` 改为接收 `now`）。
-- **WeekdaySelector a11y**：`clickable` → `selectable(selected, role = Role.Checkbox)` + `contentDescription`。
+- **WeekdaySelector a11y**：圆点改为单个 `semantics(mergeDescendants = true)` 块承载角色/勾选态/
+  动作（`Role.Checkbox` + `selected` + 带标签的 `onClick`），名字挂在子 Text 上被合并上提。
+  实测（模拟器 uiautomator）：clickable / selectable / toggleable 三种写法都会把"勾选态"与
+  "名字"拆成两个无障碍节点（外层 48dp 有态无名、内层 36dp 有名无态），TalkBack 聚焦读不全；
+  同文件 ColorSelector 的单节点形态是靠"交互语义与 semantics 在同一裸 Box 上"得到的，
+  而周几圆点外面还套了 `minimumInteractiveComponentSize`，只能显式写语义块。
 - **死代码 11 处删净**，并级联清掉因此失去唯一调用方的 6 个成员：`CourseDao.observeByNames/getByIds/count/insert/update`、`GradeDao.count`、`ExamDao.getAll`、`TodoDao.getAll/getById`、`ScheduleViewModel.saveCourse/observeCourseByName/deleteCourse`、`ScheduleRepository.addManualCourse/updateCourse/deleteCourse/observeCourseByName`、`JwWebView` 单桥重载。
 
 ### 8.3 顺手清掉的（报告未列）
@@ -199,3 +204,14 @@
   B 组（P2 MutationObserver 重排、P3 双次 `/config.json`、两项 a11y）。
 - **未覆盖真实扫码登录**：本轮验证与 10-01 的审查都只到"未覆盖真实扫码登录"为止，
   M1/M2/M3 的同步链路改动需要在真机上跑一次完整扫码。
+
+### 8.5 验证记录（2026-10-05）
+
+- 单测 352 → **382 条全绿**（新增 30 条：SyncPlan 重试两段式 3、ExamsParser null/空分野 2、
+  校历顺延与坏串 5、学期清洗 6、日程码基准与考试文案 3、课程身份/分组/排除 4、过期打卡与默认位图 4、
+  JwParser 防御 3、SmartClassParser null 1、加权排除改名 1 等）。
+- `lintDebug` 通过；本轮改动未引入新告警（顺手消掉一条 ObsoleteSdkInt）。
+- 模拟器（Pixel_10_Pro）走查：日程编辑弹层可滚动到底（删除/取消/保存可触达）；「每周」默认点亮
+  周一~周五；周几圆点无障碍为单节点（名字+复选框+勾选态）；「清除成绩缓存」弹窗含"云端备份保持
+  原样（只清本机缓存，不会上传覆盖）"；全程 logcat 无崩溃。截图存 `build/ui-review-r5/`（不入库）。
+- 真机待办：MY_PACKAGE_REPLACED 广播后 `dumpsys alarm` 三类提醒重建；完整扫码跑一遍 M1/M2/M3。
