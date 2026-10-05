@@ -1,6 +1,8 @@
 package com.caeamer.beikeschedule.import.parser
 
+import com.caeamer.beikeschedule.data.local.ExamEntity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,16 +14,24 @@ class ExamsParserTest {
             .readText(Charsets.UTF_8)
 
     @Test
-    fun `空态 fixture - 返回空列表`() {
-        val exams = ExamsParser.parseExams(loadFixture("exams-empty.json"), "2026-20271")
-        assertTrue(exams.isEmpty())
+    fun `空态 fixture - 返回空列表（真的没有考试）`() {
+        assertEquals(emptyList<ExamEntity>(), ExamsParser.parseExams(loadFixture("exams-empty.json"), "2026-20271"))
+        assertEquals(emptyList<ExamEntity>(), ExamsParser.parseExams("""{"total":0,"list":[]}""", "2026-20271"))
     }
 
+    /**
+     * 调用方对考试表是 clear + insertAll 的覆盖式写入：把"没拿到数据"折叠成空列表，
+     * 会连带清空已存考试安排并取消未来提醒，而用户看到的只是"这次没抓到"。
+     */
     @Test
-    fun `非法输入 - 返回空列表`() {
-        assertTrue(ExamsParser.parseExams("", "2026-20271").isEmpty())
-        assertTrue(ExamsParser.parseExams("not json", "2026-20271").isEmpty())
-        assertTrue(ExamsParser.parseExams("""{"total":0}""", "2026-20271").isEmpty())
+    fun `拿不到 list 一律返回 null（不能折叠成没有考试）`() {
+        assertNull(ExamsParser.parseExams("", "2026-20271"))
+        assertNull(ExamsParser.parseExams("not json", "2026-20271"))
+        assertNull(ExamsParser.parseExams("{}", "2026-20271"))
+        assertNull(ExamsParser.parseExams("""{"total":0}""", "2026-20271"))
+        assertNull(ExamsParser.parseExams("""{"code":500,"msg":"系统异常","content":null}""", "2026-20271"))
+        assertNull(ExamsParser.parseExams("<html><body>请重新登录</body></html>", "2026-20271"))
+        assertNull(ExamsParser.parseExams("""{"list":"not an array"}""", "2026-20271"))
     }
 
     @Test
@@ -31,7 +41,7 @@ class ExamsParserTest {
             "KSSJMS":"2027-01-15 08:00~09:50","ZWH":"12","CDXX":"机械楼314","CDDM":"",
             "JKJSBZ":"","KKYXMC":"数理学院"}]}
         """.trimIndent()
-        val exams = ExamsParser.parseExams(json, "2026-20271")
+        val exams = requireNotNull(ExamsParser.parseExams(json, "2026-20271"))
         assertEquals(1, exams.size)
         val exam = exams.first()
         assertEquals("2027-01-15", exam.ksrq)
@@ -50,8 +60,7 @@ class ExamsParserTest {
             {"total":1,"list":[{"KCMC":"大学物理B","KSSJMS":"第16周 星期三","ZWH":"5",
             "CDXX":"教学楼201","KSSJDMC":"期末考试"}]}
         """.trimIndent()
-        val exams = ExamsParser.parseExams(json, "2026-20271")
-        val exam = exams.first()
+        val exam = requireNotNull(ExamsParser.parseExams(json, "2026-20271")).first()
         assertEquals("", exam.ksrq)
         assertEquals("", exam.kssj)
         assertEquals("", exam.jssj)

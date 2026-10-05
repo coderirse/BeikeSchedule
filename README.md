@@ -32,7 +32,7 @@
 
 ## 下载
 
-当前版本 **1.3.7（versionCode 48）**。[Releases](https://github.com/coderirse/BeikeSchedule/releases) 页面下载最新 APK（release 签名，可直接覆盖安装升级；v1.0.14 及更早版本因包名变更需卸载重装）。
+当前版本 **1.4.0（versionCode 51）**。[Releases](https://github.com/coderirse/BeikeSchedule/releases) 页面下载最新 APK（release 签名，可直接覆盖安装升级；v1.0.14 及更早版本因包名变更需卸载重装）。
 
 App 内「我的 → 检查更新」走自有更新源（`/api/bs/app/latest`）：响应带 **Ed25519 签名**、并覆盖安装包 **SHA-256**，验签不通过则整体忽略该源（不拿未验签的强更或下载链接），装包前再核对一次摘要。
 

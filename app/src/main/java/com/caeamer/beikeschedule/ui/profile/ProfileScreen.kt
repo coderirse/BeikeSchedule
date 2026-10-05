@@ -486,6 +486,9 @@ fun ProfileScreen(
 
     if (showUpdateDialog) {
         val u = update
+        // 强更弹窗点「前往下载」后不关闭，按钮必须能禁：连点会重复排队同一文件名，
+        // 两个完成广播各自触发一次校验与拉起安装器
+        val downloading by UpdateInstaller.downloading.collectAsStateWithLifecycle()
         if (u is UpdateState.Available) {
             // force 版本：强制更新，弹窗不可点击外部/返回键关闭，也不给"关闭"按钮
             AlertDialog(
@@ -507,20 +510,23 @@ fun ProfileScreen(
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = {
-                        // 直链 APK + 有签名认证过的摘要：应用内下载→校验→安装；
-                        // 其余（GitHub 页面/旧约定无摘要）保持浏览器链路，
-                        // 依赖系统同签名检查兜底
-                        if (UpdateInstaller.canInstallInApp(u.url, u.apkSha256)) {
-                            UpdateInstaller.downloadAndInstall(context, u.url, u.apkSha256)
-                        } else {
-                            context.openExternal(
-                                Intent(Intent.ACTION_VIEW, Uri.parse(u.url)),
-                                "未找到可打开网页的应用",
-                            )
-                        }
-                        if (!u.force) showUpdateDialog = false
-                    }) { Text("前往下载") }
+                    TextButton(
+                        enabled = !downloading,
+                        onClick = {
+                            // 直链 APK + 有签名认证过的摘要：应用内下载→校验→安装；
+                            // 其余（GitHub 页面/旧约定无摘要）保持浏览器链路，
+                            // 依赖系统同签名检查兜底
+                            if (UpdateInstaller.canInstallInApp(u.url, u.apkSha256)) {
+                                UpdateInstaller.downloadAndInstall(context, u.url, u.apkSha256)
+                            } else {
+                                context.openExternal(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(u.url)),
+                                    "未找到可打开网页的应用",
+                                )
+                            }
+                            if (!u.force) showUpdateDialog = false
+                        },
+                    ) { Text(if (downloading) "下载中…" else "前往下载") }
                 },
                 dismissButton = if (!u.force) {
                     { TextButton(onClick = { showUpdateDialog = false }) { Text("关闭") } }
@@ -574,11 +580,14 @@ fun ProfileScreen(
             title = { Text("清除成绩缓存") },
             // 文案必须写全：clearGradesCache() 实际清掉的不止成绩与 GPA，
             // 还包括考试安排与学业进度（学分类别要求/毕业总进度），并取消已排的考前提醒。
+            // 云端备份那一句同样不能省：这条路径全程 suppressDirty，用户需要知道"清本机
+            // 不会把云端那份也清掉"，否则开了云同步的人不敢点。
             text = {
                 Text(
                     "将删除本地的：成绩与 GPA、考试安排、学业进度（学分类别要求 / 毕业总进度），" +
                         "并取消已排的考前提醒。\n\n" +
-                        "课表与隐藏设置不受影响。下次进入教务 Tab 需重新抓取。是否继续？",
+                        "课表与隐藏设置不受影响；云端备份保持原样（只清本机缓存，不会上传覆盖），" +
+                        "下次「登录并同步」会重新抓回。是否继续？",
                 )
             },
             confirmButton = {

@@ -15,14 +15,6 @@ interface CourseDao {
     @Query("SELECT * FROM course WHERE source = :source")
     suspend fun getBySource(source: Int): List<CourseEntity>
 
-    /** 全部同类课程（含隐藏），用于多时段课程分组编辑。等值匹配而非 LIKE：课程名
-     *  含 %/_（如 "100%课堂"）时 LIKE 会过匹配/失配，分组编辑找不到全部行。 */
-    @Query("SELECT * FROM course WHERE source IN (:sources) AND name = :name ORDER BY dayOfWeek, startSection")
-    fun observeByNames(sources: List<Int>, name: String): Flow<List<CourseEntity>>
-
-    @Query("SELECT * FROM course WHERE id IN (:ids)")
-    suspend fun getByIds(ids: List<Long>): List<CourseEntity>
-
     @Query("UPDATE course SET hidden = :hidden WHERE id = :id")
     suspend fun setHidden(id: Long, hidden: Boolean)
 
@@ -33,18 +25,9 @@ interface CourseDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(courses: List<CourseEntity>)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(course: CourseEntity): Long
-
-    @androidx.room.Update
-    suspend fun update(course: CourseEntity)
-
     @Query("DELETE FROM course WHERE id = :id")
     suspend fun deleteById(id: Long)
 
     @Query("DELETE FROM course WHERE source = :source")
     suspend fun deleteBySource(source: Int)
-
-    @Query("SELECT COUNT(*) FROM course")
-    suspend fun count(): Int
 }

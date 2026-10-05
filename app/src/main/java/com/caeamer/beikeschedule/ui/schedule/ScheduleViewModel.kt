@@ -107,7 +107,9 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
             courses = courses,
             sectionTimes = sections,
             semester = semester,
-            selectedWeek = resolved.coerceIn(1, semester.totalWeeks),
+            // totalWeeks 兜底 ≥1：coerceIn 在 min>max 时抛 IllegalArgumentException，而它位于
+            // stateIn 的共享协程里、坏值又已持久化 → 会变成每次启动都崩的循环
+            selectedWeek = resolved.coerceIn(1, semester.totalWeeks.coerceAtLeast(1)),
             currentWeek = location.week,
             inHoliday = location.isHoliday,
             nextWeekMonday = location.nextWeekMonday,
@@ -210,12 +212,6 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         selectedWeek.value = week
     }
 
-    fun saveCourse(course: CourseEntity) {
-        viewModelScope.launch {
-            if (course.id == 0L) repo.addManualCourse(course) else repo.updateCourse(course)
-        }
-    }
-
     /**
      * 批量保存一门课：编辑场景先删除被替换的全部旧行，再插入展开后的全部时段行（单事务）。
      * 多时段课程编辑：传入该课程的所有行（同名同源），先删旧行再插入新行。
@@ -225,10 +221,6 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
             repo.replaceCourses(replaceIds.orEmpty(), courses)
         }
     }
-
-    /** 按名字+源加载一门课的全部行（多时段课程整体编辑用）。 */
-    fun observeCourseByName(sources: List<Int>, name: String) =
-        repo.observeCourseByName(sources, name)
 
     /** 隐藏/恢复教务导入课程。 */
     fun setCourseHidden(id: Long, hidden: Boolean) {
@@ -243,10 +235,6 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun setCoursesHidden(ids: List<Long>, hidden: Boolean) {
         viewModelScope.launch { repo.setCoursesHidden(ids, hidden) }
-    }
-
-    fun deleteCourse(id: Long) {
-        viewModelScope.launch { repo.deleteCourse(id) }
     }
 
     /** 从 assets 载入示例课表；若未设置开学日期，则把本周一设为第 1 周周一便于立即查看。 */

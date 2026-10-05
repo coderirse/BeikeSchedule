@@ -109,28 +109,9 @@ class ScheduleRepository(private val context: Context) {
             courseDao.insertAll(inserts)
         }.also { markCloudDirty() }
 
-    /**
-     * 教务课程颜色去重：
-     * - 同名课程（多时段）共享同一颜色；
-     * - 有原始 XB 色值（且在色板索引内）的课程优先保留该色；
-     * - 同一色值被多门不同课程占用时，后者顺延到下一个未占用的色板下标；
-     * - 无固定时间课程（原 99999/无 KEY）不再用 name 哈希撞色，统一走分配。
-     */
-    suspend fun addManualCourse(course: CourseEntity) =
-        courseDao.insert(course.copy(source = CourseEntity.SOURCE_MANUAL, taskId = ""))
-            .also { markCloudDirty() }
-
-    /** 原样插入课程行（保留 source，用于编辑展开后的多行写回）。 */
+    /** 原样插入课程行（保留 source，用于编辑展开后的多行写回与云恢复）。 */
     suspend fun insertCourses(courses: List<CourseEntity>) =
         courseDao.insertAll(courses).also { markCloudDirty() }
-
-    /** 更新单行课程（手动课程编辑走保存替换时较少用；编辑展开用 insertCourses+deleteCourse）。 */
-    suspend fun updateCourse(course: CourseEntity) =
-        courseDao.update(course).also { markCloudDirty() }
-
-    /** 删除一门课的指定 id（手动课程删除；编辑替换旧行时也用它）。 */
-    suspend fun deleteCourse(id: Long) =
-        courseDao.deleteById(id).also { markCloudDirty() }
 
     // —— 日程 ——
 
@@ -146,17 +127,13 @@ class ScheduleRepository(private val context: Context) {
     suspend fun setTodoDone(id: Long, doneDate: String) =
         todoDao.setDoneDate(id, doneDate).also { markCloudDirty() }
 
-    /** 隐藏/恢复教务导入课程（隐藏 = 不显示但保留；手动/示例删除用 deleteCourse）。 */
+    /** 隐藏/恢复教务导入课程（隐藏 = 不显示但保留；手动/示例课程走删除，见 replaceCourses）。 */
     suspend fun setCourseHidden(id: Long, hidden: Boolean) =
         courseDao.setHidden(id, hidden).also { markCloudDirty() }
 
     /** 整组隐藏/恢复：单条 UPDATE，不会出现"同一张卡一半隐藏一半显示"的中间态。 */
     suspend fun setCoursesHidden(ids: List<Long>, hidden: Boolean) =
         courseDao.setHiddenForIds(ids, hidden).also { markCloudDirty() }
-
-    /** 按源 + 课程名取全部行（含隐藏），用于多时段课程的整体编辑。 */
-    fun observeCourseByName(sources: List<Int>, name: String): Flow<List<CourseEntity>> =
-        courseDao.observeByNames(sources, name)
 
     /** 载入示例课表（assets 内置的真实教务样本），source=SOURCE_SAMPLE 便于一键清除。 */
     suspend fun loadSampleData(courses: List<CourseEntity>, sectionTimes: List<SectionTimeEntity>) =
@@ -260,12 +237,26 @@ class ScheduleRepository(private val context: Context) {
         )
 
         /**
+         * 解析官方校历（下标+1 = 教学周）。**任一日期串非法即整表作废**（返回 null）：
+         * 逐条丢弃会让后续元素下标整体前移，`i + 1` 算出的教学周序号全部错位（丢第 2 周后
+         * 真实第 3 周被当成第 2 周），上课提醒按错误周排期且用户看不到任何异常。
+         * 与 JwParser 导入时的整表拒绝同一口径。
+         */
+        internal fun parseWeekMondays(weekMondays: List<String>): List<LocalDate>? {
+            if (weekMondays.isEmpty()) return null
+            val parsed = ArrayList<LocalDate>(weekMondays.size)
+            for (raw in weekMondays) {
+                parsed += runCatching { LocalDate.parse(raw) }.getOrNull() ?: return null
+            }
+            return parsed
+        }
+
+        /**
          * 用官方教学周日历定位今天：周→周一映射精确反映长假跳周（如国庆周不占序号）。
          * weekMondays 下标+1 = 教学周。未开学视为第 1 周（beforeStart=true）；学期结束返回 week=null（afterEnd=true）。
          */
         fun locateWeek(weekMondays: List<String>, today: LocalDate = LocalDate.now()): WeekLocation {
-            val mondays = weekMondays.mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
-            if (mondays.isEmpty()) return WeekLocation(null, false, null)
+            val mondays = parseWeekMondays(weekMondays) ?: return WeekLocation(null, false, null)
             if (today.isBefore(mondays.first())) return WeekLocation(1, false, null, beforeStart = true)
             mondays.forEachIndexed { i, monday ->
                 val sunday = monday.plusDays(6)
@@ -281,14 +272,24 @@ class ScheduleRepository(private val context: Context) {
         }
 
         /**
-         * 严格判定日期属于第几教学周：开学前、假期跳周、学期结束后都返回 null。
+         * 严格判定日期属于第几教学周：开学前、校历**内部**的假期跳周、超出 [totalWeeks] 都返回 null。
          * 用于上课提醒排期（显示场景的"未开学视为第1周"语义在这里不适用）。
+         *
+         * 校历短于总周数时（教务校历只到第 N 周，或用户把总周数调大），超出校历覆盖的周按
+         * 最后一个校历周一顺延——与 [com.caeamer.beikeschedule.model.WeekResolver.weekMonday]
+         * 同口径。不顺延的话这些周上的课会整段停排提醒、"下一节课"图钉也消失，而课表网格
+         * 照着位图仍认为有课。
          */
-        fun teachingWeekOf(weekMondays: List<String>, date: LocalDate): Int? {
-            val mondays = weekMondays.mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
-            if (mondays.isEmpty() || date.isBefore(mondays.first())) return null
+        fun teachingWeekOf(weekMondays: List<String>, totalWeeks: Int, date: LocalDate): Int? {
+            val mondays = parseWeekMondays(weekMondays) ?: return null
+            if (date.isBefore(mondays.first())) return null
             mondays.forEachIndexed { i, monday ->
                 if (!date.isBefore(monday) && !date.isAfter(monday.plusDays(6))) return i + 1
+            }
+            val last = mondays.last()
+            if (date.isAfter(last.plusDays(6))) {
+                val week = mondays.size + (ChronoUnit.DAYS.between(last, date) / 7).toInt()
+                return week.takeIf { week in 1..totalWeeks }
             }
             return null
         }

@@ -16,27 +16,9 @@ import com.caeamer.beikeschedule.data.local.GradeEntity
 object GradeRows {
 
     /**
-     * 每门课（同 kcdm）只保留一行：
+     * 每门课（同 [GradeEntity.identityKey]）只保留一行：
      * - 有补考/重修行时，只从这些行里取最高分；
      * - 没有时，从全部行里取最高分。
-     *
-     * 口径与 `docs/JWXT_API.md` 的"同 kcdm 有补考/重修行只取补考/重修（多行取最高）"一致：
-     * 补考/重修行**取代**正考行，而不是与正考行一起取最大值。`bkcx` 的实际取值是
-     * `正考` / `补考` / `重修`（见 GpaCalculatorTest 的用例）。
-     *
-     * **唯一未覆盖的边界**：正考分**高于**补考分时（如正考 58 挂、补考 50 仍挂），
-     * 这里取 50 而丢掉 58。这是"补考取代正考"口径的必然结果，也符合教务的实际记法；
-     * 但若将来发现学校对"补考未过、最终仍记正考分"有不同处理，需在此调整。
-     * 现有行为已由 GradeRowsTest / GpaCalculatorTest 钉住。
-     *
-     * @param grades 任意成绩行；非数字成绩（等级制）行由调用方先过滤
-     */
-    /**
-     * 每门课（同 kcdm）只保留一行：
-     * - 有补考/重修行时，只从这些行里取最高分；
-     * - 没有时，从全部行里取最高分。
-     * - kcdm 缺失（解析兜底为空串）的行按课程名分组兜底：否则所有空 kcdm 的**不同课程**
-     *   会被归为一组只留一行，GPA 学分/门数、学分类别进度静默少算。
      *
      * 口径与 `docs/JWXT_API.md` 的"同 kcdm 有补考/重修行只取补考/重修（多行取最高）"一致：
      * 补考/重修行**取代**正考行，而不是与正考行一起取最大值。`bkcx` 的实际取值是
@@ -54,7 +36,7 @@ object GradeRows {
      * @param grades 任意成绩行；非数字成绩（等级制）行由调用方先过滤
      */
     fun bestPerCourse(grades: List<GradeEntity>): List<GradeEntity> =
-        grades.groupBy { it.kcdm.ifBlank { it.kcmc } }.map { (_, rows) -> bestRow(rows) }
+        grades.groupBy { it.identityKey }.map { (_, rows) -> bestRow(rows) }
 
     private fun bestRow(rows: List<GradeEntity>): GradeEntity {
         val retakes = rows.filter { it.bkcx.isNotBlank() && it.bkcx != "正考" }

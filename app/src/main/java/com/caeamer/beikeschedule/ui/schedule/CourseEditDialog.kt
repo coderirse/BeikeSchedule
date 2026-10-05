@@ -138,13 +138,16 @@ fun CourseEditDialog(
 
     // 保存后会被丢弃的周次（用户把总周数调小后，原有周次超出 1..totalWeeks 的部分）。
     // 以前是静默丢：chips 只渲染 1..totalWeeks，看不见也改不回来，这里至少提示一次。
-    val droppedWeeks = remember(sessions, unscheduledWeeks, totalWeeks) {
-        val out = buildSet {
-            sessions.forEach { s -> s.weeks.filterTo(this) { it > totalWeeks } }
-            unscheduledWeeks.filterTo(this) { it > totalWeeks }
-        }
-        out.sorted()
-    }
+    //
+    // **不能包 remember**：键里的 sessions 是同一个 SnapshotStateList 实例、元素引用不变，
+    // 会话内增删周次永远不会让缓存失效，警告文本会停在旧值（对照下面的 valid 直接读状态，
+    // 所以它是实时的）。计算量是几个集合的 filter，每次重组重算没有成本压力。
+    // 无固定时间的行只在整门课都无固定时间时才被改写周次（见 CourseRowBuilder），
+    // 混合场景下它们原样透传，不能算进"会被丢弃"里吓用户。
+    val droppedWeeks = buildSet {
+        sessions.forEach { s -> s.weeks.filterTo(this) { it > totalWeeks } }
+        if (onlyUnscheduled) unscheduledWeeks.filterTo(this) { it > totalWeeks }
+    }.sorted()
 
     val valid = name.isNotBlank() && !nameDuplicated &&
         if (onlyUnscheduled) {

@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
 
 /**
@@ -78,7 +79,7 @@ object TodoReminderScheduler {
             val today = now.toLocalDate()
             val forceCancel = todos
                 .filter { it.isDoneToday(today.toString()) && TodoPlanner.occursOn(it, today) }
-                .map { requestCodeOf(it, today) }
+                .map { requestCodeForOccurrence(it, today) }
                 .toSet()
 
             // —— 后换：不可中断地取消 + 设置 + 写回 ——
@@ -128,15 +129,32 @@ object TodoReminderScheduler {
     }
 
     /**
-     * 提醒的 requestCode = hash(事项 id + 出现日期)，落在 [REQUEST_CODE_BASE, +RANGE)。
-     * 内容寻址所以跨轮次稳定；同一 (事项,日期) 永远得到同一个码，改时间也能精确取消。
+     * 提醒的 requestCode = hash(事项 id + **触发日**)，落在 [REQUEST_CODE_BASE, +RANGE)。
+     * 内容寻址所以跨轮次稳定；同一 (事项,触发日) 永远得到同一个码，改时间也能精确取消。
+     *
+     * 基准是触发日（计划时刻 − 提前量）而不是出现日：提前量能把触发时刻推过午夜
+     * （00:10 开始、提前 30 分钟 → 触发在前一天 23:40），两侧口径必须一致，
+     * 打卡时的定向取消才命中已排的那条闹钟（出现日 → 触发日走 [requestCodeForOccurrence]）。
      *
      * 碰撞概率：本段只有 1e6 个槽，8 天窗口 × 20 个每天重复的事项 = 160 个码时
      * p ≈ 1.3%（生日近似 n(n-1)/2m）。碰撞会让后设置的闹钟覆盖前一个（少弹一条且无日志）。
      * 当前量级（个位数事项）远低于此，先记录在案。
      */
-    internal fun requestCodeOf(todo: TodoEntity, date: LocalDate): Int =
-        REQUEST_CODE_BASE + Math.floorMod("${todo.id}@$date".hashCode(), REQUEST_CODE_RANGE)
+    internal fun requestCodeOf(todo: TodoEntity, triggerDate: LocalDate): Int =
+        REQUEST_CODE_BASE + Math.floorMod("${todo.id}@$triggerDate".hashCode(), REQUEST_CODE_RANGE)
+
+    /**
+     * 出现日 → 该次提醒的 requestCode（换算到与 [requestCodeOf] 同一基准）。
+     * 提前分钟数与 [TodoPlanner.upcomingReminders] 同口径钳到 ≥0；时间串解析失败时
+     * 退回出现日（该事项本来也排不出闹钟，见 upcomingOccurrences）。
+     */
+    internal fun requestCodeForOccurrence(todo: TodoEntity, occurrenceDate: LocalDate): Int {
+        val time = runCatching { LocalTime.parse(todo.time) }.getOrNull()
+            ?: return requestCodeOf(todo, occurrenceDate)
+        val trigger = LocalDateTime.of(occurrenceDate, time)
+            .minusMinutes(todo.remindMinutes.coerceAtLeast(0).toLong())
+        return requestCodeOf(todo, trigger.toLocalDate())
+    }
 
     private fun todoPendingIntent(
         context: Context,

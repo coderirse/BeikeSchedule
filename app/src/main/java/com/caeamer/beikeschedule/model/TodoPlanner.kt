@@ -70,6 +70,24 @@ object TodoPlanner {
     }
 
     /**
+     * 已过期的一次性事项（日期在过去、且没打过卡），按日期升序。
+     *
+     * 主列表只展示今天起 [days] 天，没有这个出口它们就成了"幽灵数据"——永远不可见、
+     * 不可编辑、不可删，却仍参与提醒重排。
+     *
+     * **打过卡即离开过期区**：`lastDoneDate == date` 是当天按时完成过，`lastDoneDate == today`
+     * 是用户刚在过期区补打了卡。此前只判前者，而补打卡写入的是今天 → 永远不等于过去的 date，
+     * 条目既不消失、勾选框也恒显示未勾，成了点了没反应的无效交互。
+     */
+    fun expiredOnce(todos: List<TodoEntity>, today: LocalDate): List<TodoEntity> =
+        todos.filter { todo ->
+            todo.repeatMode == TodoEntity.REPEAT_ONCE &&
+                runCatching { LocalDate.parse(todo.date) }.getOrNull()?.isBefore(today) == true &&
+                todo.lastDoneDate != todo.date &&
+                todo.lastDoneDate != today.toString()
+        }.sortedBy { it.date }
+
+    /**
      * 给一段日期范围分组展示用的"日期 → 当日事项"分组，按日期升序、日内按时间升序。
      *
      * 仅含**确实有事项出现**的日期（空日期不出现在结果里）。

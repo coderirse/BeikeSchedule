@@ -203,22 +203,75 @@ class CurrentWeekTest {
     @Test
     fun `严格判定 开学前返回 null 不排提醒`() {
         // 2026-08-31 在开学（9/7）之前，显示语义算第1周，但严格判定无课
-        assertNull(ScheduleRepository.teachingWeekOf(realCalendar, LocalDate.of(2026, 8, 31)))
+        assertNull(ScheduleRepository.teachingWeekOf(realCalendar, 20, LocalDate.of(2026, 8, 31)))
     }
 
     @Test
     fun `严格判定 假期跳周返回 null`() {
-        assertNull(ScheduleRepository.teachingWeekOf(realCalendar, LocalDate.of(2026, 10, 1)))
+        // 校历**内部**的空隙（国庆）不顺延：那一周本来就没课，顺延会误排提醒
+        assertNull(ScheduleRepository.teachingWeekOf(realCalendar, 20, LocalDate.of(2026, 10, 1)))
     }
 
     @Test
     fun `严格判定 教学周内返回周号`() {
-        assertEquals(4, ScheduleRepository.teachingWeekOf(realCalendar, LocalDate.of(2026, 10, 8)))
-        assertEquals(1, ScheduleRepository.teachingWeekOf(realCalendar, LocalDate.of(2026, 9, 7)))
+        assertEquals(4, ScheduleRepository.teachingWeekOf(realCalendar, 20, LocalDate.of(2026, 10, 8)))
+        assertEquals(1, ScheduleRepository.teachingWeekOf(realCalendar, 20, LocalDate.of(2026, 9, 7)))
     }
 
     @Test
     fun `严格判定 学期结束后返回 null`() {
-        assertNull(ScheduleRepository.teachingWeekOf(realCalendar, LocalDate.of(2026, 11, 5)))
+        // realCalendar 只列了 7 周，totalWeeks=7 即"校历就是整个学期"
+        assertNull(ScheduleRepository.teachingWeekOf(realCalendar, 7, LocalDate.of(2026, 11, 5)))
+    }
+
+    /**
+     * 回归：教务校历常常只到第 N 周，而 totalWeeks 更大（导入时单独保存，二者可不等；
+     * 学期设置里也能选 22/25 周）。此前超出校历覆盖的周返回 null，那些周上的课整段停排
+     * 提醒、"下一节课"图钉消失，而课表网格照着位图仍认为有课。
+     */
+    @Test
+    fun `严格判定 校历短于总周数时按最后一个校历周一顺延`() {
+        // realCalendar 最后一周（第 7 周）周一 = 2026-10-26
+        assertEquals(8, ScheduleRepository.teachingWeekOf(realCalendar, 20, LocalDate.of(2026, 11, 2)))
+        assertEquals(8, ScheduleRepository.teachingWeekOf(realCalendar, 20, LocalDate.of(2026, 11, 5)))
+        assertEquals(8, ScheduleRepository.teachingWeekOf(realCalendar, 20, LocalDate.of(2026, 11, 8)))
+        assertEquals(9, ScheduleRepository.teachingWeekOf(realCalendar, 20, LocalDate.of(2026, 11, 9)))
+    }
+
+    @Test
+    fun `严格判定 顺延不超过总周数`() {
+        assertNull(ScheduleRepository.teachingWeekOf(realCalendar, 8, LocalDate.of(2026, 11, 9)))
+    }
+
+    /**
+     * 回归：坏日期串必须让整份校历作废。只剔掉坏的那一项会让后续下标整体前移，
+     * `i + 1` 算出的教学周序号全部错位（这里真实的第 3 周会被当成第 2 周）。
+     */
+    @Test
+    fun `严格判定 校历含坏日期串整表作废不错位`() {
+        val corrupt = listOf("2026-09-07", "not-a-date", "2026-09-21")
+        assertNull(ScheduleRepository.teachingWeekOf(corrupt, 20, LocalDate.of(2026, 9, 21)))
+        assertNull(ScheduleRepository.locateWeek(corrupt, LocalDate.of(2026, 9, 21)).week)
+    }
+
+    @Test
+    fun `周映射 校历含坏日期串时退回开学日期推算`() {
+        val semester = com.caeamer.beikeschedule.data.pref.SettingsStore.SemesterConfig(
+            xn = "2026-2027", xq = "1", name = "2026-2027-1",
+            firstMonday = "2026-09-07", totalWeeks = 20,
+            weekMondays = listOf("2026-09-07", "not-a-date", "2026-09-21"),
+        )
+        // 旧行为：known=[09-07, 09-21]，第 3 周 = known.last() + (3-2) 周 = 09-28（错位一周）
+        assertEquals(LocalDate.of(2026, 9, 21), WeekResolver.weekMonday(semester, 3))
+        assertEquals(LocalDate.of(2026, 9, 7), WeekResolver.weekMonday(semester, 1))
+    }
+
+    @Test
+    fun `周映射 校历短于总周数时顺延`() {
+        val semester = com.caeamer.beikeschedule.data.pref.SettingsStore.SemesterConfig(
+            firstMonday = "2026-09-07", totalWeeks = 20, weekMondays = realCalendar,
+        )
+        assertEquals(LocalDate.of(2026, 10, 26), WeekResolver.weekMonday(semester, 7))
+        assertEquals(LocalDate.of(2026, 11, 2), WeekResolver.weekMonday(semester, 8))
     }
 }

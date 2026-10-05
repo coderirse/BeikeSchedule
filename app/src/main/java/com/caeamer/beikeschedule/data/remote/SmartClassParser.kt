@@ -21,8 +21,8 @@ import org.json.JSONObject
  *
  * 解析一律用 `optX` 而非 `getX`：服务端字段缺失/改类型时 `getX` 会抛异常，
  * 让整个页面白屏；`optX` 退化为默认值，最坏只是少一条数据。
- * 这与 `JwParser` 的既有约定一致（那个文件记录了 `JsonNull.content` 返回字面量
- * `"null"` 的坑，这里同样适用）。
+ * 字符串字段统一走 [str]：`optString` 对显式 JSON null 会返回字面量 `"null"`
+ * （`JwParser` 里 `JsonNull.content` 是同一个坑），直接用会把 "null" 当数据展示出来。
  */
 object SmartClassParser {
 
@@ -76,6 +76,17 @@ object SmartClassParser {
     }.getOrNull()
 
     /**
+     * 字符串字段取值：缺失与显式 JSON null 都归一为 null（空白串同样算没有）。
+     *
+     * 不能直接用 `optString`：它对 JSON null 返回**字面量 "null"**（org.json 把
+     * JSONObject.NULL toString 后当值返回），`isBlank()` 判不住——服务端把
+     * id/name/msg/classroomName 下发为 null 时，界面上就会出现名叫 "null" 的教学楼/时段/教室。
+     * 本文件此前只在 noSeatRate 一处显式判了 isNull，字符串字段全裸奔。
+     */
+    private fun JSONObject.str(key: String): String? =
+        if (isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
+
+    /**
      * 服务端返回的错误消息（成功时返回 null）。
      *
      * **无法解析为 JSON 时返回"响应格式异常"而不是 null**：null 的语义是"这是一个
@@ -86,16 +97,16 @@ object SmartClassParser {
      */
     fun errorMessage(body: String): String? = runCatching {
         val root = JSONObject(body)
-        if (root.optInt("code", -1) == 0) null else root.optString("msg").ifBlank { "未知错误" }
+        if (root.optInt("code", -1) == 0) null else root.str("msg") ?: "未知错误"
     }.getOrElse { "响应格式异常，请稍后重试" }
 
     /** 解析教学楼列表。 */
     fun parseBuildings(body: String): List<Building> {
         val data = dataArray(body).orEmpty()
         val list = data.mapNotNull { o ->
-            val id = o.optString("id")
-            val name = o.optString("name")
-            if (id.isBlank() || name.isBlank()) null else Building(id, name)
+            val id = o.str("id")
+            val name = o.str("name")
+            if (id == null || name == null) null else Building(id, name)
         }
         // 元素级一致性校验：data 里有条目却一条都没解析出来 → 服务端字段形态变了。
         // 返回空列表会被界面翻译成"没有获取到教学楼列表"（尚可）或"没有空教室"（误导），
@@ -109,9 +120,8 @@ object SmartClassParser {
     /** 解析节次类型列表。 */
     fun parseNodeTypes(body: String): List<NodeType> =
         dataArray(body).orEmpty().mapNotNull { o ->
-            val id = o.optString("id")
-            val name = o.optString("name")
-            if (id.isBlank()) null else NodeType(id, name.ifBlank { "默认节次" })
+            val id = o.str("id") ?: return@mapNotNull null
+            NodeType(id, o.str("name") ?: "默认节次")
         }
 
     /**
@@ -123,14 +133,11 @@ object SmartClassParser {
     fun parseRoomSlots(body: String): List<RoomSlot> {
         val data = dataArray(body).orEmpty()
         val slots = data.mapNotNull { o ->
-            val nodeId = o.optString("nodeId")
-            val nodeName = o.optString("nodeName")
-            if (nodeName.isBlank()) return@mapNotNull null
+            val nodeName = o.str("nodeName") ?: return@mapNotNull null
             val items = o.optJSONArray("classroomItems") ?: return@mapNotNull null
             val rooms = (0 until items.length()).mapNotNull { i ->
                 val c = items.optJSONObject(i) ?: return@mapNotNull null
-                val name = c.optString("classroomName")
-                if (name.isBlank()) return@mapNotNull null
+                val name = c.str("classroomName") ?: return@mapNotNull null
                 // noSeatRate 为 JSON null 时 optDouble 会返回默认值，
                 // 所以必须先判 isNull 才能区分"没有数据"与"空座率真的是 0"
                 val rate = if (c.isNull("noSeatRate")) null else c.optDouble("noSeatRate").takeIf { it.isFinite() }
@@ -141,7 +148,17 @@ object SmartClassParser {
                     seatCount = c.optInt("seatCount", 0),
                 )
             }
-            if (rooms.isEmpty()) null else RoomSlot(nodeId, nodeName, o.optString("startTime"), o.optString("endTime"), rooms)
+            if (rooms.isEmpty()) {
+                null
+            } else {
+                RoomSlot(
+                    nodeId = o.str("nodeId").orEmpty(),
+                    nodeName = nodeName,
+                    startTime = o.str("startTime").orEmpty(),
+                    endTime = o.str("endTime").orEmpty(),
+                    rooms = rooms,
+                )
+            }
         }
         // 元素级一致性校验：HTTP 状态与顶层 JSON 已由调用方把关（M1 修复），
         // 但字段改名/变类型会让 data 里的条目被逐条丢弃 → 返回空列表 →

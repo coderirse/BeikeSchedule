@@ -290,6 +290,46 @@ class ReminderSchedulingTest {
         assertTrue(todoCodes.none { it in examCodes.toSet() })
     }
 
+    /**
+     * 回归：日程码的基准是**触发日**（计划时刻 − 提前量），不是出现日。提前量把触发时刻
+     * 推过午夜时两者差一天，打卡的定向取消按出现日算就不命中已排的那条闹钟——它 triggerAtMillis
+     * 已 ≤ now，被"已到点不动"分支保护着，于是打了卡照样收到提醒。
+     */
+    @Test
+    fun `日程码_跨午夜的定向取消与计划侧同码`() {
+        val todo = TodoEntity(id = 7, title = "早班机", time = "00:10", remindMinutes = 30)
+        val occurrence = LocalDate.of(2026, 10, 6)
+        val planned = TodoReminderScheduler.planTodoReminders(
+            listOf(todo),
+            LocalDateTime.of(2026, 10, 5, 20, 0),
+            zone,
+        )
+        // 出现日 10-06 00:10 − 30 分 → 触发 10-05 23:40
+        val planCode = planned.first().requestCode
+        assertEquals(millis(2026, 10, 5, 23, 40), planned.first().triggerAtMillis)
+        assertEquals(planCode, TodoReminderScheduler.requestCodeForOccurrence(todo, occurrence))
+        assertEquals(planCode, TodoReminderScheduler.requestCodeOf(todo, LocalDate.of(2026, 10, 5)))
+        assertTrue(
+            "按出现日算码正是这条要防的回归",
+            planCode != TodoReminderScheduler.requestCodeOf(todo, occurrence),
+        )
+    }
+
+    @Test
+    fun `日程码_不跨午夜与时间串非法时都等于出现日码`() {
+        val d = LocalDate.of(2026, 10, 6)
+        val normal = TodoEntity(id = 3, title = "组会", time = "14:00", remindMinutes = 15)
+        assertEquals(
+            TodoReminderScheduler.requestCodeOf(normal, d),
+            TodoReminderScheduler.requestCodeForOccurrence(normal, d),
+        )
+        val broken = TodoEntity(id = 3, title = "坏时间", time = "not-a-time", remindMinutes = 15)
+        assertEquals(
+            TodoReminderScheduler.requestCodeOf(broken, d),
+            TodoReminderScheduler.requestCodeForOccurrence(broken, d),
+        )
+    }
+
     // ——— 考试提醒 ———
 
     @Test
@@ -321,6 +361,32 @@ class ReminderSchedulingTest {
             cdmc = "", zwh = "", jkjsbz = "", kkyxmc = "", xnxq = "2026-20271",
         )
         assertTrue(ExamReminderScheduler.planExamReminders(listOf(exam), LocalDateTime.of(2026, 9, 7, 0, 0), zone).isEmpty())
+    }
+
+    /**
+     * 回归：教务时间描述常只写开考时间（TIME_REGEX 的起止两组均可选，"2027-01-15 09:00"
+     * 解析出 kssj="09:00"、jssj=""）。此前通知的第二分支拿 ksrq 挡在 kssjms 前面，
+     * 只显示日期——"即将考试"恰是用户最需要开考时间的场景，且比 App 内列表给的信息还少。
+     */
+    @Test
+    fun `考试时间文案_只有开考时间时回退原文`() {
+        fun exam(kssjms: String, ksrq: String, kssj: String, jssj: String) = ExamEntity(
+            kcdm = "1060122", kcmc = "大学物理B", kslx = "期末考试", kssjms = kssjms,
+            ksrq = ksrq, kssj = kssj, jssj = jssj, cdmc = "机械楼114", zwh = "12",
+            jkjsbz = "", kkyxmc = "数理学院", xnxq = "2026-20271",
+        )
+        assertEquals(
+            "2027-01-15 09:00",
+            ExamReminderScheduler.examTimeText(exam("2027-01-15 09:00", "2027-01-15", "09:00", "")),
+        )
+        assertEquals(
+            "2027-01-15 08:00-09:50",
+            ExamReminderScheduler.examTimeText(exam("2027-01-15 08:00~09:50", "2027-01-15", "08:00", "09:50")),
+        )
+        assertEquals(
+            "第16周 星期五",
+            ExamReminderScheduler.examTimeText(exam("第16周 星期五", "", "", "")),
+        )
     }
 
     // ——— 记录编解码（含旧格式兼容） ———

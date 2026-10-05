@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * 云同步编排：整包快照的上传/下载 + 脏标记 + 去抖自动备份。
@@ -31,8 +32,7 @@ import kotlinx.coroutines.sync.withLock
  *
  * **并发模型**：脏标记簿记（markDirty / 去抖 Job）收敛在单线程调度器上串行执行，
  * debounceJob 的 cancel/赋值因此无竞态；上传与恢复仍由 [uploadMutex] 全局互斥。
- * 恢复期间用 [suppressDirty] 抑制设置写入点的自动置脏（否则恢复写十几个键会立刻
- * 把刚清掉的脏标记又打上，触发一次冗余整包上传）。
+ * 需要"写本机但不触发上传"的调用方（云恢复、清除成绩缓存）走 [withoutDirtyMarking]。
  */
 object CloudSync {
 
@@ -43,7 +43,7 @@ object CloudSync {
 
     private var debounceJob: Job? = null
 
-    /** 恢复期间为 true：applyRestore 写的十几个设置键不应触发自动置脏。 */
+    /** [withoutDirtyMarking] 期间为 true：块内的写入点不触发自动置脏。 */
     @Volatile
     private var suppressDirty = false
 
@@ -76,6 +76,37 @@ object CloudSync {
         debounceJob = scope.launch {
             delay(DEBOUNCE_MS)
             runCatching { backupNow(app) }
+        }
+    }
+
+    /** 撤销在排的去抖上传（簿记线程上执行，与 [scheduleDebouncedUpload] 同一口径）。 */
+    private suspend fun cancelDebouncedUpload() {
+        withContext(bookDispatcher) {
+            debounceJob?.cancel()
+            debounceJob = null
+        }
+    }
+
+    /**
+     * 写本机数据但不触发自动上传。
+     *
+     * 两类调用方：
+     * - **云恢复**：applyRestore 写十几个设置键，每个都会置脏，刚清掉的脏标记立刻又被打上，
+     *   白白触发一次整包上传；
+     * - **清除成绩缓存**：清掉的只是本机缓存（下次同步会重新抓回），若照常置脏，8 秒后就把
+     *   "成绩/考试/GPA 全空"整包传上去覆盖云端备份，之后从云端也恢复不回来。
+     *
+     * 进块前先撤掉已在排的去抖上传：那个上传可能是几秒前别的写入点排的，到点就会把块内
+     * 写到一半的状态一起带走。DataStore 里的脏标记**不动**——它代表"本机有未上传的改动"，
+     * 留给下次正常写入或 App 启动补传。
+     */
+    suspend fun <T> withoutDirtyMarking(block: suspend () -> T): T {
+        cancelDebouncedUpload()
+        suppressDirty = true
+        try {
+            return block()
+        } finally {
+            suppressDirty = false
         }
     }
 
@@ -141,7 +172,7 @@ object CloudSync {
      * 无多键事务，进程中途被杀会留下"课程已换、设置半新半旧"；此时该文件就是最后一份
      * 完整本机数据。恢复成功后即覆盖写下一轮回滚点，不清理。
      *
-     * 恢复期间 [suppressDirty] 抑制设置写入点的自动置脏，恢复完成清一次脏标记。
+     * 恢复全程走 [withoutDirtyMarking]：写十几个设置键不该触发上传，恢复完成再清一次脏标记。
      */
     suspend fun restore(context: Context): CloudSnapshot = uploadMutex.withLock {
         val app = context.applicationContext
@@ -164,13 +195,10 @@ object CloudSync {
             }
             val snapshot = CloudSnapshot.decode(snapshotText)
             saveRollbackPoint(app)
-            suppressDirty = true
-            try {
+            withoutDirtyMarking {
                 CloudSnapshotCodec.applyRestore(app, snapshot)
                 settings.clearCloudDirty()
                 settings.setCloudLastBackupAt(envelope.updatedAt)
-            } finally {
-                suppressDirty = false
             }
             snapshot
         } catch (e: CancellationException) {

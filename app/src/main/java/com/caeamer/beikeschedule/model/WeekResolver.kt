@@ -20,14 +20,17 @@ object WeekResolver {
     private fun weekMondaysOf(semester: SettingsStore.SemesterConfig): List<String> = semester.weekMondays
 
     /**
-     * **严格口径**：日期落在第几教学周；开学前、假期跳周、学期结束后都返回 null。
+     * **严格口径**：日期落在第几教学周；开学前、校历内部的假期跳周、超出总周数都返回 null。
      *
      * 用于上课提醒排期与"下一节课"图钉——这些场景下开学前/假期本来就没有课，
      * 绝不能因为兜底推算而误排提醒。
+     *
+     * 校历短于总周数时，超出校历覆盖的周按最后一个校历周一顺延（与 [weekMonday] 同口径），
+     * 顺延到超过 `totalWeeks` 仍返回 null。
      */
     fun teachingWeekOf(semester: SettingsStore.SemesterConfig, date: LocalDate): Int? =
         if (weekMondaysOf(semester).isNotEmpty()) {
-            ScheduleRepository.teachingWeekOf(semester.weekMondays, date)
+            ScheduleRepository.teachingWeekOf(semester.weekMondays, semester.totalWeeks, date)
         } else {
             ScheduleRepository.currentWeek(semester.firstMonday, semester.totalWeeks, date)
         }
@@ -86,6 +89,8 @@ object WeekResolver {
      * - 官方校历优先；
      * - 校历没覆盖到（用户把总周数调大、或本来就没有校历）时从最后一个已知周一顺延，
      *   没有校历时用**归一化到周一**的开学日期推算；
+     * - 校历里**任一**日期串非法就当整份校历不存在（走开学日期推算）：只丢掉坏的那一项
+     *   会让后续下标整体前移，"最后一个已知周一 + k 周"从此错位一周；
      * - 归一化必须与 [ScheduleRepository.currentWeek] 一致：那里用
      *   `previousOrSame(MONDAY)` 把非周一的开学日期归到那一周的周一，而日期行与
      *   `beforeStart` 此前直接用原始日期 → 开学日期是周三时，日期行整学期偏移 2 天、
@@ -93,14 +98,11 @@ object WeekResolver {
      */
     fun weekMonday(semester: SettingsStore.SemesterConfig, week: Int): LocalDate? {
         if (week < 1) return null
-        semester.weekMondays.getOrNull(week - 1)?.let { raw ->
-            runCatching { LocalDate.parse(raw) }.getOrNull()?.let { return it }
-        }
-        val known = semester.weekMondays.mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
-        if (known.isNotEmpty()) {
+        val calendar = ScheduleRepository.parseWeekMondays(semester.weekMondays)
+        if (calendar != null) {
+            calendar.getOrNull(week - 1)?.let { return it }
             // 校历只到第 N 周：第 N + k 周 = 最后一个校历周一 + k 周
-            val extra = week - known.size
-            return known.last().plusWeeks(extra.toLong())
+            return calendar.last().plusWeeks((week - calendar.size).toLong())
         }
         val start = runCatching { LocalDate.parse(semester.firstMonday) }.getOrNull() ?: return null
         val firstMonday = start.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))

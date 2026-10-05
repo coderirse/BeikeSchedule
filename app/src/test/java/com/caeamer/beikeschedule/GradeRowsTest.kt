@@ -153,4 +153,20 @@ class GradeRowsTest {
         assertEquals(1, best.count { it.isFailed })
         assertTrue(best.none { it.isPassed })
     }
+
+    /**
+     * 回归：空 kcdm 的行真实存在（解析兜底为空串）。分组、加权排除与勾选列表必须同用
+     * [GradeEntity.identityKey]：按裸 kcdm 的话，多门**不同**的空 kcdm 课程共享 "" 这一个键，
+     * 用户排除其中一门等于把它们全部排除，勾选态也串在一起。
+     */
+    @Test
+    fun `空课程代码的不同课程按课程名区分身份`() {
+        val a = grade("", "85").copy(kcmc = "军训")
+        val b = grade("", "90").copy(kcmc = "国家安全教育")
+        assertEquals("军训", a.identityKey)
+        assertNotEquals(a.identityKey, b.identityKey)
+        assertEquals("两门课不能被归成一组只留一行", 2, GradeRows.bestPerCourse(listOf(a, b)).size)
+        // 空串不再作为身份键出现（否则排除 "" 会连带排掉全部空 kcdm 课程）
+        assertTrue(GradeRows.bestPerCourse(listOf(a, b)).none { it.identityKey.isBlank() })
+    }
 }

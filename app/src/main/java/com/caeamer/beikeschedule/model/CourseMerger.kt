@@ -4,9 +4,13 @@ import com.caeamer.beikeschedule.data.local.CourseEntity
 
 /**
  * 课表渲染前的行合并：教务网对"单周调课/单双周拆分"会把同一门课同一时段拆成多行
- * （如 1-6 周行 + "7周"行 + "8周"行，地点可能写"-"）。同一天、同名、同小节段的多行
- * 合并为一张卡，周次取并集——任一周有课即点亮，观感与修复前一致。
+ * （如 1-6 周行 + "7周"行 + "8周"行，地点可能写"-"）。同一天、同名、同小节段、**同来源**
+ * 的多行合并为一张卡，周次取并集——任一周有课即点亮，观感与修复前一致。
  * 不同课程占用同一时段（真冲突）不在此合并，仍由课表网格并排窄列渲染。
+ *
+ * 来源必须进合并键：隐藏/删除/编辑都按「课程名 + 来源」取行组（ScheduleScreen.groupOf），
+ * 跨来源合并成一张卡后，另一来源的行不在组内——隐藏了卡片还留在网格上、编辑只改到一半。
+ * 教务拆行天然是同一来源，加这一维不影响原本要合并的场景。
  */
 object CourseMerger {
 
@@ -14,10 +18,10 @@ object CourseMerger {
     private val CAMPUS_PREFIX = Regex("【[^】]*】")
 
     fun mergeSameSlot(courses: List<CourseEntity>): List<CourseEntity> =
-        courses.groupBy { SlotKey(it.name, it.dayOfWeek, it.startSection, it.endSection) }
+        courses.groupBy { SlotKey(it.name, it.source, it.dayOfWeek, it.startSection, it.endSection) }
             .flatMap { (_, rows) -> merge(rows) }
 
-    private data class SlotKey(val name: String, val day: Int, val start: Int, val end: Int)
+    private data class SlotKey(val name: String, val source: Int, val day: Int, val start: Int, val end: Int)
 
     /**
      * 同一时段的行合并。**地点不同的真实行不合并**：教务拆行不只因地点写 "-"，也可能是

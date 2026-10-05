@@ -48,4 +48,12 @@ data class GradeEntity(
     val isPassed: Boolean
         get() = numericScore?.let { it >= 60 } == true ||
             zzcj in setOf("优", "良", "中", "及格", "合格", "通过")
+
+    /**
+     * 课程身份键：kcdm 缺失（解析兜底为空串）时退回课程名。
+     *
+     * 去重分组、加权排除与勾选列表必须同用这一个口径：多门**不同**的空 kcdm 课程会共享
+     * "" 这一个键，用户排除其中一门等于把它们全部排除，勾选态也串在一起。
+     */
+    val identityKey: String get() = kcdm.ifBlank { kcmc }
 }

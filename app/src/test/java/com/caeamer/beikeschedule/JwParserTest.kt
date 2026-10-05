@@ -209,10 +209,37 @@ class JwParserTest {
     }
 
     @Test
-    fun `节次全缺且 KEY 无 jc 段的行跳过`() {
+    fun `节次字段缺失时从 KEY 的 jc 段推导`() {
+        val json = """[{"RWH":"R1","KEY":"xq2_jc1","ZC":"0111111111111111","SKSJ":"高数\n张三\n1-16周\n【校本部】楼101\n第1-2节"}]"""
+        val courses = JwParser.parseCourses(json)
+        assertEquals(1, courses.size)
+        assertEquals(1, courses[0].startSection)
+        assertEquals(2, courses[0].endSection)
+    }
+
+    /**
+     * 回归：固定时间行缺 ZC 会落成空位图——整行照常入库，却在任何周都不渲染，
+     * 课程静默消失。与缺节次同口径：整行跳过并经 rowErrorLogger 留痕。
+     */
+    @Test
+    fun `固定时间行缺周次位图整行跳过并留痕`() {
         val json = """[{"RWH":"R1","KEY":"xq2_jc1","SKSJ":"高数\n张三\n1-16周\n【校本部】楼101\n第1-2节"}]"""
-        // KEY 有 jc 段 → 从 KEY 推导，正常解析
-        assertEquals(1, JwParser.parseCourses(json).size)
+        val errors = mutableListOf<String>()
+        JwParser.rowErrorLogger = { _, e -> errors += e.message.orEmpty() }
+        try {
+            assertTrue(JwParser.parseCourses(json).isEmpty())
+            assertTrue("整行跳过必须留痕", errors.any { it.contains("缺失周次") })
+        } finally {
+            JwParser.rowErrorLogger = null
+        }
+    }
+
+    @Test
+    fun `备注周数区间夹到上限_脏数据不无界展开`() {
+        // 正则抓到的是自由数字串："1-99999999周" 不夹取会把整个区间逐元素塞进 Set
+        val bitmap = JwParser.parseNoteWeeks("某课 1-99999999周")
+        assertEquals(34, bitmap.length)
+        assertEquals(33, bitmap.count { it == '1' })
     }
 
     @Test

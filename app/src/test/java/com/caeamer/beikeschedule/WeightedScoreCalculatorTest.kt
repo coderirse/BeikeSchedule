@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * 加权成绩计算单测（只看必修、等级制排除、按课程代码收敛）。
+ * 加权成绩计算单测（只看必修、等级制排除、按课程身份收敛）。
  *
  * 输入的 GradeTriple 由 `GradeRows.bestPerCourse` 收敛而来——**同一门课不会出现两行**。
  * 这一点很关键：此前计算器直接吃原始成绩行，补考/重修会让同一门课的学分被计入分母两次。
@@ -14,11 +14,11 @@ import org.junit.Test
 class WeightedScoreCalculatorTest {
 
     private fun triple(
-        kcdm: String,
+        identity: String,
         xf: Double,
         score: Double?,
         kcxz: String = "必修",
-    ) = GradeTriple(kcdm = kcdm, xf = xf, score = score, kcxz = kcxz)
+    ) = GradeTriple(identity = identity, xf = xf, score = score, kcxz = kcxz)
 
     @Test
     fun `基本加权 - 必修课按学分加权平均`() {
@@ -62,15 +62,15 @@ class WeightedScoreCalculatorTest {
     }
 
     @Test
-    fun `按课程代码排除生效`() {
-        // 排除机制从"列表下标"改为"课程代码"：下标是拿位置当身份，
-        // 上游筛选/排序一变就会静默排除错的课。
+    fun `按课程身份排除生效`() {
+        // 排除机制从"列表下标"改为"课程身份"：下标是拿位置当身份，
+        // 上游筛选/排序一变就会静默排除错的课。身份也不能用裸 kcdm（空 kcdm 会共享 ""）。
         val result = WeightedScoreCalculator.calculate(
             listOf(
                 triple("A", 3.0, 99.0),
-                triple("B", 1.0, 88.0),
+                triple("军训", 1.0, 88.0),
             ),
-            excludedKcdm = setOf("A"),
+            excluded = setOf("A"),
         )
         requireNotNull(result)
         assertEquals(88.0, result.score, 0.01)
@@ -78,10 +78,10 @@ class WeightedScoreCalculatorTest {
     }
 
     @Test
-    fun `排除不存在的课程代码不影响结果`() {
+    fun `排除不存在的课程身份不影响结果`() {
         val result = WeightedScoreCalculator.calculate(
             listOf(triple("A", 3.0, 99.0)),
-            excludedKcdm = setOf("NOT_EXIST"),
+            excluded = setOf("NOT_EXIST"),
         )
         requireNotNull(result)
         assertEquals(99.0, result.score, 0.01)

@@ -157,10 +157,17 @@ object ExamReminderScheduler {
         REQUEST_CODE_BASE + ((exam.id * 2).toInt().mod(EXAM_SEGMENT_SLOTS)) +
             if (dayBefore) 0 else 1
 
-    private fun examTimeText(exam: ExamEntity): String = when {
+    /**
+     * 通知里的考试时间文案（与 App 内考试列表同一回退口径，见 GradesScreen）。
+     *
+     * kssj 有而 jssj 空是真实数据形态（教务时间描述如 "2027-01-15 09:00" 只写开考时间，
+     * TIME_REGEX 的起止两组均可选）：此时回退 kssjms 原文而不是只给日期——"即将考试"
+     * 正是用户最需要开考时间的场景，通知不该比 App 内显示的还少。
+     */
+    internal fun examTimeText(exam: ExamEntity): String = when {
         exam.kssj.isNotBlank() && exam.jssj.isNotBlank() -> "${exam.ksrq} ${exam.kssj}-${exam.jssj}"
-        exam.ksrq.isNotBlank() -> exam.ksrq
-        else -> exam.kssjms
+        exam.kssjms.isNotBlank() -> exam.kssjms
+        else -> exam.ksrq
     }
 
     private fun pendingIntent(context: Context, plan: PlannedExamReminder): PendingIntent {

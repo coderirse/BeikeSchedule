@@ -48,24 +48,36 @@ enum class CloudMode {
  */
 internal object SyncPlanner {
 
-    fun steps(mode: CloudMode): List<SyncStep> = when (mode) {
-        CloudMode.RESTORE -> listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN, SyncStep.RESTORE)
-        CloudMode.UPLOAD -> listOf(
-            SyncStep.IDENTITY,
-            SyncStep.CLOUD_TOKEN,
-            SyncStep.TIMETABLE,
-            SyncStep.GRADES,
-            SyncStep.BACKUP,
-        )
-        // UNDECIDED 只出现在首轮前半段；按"不上传"取后续步骤，上传与否在决策后追加
+    /**
+     * 前半段：身份 + 云账号。云账号步骤内含云端探测与方向决策，所以后半段只能在它跑完之后
+     * 按**当时**的 mode 算出来——首轮与重试都必须分两段，不能一次排完整张表。
+     */
+    val head: List<SyncStep> = listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN)
+
+    fun steps(mode: CloudMode): List<SyncStep> = head + tail(mode)
+
+    /** 后半段（方向已定）。UNDECIDED 只出现在首轮前半段，按"不上传"取。 */
+    fun tail(mode: CloudMode): List<SyncStep> = when (mode) {
+        CloudMode.RESTORE -> listOf(SyncStep.RESTORE)
+        CloudMode.UPLOAD -> listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.BACKUP)
         CloudMode.UNDECIDED,
         CloudMode.NO_UPLOAD,
-        -> listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN, SyncStep.TIMETABLE, SyncStep.GRADES)
+        -> listOf(SyncStep.TIMETABLE, SyncStep.GRADES)
     }
 
-    /** 重试计划：只重跑未成功的步骤（跳过的步骤不再补跑）。 */
-    fun retrySteps(mode: CloudMode, results: Map<SyncStep, SyncStepResult>): List<SyncStep> =
-        steps(mode).filter { results[it]?.status != SyncStatus.OK }
+    /** 重试的前半段：只重跑未成功的身份/云账号步骤。 */
+    fun retryHead(results: Map<SyncStep, SyncStepResult>): List<SyncStep> =
+        head.filter { results[it]?.status != SyncStatus.OK }
+
+    /**
+     * 重试的后半段：按**当前** mode 取未成功的步骤（跳过的步骤不再补跑）。
+     *
+     * 必须在 head 之后现算：首轮 CLOUD_TOKEN 失败时 mode 还是 UNDECIDED，重试跑完 head 才
+     * 决策出 UPLOAD/RESTORE。若照 UNDECIDED 的表重试，云端那一半（上传或恢复）永远不会补跑——
+     * 用户明确选了"从云端恢复"却只抓到本机数据，还会被提示"将上传本机数据"。
+     */
+    fun retryTail(mode: CloudMode, results: Map<SyncStep, SyncStepResult>): List<SyncStep> =
+        tail(mode).filter { results[it]?.status != SyncStatus.OK }
 }
 
 /**

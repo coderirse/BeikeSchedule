@@ -64,6 +64,12 @@
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
                 <action android:name="android.intent.action.DATE_CHANGED" />
+                <!--
+                    应用被覆盖安装（含应用内自更新）后，系统会清空该包的全部闹钟，
+                    连每日脉冲也一起没了 —— 不监听这个广播，考试提醒要等用户下次打开 App
+                    并恰好触发某条重排路径才恢复。该广播在官方后台启动豁免清单里。
+                -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

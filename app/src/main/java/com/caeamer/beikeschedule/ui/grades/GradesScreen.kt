@@ -482,6 +482,31 @@ private fun ProgressRow(label: String, completed: Double, required: Double, tran
     }
 }
 
+/** 考试日期解析不出来时的分组桶名（ksrq 为空 = 教务只给了"第16周 星期三"这类描述）。 */
+internal const val EXAM_PENDING_DAY = "时间待定"
+
+/**
+ * 考试按考试日分组、按日期升序，[EXAM_PENDING_DAY] 与解析失败的沉底。
+ *
+ * 比较器必须**两级**：只按日期比的话，"时间待定"和"ksrq 非空但解析失败"这两个**不同**的 key
+ * 都映射到 LocalDate.MAX，TreeMap 把它们当同一个 key，后放进去的整组考试会覆盖先前的——
+ * 一组考试从列表里静默消失且无任何提示（runCatching 兜底分支的存在说明解析失败是预期会发生的）。
+ */
+internal fun examDayGroups(exams: List<ExamEntity>): Map<String, List<ExamEntity>> =
+    exams.groupBy { it.ksrq.ifBlank { EXAM_PENDING_DAY } }
+        .toSortedMap(
+            compareBy<String>(
+                { key ->
+                    if (key == EXAM_PENDING_DAY) {
+                        LocalDate.MAX
+                    } else {
+                        runCatching { LocalDate.parse(key) }.getOrNull() ?: LocalDate.MAX
+                    }
+                },
+                { key -> key },
+            ),
+        )
+
 /** 考试安排列表：按日期分组 + 倒计时徽章 + 座位号。 */
 @Composable
 private fun ExamListContent(
@@ -537,10 +562,7 @@ private fun ExamListContent(
         return
     }
     // remember(exams)：分组+排序放组合体里会随任何无关重组每帧重算
-    val grouped = remember(exams) {
-        exams.groupBy { it.ksrq.ifBlank { "时间待定" } }
-            .toSortedMap(compareBy { key -> if (key == "时间待定") LocalDate.MAX else runCatching { LocalDate.parse(key) }.getOrNull() ?: LocalDate.MAX })
-    }
+    val grouped = remember(exams) { examDayGroups(exams) }
 
     LazyColumn(Modifier.fillMaxSize()) {
         // 抓取失败的提示必须在列表**顶部**：此前错误行只挂在成绩页列表末尾，
@@ -805,7 +827,7 @@ private fun ScoreCard(
                     if (state.hideScores) {
                         "只看必修课 · 已隐藏明细"
                     } else {
-                        // "已排除 N 门"用当前筛选下实际可见的排除数，而不是全局 excludedKcdm.size
+                        // "已排除 N 门"用当前筛选下实际可见的排除数，而不是全局 excludedCourses.size
                         // （在全部学期排除 4 门后筛到某学期，可能只有 1 门在该筛选内）
                         val excludedShown = state.weightEligible.count { !it.second }
                         "纳入 ${r.courseCount} 门必修 · 共 ${r.totalCredits} 学分" +
@@ -885,7 +907,7 @@ private fun ScoreCard(
                                     .toggleable(
                                         value = included,
                                         role = Role.Checkbox,
-                                        onValueChange = { onToggleCourse(grade.kcdm) },
+                                        onValueChange = { onToggleCourse(grade.identityKey) },
                                     )
                                     .padding(horizontal = 4.dp, vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,

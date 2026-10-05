@@ -10,9 +10,11 @@ import com.caeamer.beikeschedule.data.local.SectionTimeEntity
 import com.caeamer.beikeschedule.data.local.TodoEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
+import com.caeamer.beikeschedule.import.parser.JwParser
 import com.caeamer.beikeschedule.reminder.ClassReminderScheduler
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
 import com.caeamer.beikeschedule.reminder.TodoReminderScheduler
+import java.time.LocalDate
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -260,13 +262,7 @@ object CloudSnapshotCodec {
         }
 
         val s = snapshot.settings
-        settings.saveSemester(
-            SettingsStore.SemesterConfig(
-                xn = s.semester.xn, xq = s.semester.xq, name = s.semester.name,
-                firstMonday = s.semester.firstMonday, totalWeeks = s.semester.totalWeeks,
-                weekMondays = s.semester.weekMondays,
-            ),
-        )
+        settings.saveSemester(sanitizeSemester(s.semester).toConfig())
         settings.setReminder(s.reminderEnabled, s.reminderMinutes)
         val theme = runCatching { SettingsStore.ThemeMode.valueOf(s.themeMode) }.getOrNull()
         if (theme != null) settings.setThemeMode(theme)
@@ -311,5 +307,32 @@ object CloudSnapshotCodec {
         id = 0, kcdm = kcdm, kcmc = kcmc, kslx = kslx, kssjms = kssjms, ksrq = ksrq,
         kssj = kssj, jssj = jssj, cdmc = cdmc, zwh = zwh, jkjsbz = jkjsbz,
         kkyxmc = kkyxmc, xnxq = xnxq,
+    )
+
+    /**
+     * 清洗快照里的学期配置——这是**网络来的数据**（旧版本客户端上传的、或被篡改的），
+     * 教务导入入口的那套校验管不到它，而它直接落 DataStore 成为全局口径：
+     *
+     * - `weekMondays` 有任一坏日期串 → 整表丢弃，退回 firstMonday 推算。只剔掉坏的那一项
+     *   会让后续下标整体前移，教学周序号从此错位一周（上课提醒按错误周排期且无任何提示）；
+     * - `totalWeeks` 夹到 1..[JwParser.MAX_TOTAL_WEEKS]：0 或负数会让下游 `coerceIn(1, totalWeeks)`
+     *   抛 IllegalArgumentException，而坏值已经持久化 → 每次启动都在 stateIn 的共享协程里崩；
+     * - `firstMonday` 非法 → 置空（下游按"没有开学日期"处理，不会崩）。
+     */
+    internal fun sanitizeSemester(dto: SemesterDto): SemesterDto {
+        val calendarOk = dto.weekMondays.size <= JwParser.MAX_TOTAL_WEEKS &&
+            (dto.weekMondays.isEmpty() || ScheduleRepository.parseWeekMondays(dto.weekMondays) != null)
+        val firstMondayOk = dto.firstMonday.isBlank() ||
+            runCatching { LocalDate.parse(dto.firstMonday) }.isSuccess
+        return dto.copy(
+            firstMonday = if (firstMondayOk) dto.firstMonday else "",
+            totalWeeks = dto.totalWeeks.coerceIn(1, JwParser.MAX_TOTAL_WEEKS),
+            weekMondays = if (calendarOk) dto.weekMondays else emptyList(),
+        )
+    }
+
+    private fun SemesterDto.toConfig() = SettingsStore.SemesterConfig(
+        xn = xn, xq = xq, name = name,
+        firstMonday = firstMonday, totalWeeks = totalWeeks, weekMondays = weekMondays,
     )
 }

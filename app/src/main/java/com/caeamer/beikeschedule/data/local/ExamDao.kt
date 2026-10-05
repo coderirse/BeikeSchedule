@@ -11,9 +11,6 @@ interface ExamDao {
     @Query("SELECT * FROM exam ORDER BY ksrq, kssj")
     fun observeAll(): Flow<List<ExamEntity>>
 
-    @Query("SELECT * FROM exam ORDER BY ksrq, kssj")
-    suspend fun getAll(): List<ExamEntity>
-
     @Insert
     suspend fun insertAll(exams: List<ExamEntity>)
 
