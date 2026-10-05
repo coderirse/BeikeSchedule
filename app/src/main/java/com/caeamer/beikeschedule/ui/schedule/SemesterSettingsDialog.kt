@@ -270,22 +270,22 @@ fun SemesterSettingsDialog(
                 }
             }
         },
-        confirmButton = {
-            TextButton(onClick = {
-                // 总周数不得小于官方校历长度（见上方提示）：静默校正比让"（本周）"消失好
-                val safeWeeks = totalWeeks.coerceAtLeast(current.weekMondays.size.coerceAtLeast(1))
-                onSave(
-                    current.copy(
-                        name = name.trim(),
-                        firstMonday = firstMonday,
-                        totalWeeks = safeWeeks,
-                    ),
-                )
-                onDismiss()
-            }) { Text("保存") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+    confirmButton = {
+        TextButton(onClick = {
+            // 总周数不得小于官方校历长度（见上方提示）：静默校正比让"（本周）"消失好
+            val safeWeeks = totalWeeks.coerceAtLeast(current.weekMondays.size.coerceAtLeast(1))
+            onSave(
+                current.copy(
+                    name = name.trim(),
+                    firstMonday = firstMonday,
+                    totalWeeks = safeWeeks,
+                ),
+            )
+            onDismiss()
+        }) { Text("保存") }
+    },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+)
 
     if (showDatePicker) {
         val pickerState = rememberDatePickerState(

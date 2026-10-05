@@ -37,6 +37,18 @@ class SettingsStore(private val context: Context) {
          * 来自教务校历接口，长假周不占序号；为空时回退 firstMonday + totalWeeks 推算。
          */
         val weekMondays: List<String> = emptyList(),
+        /**
+         * 官方放假/调休休息日（yyyy-MM-dd，仅周一~周五；来自教务校历天级标记 xlList 的 *1 字段）。
+         * 这些日期虽落在某个教学周内，但全校不上课——网格该列清空、提醒不排、"下一节课"图钉隐藏。
+         * 只存工作日性质的休息日：周末天然无课，无需占存储。
+         */
+        val holidays: List<String> = emptyList(),
+        /**
+         * 存量补课映射（"yyyy-MM-dd:weekday"）——仅作兼容保留（旧版手动登记的遗留、云快照同步）。
+         * 现行来源是**内置数据** [com.caeamer.beikeschedule.model.SchoolAdjustments]（随版本发布更新），
+         * 两者在 WeekResolver.daySchedule 里合并生效，内置优先；设置页已无手动编辑入口。
+         */
+        val makeups: List<String> = emptyList(),
     )
 
     /** 学籍快照（教务抓取时顺手存，"我的"页离线展示）。 */
@@ -63,6 +75,8 @@ class SettingsStore(private val context: Context) {
         val FIRST_MONDAY = stringPreferencesKey("first_monday")
         val TOTAL_WEEKS = intPreferencesKey("total_weeks")
         val WEEK_MONDAYS = stringPreferencesKey("week_mondays")
+        val HOLIDAYS = stringPreferencesKey("semester_holidays")
+        val MAKEUPS = stringPreferencesKey("semester_makeups")
         val REMINDER_ENABLED = booleanPreferencesKey("reminder_enabled")
         val REMINDER_MINUTES = intPreferencesKey("reminder_minutes")
         val REMINDER_CODES = stringPreferencesKey("reminder_codes")
@@ -104,7 +118,9 @@ class SettingsStore(private val context: Context) {
             name = p[Keys.NAME] ?: "",
             firstMonday = p[Keys.FIRST_MONDAY] ?: "",
             totalWeeks = p[Keys.TOTAL_WEEKS] ?: 20,
-            weekMondays = p[Keys.WEEK_MONDAYS].toWeekMondays(),
+            weekMondays = p[Keys.WEEK_MONDAYS].toCommaList(),
+            holidays = p[Keys.HOLIDAYS].toCommaList(),
+            makeups = p[Keys.MAKEUPS].toCommaList(),
         )
     }
 
@@ -117,6 +133,8 @@ class SettingsStore(private val context: Context) {
             p[Keys.FIRST_MONDAY] = config.firstMonday
             p[Keys.TOTAL_WEEKS] = config.totalWeeks
             p[Keys.WEEK_MONDAYS] = config.weekMondays.joinToString(",")
+            p[Keys.HOLIDAYS] = config.holidays.joinToString(",")
+            p[Keys.MAKEUPS] = config.makeups.joinToString(",")
         }
     }
 
@@ -352,7 +370,7 @@ class SettingsStore(private val context: Context) {
     private fun noteCloudDirty() = CloudSync.markDirty(context)
 
     private companion object {
-        fun String?.toWeekMondays(): List<String> =
+        fun String?.toCommaList(): List<String> =
             this?.takeIf { it.isNotBlank() }?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
                 ?: emptyList()
     }

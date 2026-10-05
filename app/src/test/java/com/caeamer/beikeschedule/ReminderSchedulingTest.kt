@@ -156,6 +156,54 @@ class ReminderSchedulingTest {
         assertTrue("已到点的 7:45 提醒被取消了，这条提醒会永久丢失", toCancel.isEmpty())
     }
 
+    // ——— 假期与调休补课（2026-10 天级校历）———
+
+    @Test
+    fun `放假日不排提醒_恢复日正常排`() {
+        // 本学期实际安排：10/5-10/7 放假（落在第 4 周内），10/8（周四）恢复上课
+        val holidaySemester = semester.copy(holidays = listOf("2026-10-05", "2026-10-06", "2026-10-07"))
+        val thursdayCourse = course(id = 1, day = 4, startSection = 1) // 周四 08:00
+        val mondayCourse = course(id = 2, day = 1, startSection = 1)   // 周一 08:00
+        val plan = ClassReminderScheduler.planClassReminders(
+            courses = listOf(thursdayCourse, mondayCourse),
+            sectionStartTimes = sectionStarts,
+            semester = holidaySemester,
+            minutes = 15,
+            now = LocalDateTime.of(2026, 10, 4, 12, 0), // 放假窗口前一天中午，窗口覆盖 10/4-10/11
+            zone = zone,
+        )
+        // 10/5（周一）与 10/6、10/7 都不排；10/8（周四）正常排
+        val dates = plan.map { it.triggerAtMillis }.map { millis ->
+            LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(millis), zone).plusMinutes(15).toLocalDate()
+        }
+        assertTrue("放假日 10/5 不应有提醒", LocalDate.of(2026, 10, 5) !in dates)
+        assertTrue("恢复日 10/8 应有提醒", LocalDate.of(2026, 10, 8) in dates)
+    }
+
+    @Test
+    fun `补课日按生效星期排提醒`() {
+        // 10/10（周六）补周三的课：测试学期无官方校历，10/10 按 firstMonday 推算为第 5 周
+        // （真实校历因国庆跳周是第 4 周）——补课映射只依赖生效周与生效星期，周号不影响断言
+        val makeupSemester = semester.copy(makeups = listOf("2026-10-10:3"))
+        val wednesdayCourse = course(id = 1, day = 3, startSection = 1) // 周三 08:00
+        val saturdayCourse = course(id = 2, day = 6, startSection = 1)  // 周六课不应被搬到别处
+        val plan = ClassReminderScheduler.planClassReminders(
+            courses = listOf(wednesdayCourse, saturdayCourse),
+            sectionStartTimes = sectionStarts,
+            semester = makeupSemester,
+            minutes = 15,
+            now = LocalDateTime.of(2026, 10, 9, 12, 0), // 窗口 10/9-10/16，含补课日 10/10
+            zone = zone,
+        )
+        // 周三课在 10/10（周六）获得提醒；10/14（下周三）照常；
+        // 周六原生课被补课日整体接管（10/10 按周三课表），本窗口内不再有它的提醒
+        val triggers = plan.map { LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(it.triggerAtMillis), zone).plusMinutes(15) }
+        assertTrue(
+            "补课日 10/10 应按周三课表排提醒",
+            triggers.any { it.toLocalDate() == LocalDate.of(2026, 10, 10) && it.toLocalTime() == java.time.LocalTime.of(8, 0) },
+        )
+    }
+
     // ——— 排期计算 ———
 
     @Test

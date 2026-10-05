@@ -200,6 +200,31 @@ class JwParserTest {
         assertEquals(0, JwParser.parseWeekCalendar("not json").weekMondays.size)
     }
 
+    @Test
+    fun `解析教学周日历 - offDays 天级放假与 weeks 相互独立`() {
+        val calendar = JwParser.parseWeekCalendar(
+            """{"totalWeeks":18,
+                "weeks":[{"zc":1,"monday":"2026-09-07"},{"zc":2,"monday":"2026-09-14"}],
+                "offDays":["2026-09-25","2026-10-05","2026-10-05","bad-date"]}""",
+        )
+        assertEquals(18, calendar.totalWeeks)
+        assertEquals(2, calendar.weekMondays.size)
+        // 去重 + 坏日期逐条丢弃（集合口径，不整表作废）
+        assertEquals(listOf("2026-09-25", "2026-10-05"), calendar.offDays)
+    }
+
+    @Test
+    fun `解析教学周日历 - weeks 作废时 offDays 仍保留`() {
+        // 逐周兜底路径拿不到 offDays；但 weeks 脏数据作废不该连累同一次抓到的放假标记
+        val calendar = JwParser.parseWeekCalendar(
+            """{"totalWeeks":18,
+                "weeks":[{"zc":2,"monday":"2026-09-14"}],
+                "offDays":["2026-10-05"]}""",
+        )
+        assertEquals(0, calendar.weekMondays.size) // 首周缺失 → 整表作废（下标错位防御）
+        assertEquals(listOf("2026-10-05"), calendar.offDays)
+    }
+
     // ——— R4 审查：脏数据防御（非法行整行跳过并留日志，不产出必错数据） ———
 
     @Test

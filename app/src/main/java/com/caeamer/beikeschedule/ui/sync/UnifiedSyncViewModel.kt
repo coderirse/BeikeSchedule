@@ -422,6 +422,9 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
             }
             repo.commitImport(courses, sectionTimes)
             val previous = repo.settings.semester.first()
+            // 天级放假（校历标记）随导入覆盖；补课现行来源是内置数据（SchoolAdjustments），
+            // 这里仅兼容保留旧版手动登记的存量映射——换学期导入时旧数据无意义，清空
+            val sameSemester = previous.xn == xn && previous.xq == xq
             repo.settings.saveSemester(
                 previous.copy(
                     xn = xn,
@@ -431,6 +434,8 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
                         ?: weekCalendar.weekMondays.firstOrNull().orEmpty(),
                     totalWeeks = weekCalendar.totalWeeks.takeIf { it > 0 } ?: 20,
                     weekMondays = weekCalendar.weekMondays,
+                    holidays = weekCalendar.offDays,
+                    makeups = if (sameSemester) previous.makeups else emptyList(),
                 ),
             )
             ok(SyncStep.TIMETABLE, "已导入 ${courses.count { !it.isUnscheduled }} 门课 · ${name.ifBlank { "$xn-$xq" }}")

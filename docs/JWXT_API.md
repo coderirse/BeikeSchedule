@@ -26,11 +26,13 @@
 | `/component/querydangqianxnxq` | POST form，空体 | 裸 `{XN,XQ,XNXQ,XNXQ_EN}`（XNXQ="2026-2027-1"） | ✅ |
 | `/component/queryRlZcSj` | POST form `xn,xq,djz`(周次) | 包装 `content:[{xqj:1..7,rq:"yyyy-MM-dd"}]` 该周 7 天日期 | ✅ |
 | `/component/getXnxqByRq` | **GET** `?rq=yyyy-MM-dd` | 裸 学期+教学周 zc | 📝 |
-| `/Xiaoli/queryMonthList` | POST form `xn,xq`，**需 header `RoleCode: 01`** | 裸 `{xlList:[...],xnxqList,monlist}`；**每周 7 条**（每天一条，仅一个星期字段非空，周一那条 `MON`=该周周一日期），`XNXQ`=xn+xq 拼接，`ZC` 1..18 教学周、99 假期 | ✅ |
+| `/Xiaoli/queryMonthList` | POST form `xn,xq`，**需 header `RoleCode: 01`** | 裸 `{xlList:[...],xnxqList,monlist}`；**每周 7 条（天级）**，每行仅一个星期字段非空（周一那条 `MON`=该周周一日期）并带同名字段的调课标记 `MON1..SUN1`：**工作日 '1'=该日放假不上课**（周末恒为 '1'，无信息量），`XNXQ`=xn+xq 拼接，`ZC` 1..18 教学周、99 假期（整周）。样例 `queryMonthList-2026-2027-1.json` | ✅ |
 | `/component/queryzclist` | POST form `xn,xq` | 包装 `content:[{ZC}]` 周次列表（1-18+99） | ✅ |
 | `/component/querydangqianzc` | POST form | 当前教学周（假期返回空） | 📝 |
 
 **教学周≠日期周**：长假周（国庆）不占教学周序号，一切周映射以 `Xiaoli/queryMonthList` 为准。
+
+**放假/补课（2026-10 实测结论）**：校历是**天级**的——xlList 每行一个日期，`ZC=99` 整周假期，工作日的 `*1` 标记 '1' 即单日放假（本学期国庆：9/25 中秋、9/28-10/4 整周、10/5-10/7 共 9 个工作日，10/8 恢复上课）。**补课安排不在教务数据里**（课表无周末行、教务通知系统搜"放假/调课"只有 2012-2020 旧文、课表页无备注、`getXnxqByRq` 只回周级 zc）——补课日按哪周几上课只能靠教务处/班级通知，App 把每学期口径内置在 `model/SchoolAdjustments.kt`（键 xn-xq，随版本发布更新），与 SemesterConfig.makeups 存量字段在 WeekResolver.daySchedule 合并、内置优先；设置页无手动入口。
 
 ## 2. 课表
 

@@ -10,7 +10,8 @@ import java.time.LocalTime
  * 口径（用户确认）：
  * - 只看今天——今天课上完就不标记，不跨天指向明天的课；
  * - 正在进行的课不算下一节（已开始的课跳过，取之后最早的一节）；
- * - 仅在今天所属教学周内匹配，假期/开学前/学期后（todayTeachingWeek=null）一律不标记。
+ * - 仅在今天所属教学周内匹配，假期/开学前/学期后（todayPlan.week=null）与官方放假日
+ *   （holiday=true）一律不标记；调休补课日按生效星期匹配。
  */
 object NextClass {
 
@@ -25,17 +26,20 @@ object NextClass {
     /**
      * @param courses 课表渲染用的合并后课程（与卡片 id 一致，见 CourseMerger）
      * @param sectionStartTimes 小节号 → 开始时间（"08:00"）
-     * @param todayTeachingWeek 今天所属教学周（严格口径，假期/开学前/学期后为 null）
+     * @param todayPlan 今天的上课计划（[WeekResolver.daySchedule]）：
+     *   开学前/假期跳周/学期后为 week=null、官方放假日 holiday=true —— 一律不标记；
+     *   调休补课日按 coursesDayOfWeek（生效星期）匹配课程。
      * @param now 当前时间
      */
     fun resolve(
         courses: List<CourseEntity>,
         sectionStartTimes: Map<Int, String>,
-        todayTeachingWeek: Int?,
+        todayPlan: WeekResolver.DaySchedule?,
         now: LocalDateTime,
     ): Target? {
-        val week = todayTeachingWeek ?: return null
-        val day = now.toLocalDate().dayOfWeek.value
+        val week = todayPlan?.week ?: return null
+        if (todayPlan.holiday) return null
+        val day = todayPlan.coursesDayOfWeek
         val nowTime = now.toLocalTime()
         return courses.asSequence()
             .filter { !it.isUnscheduled && it.dayOfWeek == day && it.hasClassOnWeek(week) }

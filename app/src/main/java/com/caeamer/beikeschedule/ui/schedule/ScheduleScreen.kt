@@ -115,9 +115,17 @@ private const val SCROLLABLE_SHEET_MIN_ITEMS = 5
 /** 网格底部为 FAB 预留的净空（40dp 按钮 + 16dp 边距，见 WeekGrid 注释）。 */
 private val FAB_CLEARANCE = 56.dp
 
-/** 日期所属教学周（严格口径：开学前/假期跳周/学期后返回 null），与提醒排期同一套判定。 */
-private fun teachingWeekOf(semester: SettingsStore.SemesterConfig, date: LocalDate): Int? =
-    WeekResolver.teachingWeekOf(semester, date)
+/** 某教学周各可见列的上课计划（列号 1..7 → daySchedule）：放假列清空、补课列改写生效星期都靠它。 */
+private fun daySchedulesFor(
+    semester: SettingsStore.SemesterConfig,
+    week: Int,
+    days: List<Int>,
+): Map<Int, WeekResolver.DaySchedule> {
+    val monday = WeekResolver.weekMonday(semester, week) ?: return emptyMap()
+    return days.associateWith { day ->
+        WeekResolver.daySchedule(semester, monday.plusDays((day - 1).toLong()))
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -167,7 +175,18 @@ fun ScheduleScreen(
     val now = rememberNow()
 
     val totalWeeks = state.semester.totalWeeks
-    val visibleDays = if (hideWeekend) (1..5).toList() else (1..7).toList()
+    // 「隐藏周末」开启时，若所选教学周里有周末补课日（如 10/10 周六补周三的课），
+    // 周六/周日列仍要显示——否则补课的课在网格上无处可看
+    val visibleDays = remember(hideWeekend, state.semester, state.selectedWeek) {
+        if (!hideWeekend) {
+            (1..7).toList()
+        } else {
+            val monday = WeekResolver.weekMonday(state.semester, state.selectedWeek)
+            val hasWeekendMakeup = monday != null && WeekResolver.parseMakeups(state.semester.makeups)
+                .any { (date, _) -> date.dayOfWeek.value >= 6 && !date.isBefore(monday) && !date.isAfter(monday.plusDays(6)) }
+            if (hasWeekendMakeup) (1..7).toList() else (1..5).toList()
+        }
+    }
 
     /**
      * 取某张卡片对应的**全部存储行**（同课程名 + 同来源）。
@@ -187,12 +206,16 @@ fun ScheduleScreen(
             .map { it.name.trim() }
             .toSet()
     }
-    // 下一节课：仅今天（严格教学周内）尚未开始的最早一节；卡片 id 与合并后课程一致
-    val nextClassId = remember(state.scheduledCourses, state.sectionTimes, now, state.semester) {
+    // 下一节课：仅今天（严格教学周内、非放假日）尚未开始的最早一节；补课日按生效星期匹配
+    // 今天上课计划复用给网格图钉条件：page == plan.week 才标记
+    val todayPlan = remember(state.semester, now) {
+        WeekResolver.daySchedule(state.semester, now.toLocalDate())
+    }
+    val nextClassId = remember(state.scheduledCourses, state.sectionTimes, todayPlan, now) {
         NextClass.resolve(
             courses = CourseMerger.mergeSameSlot(state.scheduledCourses),
             sectionStartTimes = state.sectionTimes.associate { it.section to it.startTime },
-            todayTeachingWeek = teachingWeekOf(state.semester, now.toLocalDate()),
+            todayPlan = todayPlan,
             now = now,
         )?.courseId
     }
@@ -338,11 +361,15 @@ fun ScheduleScreen(
                     },
                 )
             } else {
+                val dateRowSchedules = remember(state.semester, state.selectedWeek, visibleDays) {
+                    daySchedulesFor(state.semester, state.selectedWeek, visibleDays)
+                }
                 DateRow(
                     week = state.selectedWeek,
                     semester = state.semester,
                     today = now.toLocalDate(),
                     days = visibleDays,
+                    daySchedules = dateRowSchedules,
                 )
                 if (state.inHoliday && state.nextWeekMonday != null) {
                     Surface(color = MaterialTheme.colorScheme.tertiaryContainer) {
@@ -363,9 +390,12 @@ fun ScheduleScreen(
                         courses = state.scheduledCourses,
                         sectionTimes = state.sectionTimes,
                         days = visibleDays,
+                        daySchedules = remember(state.semester, page + 1, visibleDays) {
+                            daySchedulesFor(state.semester, page + 1, visibleDays)
+                        },
                         pendingSlot = pendingSlot,
                         // 只在用户正看"今天所在教学周"时标记，翻到其他周不误导
-                        nextClassId = nextClassId.takeIf { page + 1 == teachingWeekOf(state.semester, now.toLocalDate()) },
+                        nextClassId = nextClassId.takeIf { page + 1 == todayPlan.week },
                         hideInactiveCourses = hideInactiveCourses,
                         onSlotLongPress = { day, big -> pendingSlot = day to big },
                         onSlotClick = { day, big ->
@@ -507,7 +537,8 @@ private fun todayStatusLine(state: ScheduleUiState, today: LocalDate): String {
     val status = when {
         // locateWeek 的显示语义"未开学视为第1周"用 beforeStart 区分，不能只看 currentWeek
         state.beforeStart -> "未开学"
-        state.inHoliday -> "假期中"
+        // 假期两种：校历跳周（inHoliday）与教学周内的放假日（todayHoliday，如第4周里的 10/5-10/7）
+        state.inHoliday || state.todayHoliday -> "假期中"
         state.currentWeek != null -> "第${state.currentWeek}周"
         state.afterEnd -> "已放假"
         else -> "未开学"
@@ -516,15 +547,23 @@ private fun todayStatusLine(state: ScheduleUiState, today: LocalDate): String {
 }
 
 /** 顶部日期行：左格对齐节次列，N 天列；周一日期统一走 WeekResolver.weekMonday（校历优先，
- *  非周一开学日期会被归一化，见那里的注释），今天用主题色实心胶囊高亮。 */
+ *  非周一开学日期会被归一化，见那里的注释），今天用主题色实心胶囊高亮。
+ *  放假日列下挂「休」角标，补课日列下挂「补周X」角标（一眼看出这列按周几上课）。 */
 @Composable
-private fun DateRow(week: Int, semester: SettingsStore.SemesterConfig, today: LocalDate, days: List<Int>) {
+private fun DateRow(
+    week: Int,
+    semester: SettingsStore.SemesterConfig,
+    today: LocalDate,
+    days: List<Int>,
+    daySchedules: Map<Int, WeekResolver.DaySchedule> = emptyMap(),
+) {
     val monday = remember(semester, week) { WeekResolver.weekMonday(semester, week) }
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Spacer(Modifier.width(SECTION_COL_WIDTH))
         days.forEach { day ->
             val date = monday?.plusDays((day - 1).toLong())
             val isToday = date == today
+            val schedule = daySchedules[day]
             Column(
                 modifier = Modifier.weight(1f).padding(horizontal = 1.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -552,6 +591,19 @@ private fun DateRow(week: Int, semester: SettingsStore.SemesterConfig, today: Lo
                         )
                     }
                 }
+                when {
+                    schedule?.holiday == true -> Text(
+                        "休",
+                        fontSize = 9.sp,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                    schedule?.makeup == true -> Text(
+                        "补周${WEEKDAY_NAMES[schedule.coursesDayOfWeek - 1]}",
+                        fontSize = 9.sp,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }
@@ -559,7 +611,8 @@ private fun DateRow(week: Int, semester: SettingsStore.SemesterConfig, today: Lo
 
 private val SECTION_COL_WIDTH = 36.dp
 
-/** 一周课表网格：左节次列 + N 天列，课程块按节次绝对定位；同周重叠课程并排窄列显示；空白格长按可添加课程。 */
+/** 一周课表网格：左节次列 + N 天列，课程块按节次绝对定位；同周重叠课程并排窄列显示；空白格长按可添加课程。
+ *  放假日列整列清空并叠「休」水印；补课日列按生效星期渲染（如周六列补周三的课）。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WeekGrid(
@@ -567,6 +620,7 @@ private fun WeekGrid(
     courses: List<CourseEntity>,
     sectionTimes: List<SectionTimeEntity>,
     days: List<Int>,
+    daySchedules: Map<Int, WeekResolver.DaySchedule>,
     pendingSlot: Pair<Int, Int>?,
     /** 下一节课的卡片 id（null=不标记）；仅当本页正是今天所在教学周时由调用方传入。 */
     nextClassId: Long?,
@@ -602,10 +656,16 @@ private fun WeekGrid(
         }
         // N 天列（隐藏周末时为 5 天）
         days.forEach { day ->
+            val schedule = daySchedules[day]
             // 冲突簇（本周重叠 → 并排窄列）与非本周淡化课的分拣逻辑见 WeekLayout（纯函数，有单测）。
             // 开启"隐藏本周不上的课"后 inactives 为空，网格只留本周真正要上的课。
-            val dayLayout = remember(mergedCourses, day, week, hideInactiveCourses) {
-                WeekLayout.layoutDay(mergedCourses, day, week, hideInactiveCourses)
+            // 补课日列按生效星期取课；放假日列整列清空（本周位图里有课也不渲染）。
+            val dayLayout = remember(mergedCourses, day, week, hideInactiveCourses, schedule) {
+                WeekLayout.layoutDay(
+                    mergedCourses, day, week, hideInactiveCourses,
+                    coursesDayOfWeek = schedule?.coursesDayOfWeek ?: day,
+                    holiday = schedule?.holiday == true,
+                )
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 // 空白格交互层（最底层）：长按出 +，点击 + 打开预填的添加课程框，点其他格取消
@@ -650,6 +710,16 @@ private fun WeekGrid(
                                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.4f)),
                         )
                     }
+                }
+                // 放假日水印：整列清空后给一个轻量「休」，避免被误读成"没排课"
+                if (schedule?.holiday == true) {
+                    Text(
+                        "休",
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.Light,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                        modifier = Modifier.align(Alignment.Center),
+                    )
                 }
                 // 课程块层：冲突簇并排窄列，簇与簇、以及非本周课程各自独占整列宽
                 dayLayout.clusters.forEach { cluster ->

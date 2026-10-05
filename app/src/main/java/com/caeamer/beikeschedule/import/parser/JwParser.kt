@@ -6,6 +6,7 @@ import com.caeamer.beikeschedule.model.SectionMap
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -78,17 +79,31 @@ object JwParser {
      * 教学周日历解析结果。
      * @param weekMondays 下标+1 = 教学周，值 = 该周周一（yyyy-MM-dd）
      * @param totalWeeks 学期总教学周数
+     * @param offDays 官方放假/调休休息日（yyyy-MM-dd，仅工作日；来自校历天级标记，
+     *  仅 Xiaoli 路径可得，逐周兜底路径为空）
      */
-    data class WeekCalendar(val weekMondays: List<String>, val totalWeeks: Int)
+    data class WeekCalendar(
+        val weekMondays: List<String>,
+        val totalWeeks: Int,
+        val offDays: List<String> = emptyList(),
+    )
 
     /**
-     * 解析导入脚本产出的统一周历 JSON：{"totalWeeks":18, "weeks":[{"zc":1,"monday":"2026-09-07"},...]}。
+     * 解析导入脚本产出的统一周历 JSON：
+     * {"totalWeeks":18, "weeks":[{"zc":1,"monday":"2026-09-07"},...], "offDays":["2026-09-25",...]}。
      * weeks 为空或解析失败时 totalWeeks 回退 0，由上层决定是否保留手工配置。
+     *
+     * offDays 与 weeks 相互独立：坏日期串**逐条丢弃**（不整表作废）——它是集合不是下标列表，
+     * 丢弃不会引起错位；weeks 的整表作废规则（坏 monday 会整体错位）不适用。
      */
     fun parseWeekCalendar(jsonText: String): WeekCalendar {
         val root = runCatching { json.parseToJsonElement(jsonText).jsonObject }.getOrNull()
             ?: return WeekCalendar(emptyList(), 0)
         val totalWeeks = root["totalWeeks"]?.jsonPrimitive?.intOrNull ?: 0
+        val offDays = (root["offDays"] as? JsonArray)?.mapNotNull { elem ->
+            (elem as? JsonPrimitive)?.contentOrNull
+                ?.takeIf { runCatching { java.time.LocalDate.parse(it) }.isSuccess }
+        }?.distinct().orEmpty()
         val weeks = root["weeks"]?.jsonArray?.mapNotNull { elem ->
             val obj = elem.jsonObject
             val zc = obj["zc"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
@@ -96,14 +111,15 @@ object JwParser {
             zc to monday
         }?.sortedBy { it.first } ?: emptyList()
         // 按 zc 顺序展开为下标列表，zc 必须从 1 开始；中间缺失的周用前一周 +7 天补齐（防御性）
-        if (weeks.isEmpty() || weeks.first().first != 1) return WeekCalendar(emptyList(), totalWeeks)
+        // offDays 与 weeks 独立，weeks 作废也照样带出（见函数注释）
+        if (weeks.isEmpty() || weeks.first().first != 1) return WeekCalendar(emptyList(), totalWeeks, offDays)
         // 脏数据防御 1：zc 是教务/脚本产出的自由数字，脏值（如 1e5）会生成十万级列表
-        if (weeks.last().first > MAX_TOTAL_WEEKS) return WeekCalendar(emptyList(), totalWeeks)
+        if (weeks.last().first > MAX_TOTAL_WEEKS) return WeekCalendar(emptyList(), totalWeeks, offDays)
         // 脏数据防御 2：monday 原样入库后，WeekResolver 对坏串 parse 失败会"用最后一个
         // 已知周一倒推"，其后所有周整体错位——日期串必须先验证合法
         if (weeks.any { runCatching { java.time.LocalDate.parse(it.second) }.isFailure }) {
             rowErrorLogger?.invoke("weekCalendar monday invalid", IllegalArgumentException("monday 格式异常"))
-            return WeekCalendar(emptyList(), totalWeeks)
+            return WeekCalendar(emptyList(), totalWeeks, offDays)
         }
         val mondays = arrayListOf<String>()
         var lastMonday = ""
@@ -116,10 +132,10 @@ object JwParser {
                 }.getOrDefault("")
                 else -> ""
             }
-            if (lastMonday.isEmpty()) return WeekCalendar(emptyList(), totalWeeks)
+            if (lastMonday.isEmpty()) return WeekCalendar(emptyList(), totalWeeks, offDays)
             mondays += lastMonday
         }
-        return WeekCalendar(mondays, totalWeeks)
+        return WeekCalendar(mondays, totalWeeks, offDays)
     }
 
     private fun toCourse(obj: JsonObject): CourseEntity {

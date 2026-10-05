@@ -11,6 +11,7 @@ import com.caeamer.beikeschedule.data.local.TodoEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.repo.ScheduleRepository
 import com.caeamer.beikeschedule.import.parser.JwParser
+import com.caeamer.beikeschedule.model.WeekResolver
 import com.caeamer.beikeschedule.reminder.ClassReminderScheduler
 import com.caeamer.beikeschedule.reminder.ExamReminderScheduler
 import com.caeamer.beikeschedule.reminder.TodoReminderScheduler
@@ -159,6 +160,9 @@ data class SemesterDto(
     val firstMonday: String = "",
     val totalWeeks: Int = 20,
     val weekMondays: List<String> = emptyList(),
+    // 带默认值：旧快照没有这两个字段也能解码（2026-10 天级校历/补课配置引入）
+    val holidays: List<String> = emptyList(),
+    val makeups: List<String> = emptyList(),
 )
 
 @Serializable
@@ -214,6 +218,8 @@ object CloudSnapshotCodec {
                         xn = semester.xn, xq = semester.xq, name = semester.name,
                         firstMonday = semester.firstMonday, totalWeeks = semester.totalWeeks,
                         weekMondays = semester.weekMondays,
+                        holidays = semester.holidays,
+                        makeups = semester.makeups,
                     ),
                     reminderEnabled = settings.reminderEnabled.first(),
                     reminderMinutes = settings.reminderMinutes.first(),
@@ -328,11 +334,15 @@ object CloudSnapshotCodec {
             firstMonday = if (firstMondayOk) dto.firstMonday else "",
             totalWeeks = dto.totalWeeks.coerceIn(1, JwParser.MAX_TOTAL_WEEKS),
             weekMondays = if (calendarOk) dto.weekMondays else emptyList(),
+            // 假期/补课都是集合口径（无下标错位问题）：坏项逐条丢弃即可，不整表作废
+            holidays = dto.holidays.filter { runCatching { LocalDate.parse(it) }.isSuccess },
+            makeups = dto.makeups.filter { WeekResolver.parseMakeups(listOf(it)).isNotEmpty() },
         )
     }
 
     private fun SemesterDto.toConfig() = SettingsStore.SemesterConfig(
         xn = xn, xq = xq, name = name,
         firstMonday = firstMonday, totalWeeks = totalWeeks, weekMondays = weekMondays,
+        holidays = holidays, makeups = makeups,
     )
 }

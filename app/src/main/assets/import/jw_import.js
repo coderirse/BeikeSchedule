@@ -6,7 +6,8 @@
  * 教学周日历（修国庆跳周）：优先 Xiaoli/queryMonthList 一次取全量校历
  * （需 RoleCode 头；xlList 按周 7 条、每天一条，MON/TUES/... 字段只有一个非空），
  * 失败则逐周 queryRlZcSj 兜底。产出统一结构：
- *   {"totalWeeks":18, "weeks":[{"zc":1,"monday":"2026-09-07"}, ...]}
+ *   {"totalWeeks":18, "weeks":[{"zc":1,"monday":"2026-09-07"}, ...],
+ *    "offDays":["2026-09-25", ...]}   // 天级放假（工作日且校历标记不上课；仅 Xiaoli 路径可得）
  */
 (function () {
     if (window.__beikeRunning) return;
@@ -58,18 +59,42 @@
         }
     }
 
-    /** 校历接口 → 统一周历结构；失败返回 null（由调用方兜底）。 */
+    /**
+     * 校历接口 → 统一周历结构；失败返回 null（由调用方兜底）。
+     *
+     * xlList 是**天级**校历：每行一个日期（MON..SUN 仅一个非空），ZC 1..18=教学周 / 99=假期，
+     * 另有 MON1..SUN1 调课标记——**工作日 '1' = 该日放假不上课**（周末恒为 '1'，无信息量）。
+     * 放假日期抽出来放进 offDays：网格清空、提醒不排、图钉隐藏都靠它（如国庆第4周内的 10/5-10/7）。
+     */
     function calendarFromXiaoli(xn, xq) {
         return post('/Xiaoli/queryMonthList', { xn: xn, xq: xq }, { RoleCode: '01' })
             .then(function (text) {
                 var data = parseJson(text, '校历解析失败');
                 var semKey = xn + xq; // xlList 里 XNXQ 形如 "2026-20271"
-                var weeks = (data.xlList || [])
-                    .filter(function (e) { return e.XNXQ === semKey && e.MON && e.ZC >= 1 && e.ZC <= 90; })
+                var rows = (data.xlList || []).filter(function (e) { return e.XNXQ === semKey; });
+                var weeks = rows
+                    .filter(function (e) { return e.MON && e.ZC >= 1 && e.ZC <= 90; })
                     .map(function (e) { return { zc: e.ZC, monday: e.MON }; })
                     .sort(function (a, b) { return a.zc - b.zc; });
+                // 天级放假：只认工作日（MON..FRI），周末天然无课。标志位 '1' 或整周 ZC=99 都算放假。
+                var DAY_FIELDS = [['MON', 1], ['TUES', 2], ['WED', 3], ['THUR', 4], ['FRI', 5], ['SAT', 6], ['SUN', 7]];
+                var seen = {};
+                var offDays = [];
+                rows.forEach(function (e) {
+                    for (var i = 0; i < DAY_FIELDS.length; i++) {
+                        var field = DAY_FIELDS[i][0], day = DAY_FIELDS[i][1];
+                        if (!e[field]) continue;
+                        var off = day <= 5 && (e[field + '1'] === '1' || e.ZC === 99);
+                        if (off && !seen[e[field]]) {
+                            seen[e[field]] = true;
+                            offDays.push(e[field]);
+                        }
+                        break; // 每行只有一个星期字段非空
+                    }
+                });
+                offDays.sort();
                 if (!weeks.length) return null;
-                return weeks;
+                return { weeks: weeks, offDays: offDays };
             })
             .catch(function () { return null; });
     }
@@ -115,18 +140,23 @@
                         .filter(function (z) { return typeof z === 'number' && z >= 1 && z <= 90; });
                 } catch (e) { /* 周次列表异常时由校历自行推断 */ }
 
-                return calendarFromXiaoli(sem.XN, sem.XQ).then(function (weeks) {
-                    if (weeks) return weeks;
+                return calendarFromXiaoli(sem.XN, sem.XQ).then(function (cal) {
+                    if (cal) return cal;
                     var loopList = zcList.length ? zcList
                         : Array.from({ length: 25 }, function (_, i) { return i + 1; });
-                    return calendarByWeekLoop(sem.XN, sem.XQ, loopList);
-                }).then(function (weeks) {
+                    // 逐周兜底拿不到天级放假标记（offDays 置空）：网格/提醒按旧口径，不会更糟
+                    return calendarByWeekLoop(sem.XN, sem.XQ, loopList).then(function (weeks) {
+                        return { weeks: weeks, offDays: [] };
+                    });
+                }).then(function (cal) {
+                    var weeks = cal && cal.weeks;
+                    var offDays = (cal && cal.offDays) || [];
                     var totalWeeks = Math.max(
                         zcList.length ? Math.max.apply(null, zcList) : 0,
                         weeks ? weeks.length : 0,
                         16
                     );
-                    var calendar = JSON.stringify({ totalWeeks: totalWeeks, weeks: weeks || [] });
+                    var calendar = JSON.stringify({ totalWeeks: totalWeeks, weeks: weeks || [], offDays: offDays });
                     // 成功路径也必须复位重入标志：否则"手动抓取"按钮在首次成功后
                     // 变成静默无操作的空按钮（jw_grades.js 一直在成功路径复位，此处是漏改）。
                     window.__beikeRunning = false;

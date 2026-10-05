@@ -108,4 +108,46 @@ object WeekResolver {
         val firstMonday = start.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY))
         return firstMonday.plusWeeks((week - 1).toLong())
     }
+
+    /**
+     * 一个日期的**上课计划**——课表网格、上课提醒、"下一节课"共用的唯一口径。
+     *
+     * - [week] 该日期所属教学周（严格口径：开学前/校历内假期跳周/学期后为 null）；
+     * - [coursesDayOfWeek] 该日**按周几的课表**上课：普通日期 = 自然星期；
+     *   调休补课日（如"10月10日补周三的课"）= 配置的生效星期。课程匹配仍用该日所在
+     *   教学周的位图——补周六=第 N 周周三的课，正是教务处通知的语义；
+     * - [holiday] 官方放假（教务校历天级标记）：该日在某个教学周内但全校不上课，
+     *   网格清空、提醒不排；配置了补课的日期**不**视为假期（补课优先，防配置打架）。
+     */
+    data class DaySchedule(
+        val week: Int?,
+        val coursesDayOfWeek: Int,
+        val holiday: Boolean,
+        val makeup: Boolean,
+    )
+
+    /** 解析 [date] 的上课计划；无任何校历/假期/补课数据时即"自然星期 + 周次推算"。
+     *  补课映射 = 内置数据（[SchoolAdjustments]，随版本发布）∪ 存量配置（旧版手动登记/
+     *  云恢复遗留，仅兼容保留），内置优先。 */
+    fun daySchedule(semester: SettingsStore.SemesterConfig, date: LocalDate): DaySchedule {
+        val makeup = parseMakeups(semester.makeups) + SchoolAdjustments.makeupsFor(semester.xn, semester.xq)
+        val week = teachingWeekOf(semester, date)
+        val makeupDay = makeup[date]
+        if (makeupDay != null) return DaySchedule(week, makeupDay, holiday = false, makeup = true)
+        val holiday = date in parseHolidays(semester.holidays)
+        return DaySchedule(week, date.dayOfWeek.value, holiday, makeup = false)
+    }
+
+    /** 放假日集合：非法日期串逐条丢弃（集合无下标，不存在 weekMondays 那种错位问题）。 */
+    fun parseHolidays(holidays: List<String>): Set<LocalDate> =
+        holidays.mapNotNullTo(mutableSetOf()) { runCatching { LocalDate.parse(it.trim()) }.getOrNull() }
+
+    /** 补课日映射：date → 生效星期。非法项（坏日期/星期越界）逐条丢弃。 */
+    fun parseMakeups(makeups: List<String>): Map<LocalDate, Int> =
+        makeups.mapNotNull { entry ->
+            val (datePart, dayPart) = entry.split(":").let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
+            val date = runCatching { LocalDate.parse(datePart.trim()) }.getOrNull() ?: return@mapNotNull null
+            val day = dayPart.trim().toIntOrNull()?.takeIf { it in 1..7 } ?: return@mapNotNull null
+            date to day
+        }.toMap()
 }

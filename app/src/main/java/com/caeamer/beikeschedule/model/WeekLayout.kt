@@ -14,18 +14,24 @@ object WeekLayout {
 
     /**
      * @param courses 课表渲染用的合并后课程（见 CourseMerger）
-     * @param day 星期几 1..7
+     * @param day 网格列的星期几 1..7
      * @param week 当前查看的教学周
      * @param hideInactive 开启后不再返回 [DayLayout.inactives]（设置页「隐藏本周不上的课」）
+     * @param coursesDayOfWeek 该列**按周几的课表**渲染：普通日期 = [day]；
+     *   调休补课日 = 生效星期（如周六列补周三的课则传 3）。默认等于 [day]。
+     * @param holiday 官方放假日：该列清空（本周位图里有课也不渲染），调用方负责"休"角标
      */
     fun layoutDay(
         courses: List<CourseEntity>,
         day: Int,
         week: Int,
         hideInactive: Boolean,
+        coursesDayOfWeek: Int = day,
+        holiday: Boolean = false,
     ): DayLayout {
+        if (holiday) return DayLayout(emptyList(), emptyList())
         val actives = courses
-            .filter { it.dayOfWeek == day && it.hasClassOnWeek(week) }
+            .filter { it.dayOfWeek == coursesDayOfWeek && it.hasClassOnWeek(week) }
             .sortedBy { it.startSection }
 
         // 冲突簇：含传递重叠（A-B-C 链式同簇）。按 startSection 升序单趟扫描时，
@@ -41,7 +47,7 @@ object WeekLayout {
 
         // 非本周课程：只在与所有本周课程、以及已放入的其他非本周课程都不重叠时才显示
         val inactives = courses
-            .filter { it.dayOfWeek == day && !it.hasClassOnWeek(week) }
+            .filter { it.dayOfWeek == coursesDayOfWeek && !it.hasClassOnWeek(week) }
             .fold(mutableListOf<CourseEntity>()) { shown, course ->
                 val blocked = actives.any { sectionsOverlap(it, course) } ||
                     shown.any { sectionsOverlap(it, course) }
