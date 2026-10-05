@@ -23,8 +23,8 @@ android {
         applicationId = "com.caeamer.beikeschedule"
         minSdk = 34
         targetSdk = 37
-        versionCode = 51
-        versionName = "1.4.0"
+        versionCode = 52
+        versionName = "1.4.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -102,6 +102,9 @@ dependencies {
     implementation(libs.androidx.webkit)
     // 云同步 / 检查更新（api.caeamer.com）
     implementation(libs.okhttp)
+    // Ed25519 验签兜底：部分设备/ROM 缺平台 provider（KeyFactory.getInstance("Ed25519")
+    // 抛 NoSuchAlgorithmException），纯 Java 实现保证验签在任何设备上都能跑
+    implementation(libs.eddsa)
     testImplementation(libs.junit)
     // org.json 在 JVM 单测里是 Android SDK 的 stub（方法返回 null/抛异常），
     // 解析器单测必须用真实实现替换它

@@ -166,4 +166,40 @@ class UpdateSignatureTest {
         )
         assertNull(UpdateSignature.verifyDetailed(latest, keyPair.public))
     }
+
+    /**
+     * 回归（2026-10-05 真机踩坑）：设备缺平台 `KeyFactory.getInstance("Ed25519")` 时，
+     * [UpdateSignature.verifyDetailed] 的 publicKey 会传 null，必须由内置纯 Java 实现兜底。
+     * 此前这条路径会抛异常逃到上层 → 静默回退 GitHub（用户端："检查更新每次都跳 GitHub 页"）。
+     */
+    @Test
+    fun `bundled fallback verifies when platform provider is unavailable`() {
+        val message = "message".toByteArray(Charsets.UTF_8)
+        val s = Signature.getInstance("Ed25519")
+        s.initSign(keyPair.private)
+        s.update(message)
+        val sig = s.sign()
+        val raw = requireNotNull(Ed25519.rawKeyOf(keyPair.public))
+        assertTrue("兜底实现必须能验过平台签的签名", Ed25519.verify(message, sig, platformKey = null, fallbackRawKey = raw))
+        assertFalse("篡改必须验不过", Ed25519.verify("tampered".toByteArray(Charsets.UTF_8), sig, null, raw))
+    }
+
+    @Test
+    fun `release-signed vector verifies through bundled fallback`() {
+        // 发布私钥签的参考向量（旧约定），platformKey = null 模拟设备缺 provider：
+        // 这条走的就是真机兜底路径，必须与平台实现得出同一结论
+        val latest = CloudApi.LatestVersion(
+            versionCode = 42,
+            versionName = "1.3.1",
+            changelog = "test",
+            force = false,
+            size = 10L,
+            url = "http://example/a.apk",
+            sig = "co3cwl99e74+3+4b0RYKFSM1ZGy97l57pzIztRdRGBQGL1ssqmfqRaW563F+DptHKDlTGABd2DjfWiwU5LaaBA==",
+        )
+        assertEquals(
+            UpdateSignature.SignatureCoverage.METADATA_ONLY,
+            UpdateSignature.verifyDetailed(latest, publicKey = null),
+        )
+    }
 }

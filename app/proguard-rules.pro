@@ -15,3 +15,9 @@
 
 # WebView 注入脚本通过桥回传的是纯字符串，不涉及反射；如将来通过
 # Class.forName 动态加载类，在此追加 keep 并注明来源。
+
+# net.i2p.crypto:eddsa（Ed25519 验签兜底，见 data/remote/Ed25519.kt）：
+# engineInitVerify 里有一个 `instanceof sun.security.x509.X509Key` 分支，那是 JDK 内部类、
+# Android 上不存在。我们只传自建的 EdDSAPublicKey，该分支永远走不到；给 R8 放行缺类告警即可
+# （不 keep 整个库：直接引用会保住用到的类，避免无谓膨胀）。
+-dontwarn sun.security.x509.X509Key

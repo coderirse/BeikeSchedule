@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -188,6 +189,15 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 自有更新源本次失败的原因（成功或未检查时为 null）。
+     *
+     * 为什么要有它：自有源失败会**静默回退 GitHub**，用户只看到"更新来自 GitHub 页"，
+     * 运维侧无从判断是网络、验签还是解析问题（2026-10-05 真机排障就卡在这里）。
+     */
+    private val _serverCheckNote = MutableStateFlow<String?>(null)
+    val serverCheckNote: StateFlow<String?> = _serverCheckNote.asStateFlow()
+
+    /**
      * 检查最新版本（进入设置页自动触发，可手动重查）。
      * 优先自有服务器（国内可达、支持 force 强更与直链 APK）；服务器失败时回退 GitHub Releases。
      */
@@ -208,12 +218,29 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
      * 明文 HTTP 下 force + APK URL 可被 MITM 改写，未验签的元数据不得驱动更新。
      */
     private suspend fun fetchLatestFromServer(): UpdateState? = withContext(Dispatchers.IO) {
-        val installed = installedVersionCode() ?: return@withContext null
-        val latest = CloudApi.latestVersion()
-        if (latest.versionCode <= 0 || latest.versionName.isBlank()) return@withContext null
+        val installed = installedVersionCode() ?: run {
+            _serverCheckNote.value = "读不到本机版本号"
+            return@withContext null
+        }
+        val latest = try {
+            CloudApi.latestVersion()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            _serverCheckNote.value = e.message ?: e.javaClass.simpleName
+            return@withContext null
+        }
+        if (latest.versionCode <= 0 || latest.versionName.isBlank()) {
+            _serverCheckNote.value = "响应缺少版本信息"
+            return@withContext null
+        }
         // 验签失败 → 整体作废回退 GitHub；旧约定（签名不含 APK 摘要）仍可用，
         // 但响应里的 apkSha256 不在签名内、必须当不存在处理
-        val coverage = UpdateSignature.verifyDetailed(latest) ?: return@withContext null
+        val coverage = UpdateSignature.verifyDetailed(latest)
+        if (coverage == null) {
+            _serverCheckNote.value = "签名校验未通过（响应可能被中间设备改写）"
+            return@withContext null
+        }
+        _serverCheckNote.value = null
         val trustedSha256 = if (coverage == UpdateSignature.SignatureCoverage.FULL) latest.apkSha256 else ""
         if (latest.versionCode > installed) {
             UpdateState.Available(

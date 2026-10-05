@@ -104,6 +104,8 @@ fun ProfileScreen(
     val cloudSyncEnabled by viewModel.cloudSyncEnabled.collectAsStateWithLifecycle()
     val cloudLastBackupAt by viewModel.cloudLastBackupAt.collectAsStateWithLifecycle()
     val cloudBusy by viewModel.cloudBusy.collectAsStateWithLifecycle()
+    // 自有更新源失败时的原因：失败会静默回退 GitHub，没有这行用户/排查都看不到真相
+    val serverCheckNote by viewModel.serverCheckNote.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showUpdateDialog by rememberSaveable { mutableStateOf(false) }
     var showClearCacheConfirm by rememberSaveable { mutableStateOf(false) }
@@ -315,6 +317,16 @@ fun ProfileScreen(
                     if (u is UpdateState.Available) showUpdateDialog = true else viewModel.checkUpdate()
                 },
             )
+            if (serverCheckNote != null) {
+                // 自有源挂了但 GitHub 兜底成功时，这一行是唯一的可见线索：
+                // 例如"签名校验未通过"= 响应在链路上被改过，"读不到本机版本号"= 系统包管理异常
+                Text(
+                    "自有源不可用：$serverCheckNote（已回退 GitHub）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             SettingsItemRow(
                 icon = { Icon(painterResource(R.drawable.ic_github), "GitHub", Modifier.size(20.dp)) },
                 title = "GitHub 仓库",

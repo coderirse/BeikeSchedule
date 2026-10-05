@@ -18,6 +18,8 @@ materialIconsExtended = "1.7.8"
 webkit = "1.17.0"
 # 云同步 + 检查更新（api.caeamer.com）：与 showwe 客户端同一套网络栈
 okhttp = "5.5.0"
+# 更新元数据/云备份快照的 Ed25519 验签兜底：部分设备缺平台 provider（KeyFactory Ed25519）
+eddsa = "0.3.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -49,6 +51,7 @@ androidx-material-icons-extended = { group = "androidx.compose.material", name =
 # 只有一处用途：WebViewCompat.addWebMessageListener —— 让平台按 origin 限定 JS 桥的可见范围
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+eddsa = { group = "net.i2p.crypto", name = "eddsa", version.ref = "eddsa" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -1,8 +1,6 @@
 package com.caeamer.beikeschedule.data.remote
 
-import java.security.KeyFactory
-import java.security.Signature
-import java.security.spec.X509EncodedKeySpec
+import java.security.PublicKey
 import java.util.Base64
 
 /**
@@ -27,21 +25,21 @@ object BackupSignature {
 
     /** 验签快照：sig 为空 / Base64 非法 / 验签失败一律 false（宁可拒绝恢复，不接受未签名数据）。 */
     fun verify(snapshotText: String, sigBase64: String): Boolean =
-        verify(snapshotText, sigBase64, releasePublicKey())
+        verify(snapshotText, sigBase64, Ed25519.platformKey(BACKUP_PUBLIC_KEY_SPKI_B64))
 
-    /** 可注入公钥的重载（测试与服务端联调用）。 */
-    fun verify(snapshotText: String, sigBase64: String, publicKey: java.security.PublicKey): Boolean {
+    /**
+     * 可注入公钥的重载（测试与服务端联调用；传 null 表示平台 provider 不可用，走内置兜底）。
+     *
+     * 设备缺 `KeyFactory.getInstance("Ed25519")` 时（见 [Ed25519]），这里**不能**把异常抛出去：
+     * 换机恢复靠这条验签，抛出去会让恢复以晦涩异常终止。
+     */
+    fun verify(snapshotText: String, sigBase64: String, publicKey: PublicKey?): Boolean {
         if (sigBase64.isBlank()) return false
         val sig = runCatching { Base64.getDecoder().decode(sigBase64) }.getOrNull() ?: return false
-        return runCatching {
-            val s = Signature.getInstance("Ed25519")
-            s.initVerify(publicKey)
-            s.update(snapshotText.toByteArray(Charsets.UTF_8))
-            s.verify(sig)
-        }.getOrDefault(false)
+        val rawKey = publicKey?.let { Ed25519.rawKeyOf(it) } ?: Ed25519.rawKey(BACKUP_PUBLIC_KEY_SPKI_B64)
+        return Ed25519.verify(snapshotText.toByteArray(Charsets.UTF_8), sig, publicKey, rawKey)
     }
 
-    fun releasePublicKey(): java.security.PublicKey =
-        KeyFactory.getInstance("Ed25519")
-            .generatePublic(X509EncodedKeySpec(Base64.getDecoder().decode(BACKUP_PUBLIC_KEY_SPKI_B64)))
+    /** 直接解析发布公钥（测试用；设备不支持平台 provider 时会抛）。 */
+    fun releasePublicKey(): PublicKey = Ed25519.parseSpki(BACKUP_PUBLIC_KEY_SPKI_B64)
 }
