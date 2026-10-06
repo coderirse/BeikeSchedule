@@ -2,6 +2,7 @@ package com.caeamer.beikeschedule.ui.schedule
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,12 +15,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -44,6 +49,7 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -61,6 +67,9 @@ private val WEEKDAY_NAMES_FULL = listOf("周一", "周二", "周三", "周四", 
 /** 色板下标范围（与 CourseEditDialog 里渲染的 0..9 个色块一致）。 */
 private val COLOR_INDEX_RANGE = 0..9
 
+/** 时段卡片内周次摘要行 / 折叠网格的圆角。 */
+private val WeekSummaryShape = RoundedCornerShape(8.dp)
+
 /**
  * 编辑中的时段：周几 + 大节集合 + **该时段自己的**周次集合。
  * 周次必须挂在时段上而不是整门课上，见 SessionExpander.EditSession 的说明。
@@ -69,6 +78,9 @@ private class SessionState(dayOfWeek: Int, bigSections: Set<Int>, weeks: Set<Int
     var dayOfWeek by mutableStateOf(dayOfWeek)
     var bigSections by mutableStateOf(bigSections)
     var weeks by mutableStateOf(weeks)
+
+    /** 周次网格折叠态：默认收起只看摘要，点摘要行才铺开 1..N 的 chip 网格。 */
+    var weeksExpanded by mutableStateOf(false)
 }
 
 /**
@@ -93,6 +105,12 @@ fun CourseEditDialog(
     totalWeeks: Int,
     /** 长按课表空白格进入时预填的时段。 */
     prefill: SessionExpander.Session? = null,
+    /**
+     * 新课程的默认周次（调用方传当前浏览的教学周）：在哪一周的页面点的加号
+     * （长按格子 / FAB / 空状态添加），就默认只选那一周，而不是全部周。
+     * 编辑已有课程忽略此参数（各时段保留自己的原周次）。
+     */
+    defaultWeek: Int? = null,
     manualNamesInUse: Set<String> = emptySet(),
     onDismiss: () -> Unit,
     onSave: (List<CourseEntity>) -> Unit,
@@ -103,6 +121,8 @@ fun CourseEditDialog(
     /** 整门课都没有固定时间 → 只编辑周次与描述字段（与 CourseRowBuilder 的判定保持一致）。 */
     val onlyUnscheduled = scheduledRows.isEmpty() && unscheduledRows.isNotEmpty()
     val allWeeks = remember(totalWeeks) { (1..totalWeeks).toSet() }
+    // 新加课程的默认周次：来自调用点的"当前浏览周"；越界/缺失时退回全部周（旧行为兜底）
+    val defaultSeedWeeks = defaultWeek?.takeIf { it in 1..totalWeeks }?.let { setOf(it) } ?: allWeeks
 
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var teacher by remember { mutableStateOf(initial?.teacher ?: "") }
@@ -120,8 +140,8 @@ fun CourseEditDialog(
                 SessionExpander.toEditSessions(scheduledRows).map {
                     SessionState(it.dayOfWeek, it.bigSections, it.weeks.ifEmpty { allWeeks })
                 }
-            prefill != null -> listOf(SessionState(prefill.dayOfWeek, prefill.bigSections, allWeeks))
-            else -> listOf(SessionState(1, setOf(0), allWeeks))
+            prefill != null -> listOf(SessionState(prefill.dayOfWeek, prefill.bigSections, defaultSeedWeeks))
+            else -> listOf(SessionState(1, setOf(0), defaultSeedWeeks))
         }
         seed.toMutableStateList()
     }
@@ -268,7 +288,6 @@ fun CourseEditDialog(
                             canRemove = sessions.size > 1,
                             onRemove = { sessions.removeAt(index) },
                         )
-                        if (index != sessions.lastIndex) HorizontalDivider()
                     }
                     OutlinedButton(
                         onClick = {
@@ -342,7 +361,8 @@ fun CourseEditDialog(
 /** 星期下拉的选项（提为常量，避免每次重组重新构造）。 */
 private val WEEKDAY_OPTIONS = (1..7).map { it to WEEKDAY_NAMES_FULL[it - 1] }
 
-/** 单个"时段"编辑器：周几 + 大节 + 周次。状态读取全部收在这个作用域内（见调用点注释）。 */
+/** 单个"时段"编辑卡片：周几 + 大节 + 可折叠的周次多选。状态读取全部收在这个作用域内（见调用点注释）。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SessionEditor(
     session: SessionState,
@@ -350,51 +370,99 @@ private fun SessionEditor(
     canRemove: Boolean,
     onRemove: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            DropdownField(
-                label = "星期",
-                options = WEEKDAY_OPTIONS,
-                selected = session.dayOfWeek,
-                onSelect = { session.dayOfWeek = it },
-                modifier = Modifier.weight(1f),
-            )
-            if (canRemove) {
-                IconButton(onClick = onRemove) {
-                    Icon(Icons.Default.Close, contentDescription = "删除此时段")
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                DropdownField(
+                    label = "星期",
+                    options = WEEKDAY_OPTIONS,
+                    selected = session.dayOfWeek,
+                    onSelect = { session.dayOfWeek = it },
+                    modifier = Modifier.weight(1f),
+                )
+                if (canRemove) {
+                    IconButton(onClick = onRemove) {
+                        Icon(Icons.Default.Close, contentDescription = "删除此时段")
+                    }
                 }
             }
-        }
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy((-4).dp),
-        ) {
-            SectionMap.BIG_NAMES.forEachIndexed { big, label ->
-                FilterChip(
-                    selected = big in session.bigSections,
-                    onClick = {
-                        session.bigSections =
-                            if (big in session.bigSections) session.bigSections - big
-                            else session.bigSections + big
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy((-4).dp),
+            ) {
+                SectionMap.BIG_NAMES.forEachIndexed { big, label ->
+                    FilterChip(
+                        selected = big in session.bigSections,
+                        onClick = {
+                            session.bigSections =
+                                if (big in session.bigSections) session.bigSections - big
+                                else session.bigSections + big
+                        },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            // 周次折叠摘要：默认收起（对话框不再被 1..N 网格撑满），点摘要行才展开网格
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(WeekSummaryShape)
+                    .clickable(
+                        onClickLabel = if (session.weeksExpanded) "收起周次" else "展开周次",
+                    ) { session.weeksExpanded = !session.weeksExpanded }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "周次 · " + weeksSummary(session.weeks, totalWeeks),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.rotate(if (session.weeksExpanded) 180f else 0f),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (session.weeksExpanded) {
+                WeekChips(
+                    totalWeeks = totalWeeks,
+                    selected = session.weeks,
+                    onToggle = { w ->
+                        session.weeks = if (w in session.weeks) session.weeks - w else session.weeks + w
                     },
-                    label = { Text(label) },
+                    onSet = { session.weeks = it },
                 )
             }
         }
-        Text(
-            "周次（可多选）",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        WeekChips(
-            totalWeeks = totalWeeks,
-            selected = session.weeks,
-            onToggle = { w ->
-                session.weeks = if (w in session.weeks) session.weeks - w else session.weeks + w
-            },
-            onSet = { session.weeks = it },
-        )
     }
+}
+
+/** 周次折叠摘要："第 4 周" / "第 1、3、5-18 周"；区间太多时只报总数，避免一行塞不下。 */
+private fun weeksSummary(selected: Set<Int>, totalWeeks: Int): String {
+    val sorted = selected.filter { it in 1..totalWeeks }.sorted()
+    if (sorted.isEmpty()) return "未选择"
+    val parts = mutableListOf<String>()
+    var start = sorted.first()
+    var prev = start
+    for (w in sorted.drop(1)) {
+        if (w == prev + 1) {
+            prev = w
+        } else {
+            parts += if (start == prev) "$start" else "$start-$prev"
+            start = w
+            prev = w
+        }
+    }
+    parts += if (start == prev) "$start" else "$start-$prev"
+    if (parts.size > 5) return "已选 ${sorted.size} 周"
+    return "第 ${parts.joinToString("、")} 周"
 }
 
 /** 周次多选：数字 chip 网格 + 全选/单周/双周/清空快捷按钮。 */

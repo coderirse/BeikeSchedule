@@ -430,7 +430,7 @@ private fun TodoFormSheet(
                             TextButton(onClick = {
                                 pickerState.selectedDateMillis?.let { millis ->
                                     // M3 DatePicker 的 millis 是 UTC 零点口径，必须用 UTC 还原：
-                                    // 用系统时区在负偏移时区会前移一天（与 SemesterSettingsDialog 对齐）
+                                    // 用系统时区在负偏移时区会前移一天（与 SemesterSettingsPage 对齐）
                                     dateText = java.time.Instant.ofEpochMilli(millis)
                                         .atZone(java.time.ZoneId.of("UTC")).toLocalDate().toString()
                                 }

@@ -87,14 +87,7 @@ import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import java.time.LocalDate
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.saveable.Saver
-import androidx.core.content.ContextCompat
-import androidx.compose.ui.platform.LocalContext
 import kotlinx.serialization.json.Json
 
 private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "日")
@@ -131,6 +124,8 @@ private fun daySchedulesFor(
 @Composable
 fun ScheduleScreen(
     onImportClick: () -> Unit = {},
+    /** 点顶栏学期名 → 打开学期设置全屏页（由 MainActivity 承载，与同步页同模式）。 */
+    onOpenSettings: () -> Unit = {},
     viewModel: ScheduleViewModel = viewModel(),
 ) {
     // withLifecycle：退到后台停止收集（WhileSubscribed 才能在后台真正停流）
@@ -141,18 +136,6 @@ fun ScheduleScreen(
     val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsStateWithLifecycle()
     val reminderSchedule by viewModel.reminderSchedule.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-
-    // 开启上课提醒前需要先拿到通知权限（Android 13+）
-    // saveable：权限系统弹窗由独立 Activity 承载，期间旋转会重建本组合——裸 remember
-    // 会丢掉"用户要开提醒"的意图，权限给了但开关没打开
-    var pendingEnableReminder by rememberSaveable { mutableStateOf(false) }
-    val notificationPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted && pendingEnableReminder) viewModel.setReminder(true, reminderMinutes)
-        pendingEnableReminder = false
-    }
 
     var weekMenuExpanded by rememberSaveable { mutableStateOf(false) }
     var detailCourse by rememberSaveable(stateSaver = DetailCourseSaver) { mutableStateOf<CourseEntity?>(null) }
@@ -163,8 +146,6 @@ fun ScheduleScreen(
     // 只恢复"打开"标志会得到"对话框回来了、输入全丢"的假恢复，比关掉更糟（记录在案）。
     // showEditDialog 与 editCourseGroup 保持成对裸 remember（一起丢）就是这个原因。
     var showEditDialog by remember { mutableStateOf(false) }
-    // 学期设置对话框内容全部从 state 现读，且对话框内部字段已 saveable，旋转恢复打开态安全
-    var showSettings by rememberSaveable { mutableStateOf(false) }
     // 长按空白格后待激活的"添加课程"格子（周几, 大节下标）：Pair 非 Saveable 原生类型，
     // 旋转后消失属可接受（重新长按即可）
     var pendingSlot by remember { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -265,8 +246,8 @@ fun ScheduleScreen(
                         .padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // 学期名（下挂今天日期与周次状态）可点击 → 学期设置
-                    TextButton(onClick = { showSettings = true }) {
+                    // 学期名（下挂今天日期与周次状态）可点击 → 学期设置全屏页
+                    TextButton(onClick = onOpenSettings) {
                         Column(horizontalAlignment = Alignment.Start) {
                             Text(
                                 text = state.semester.name.ifBlank { "贝壳课表" },
@@ -445,6 +426,9 @@ fun ScheduleScreen(
             initialRows = editCourseGroup.orEmpty(),
             totalWeeks = totalWeeks,
             prefill = prefillSession,
+            // 新课程的默认周次 = 正在浏览的教学周：在哪一周的页面点的加号就默认那周
+            // （编辑已有课程时该参数被忽略，各时段保留原周次）
+            defaultWeek = state.selectedWeek,
             manualNamesInUse = manualNamesInUse,
             onDismiss = {
                 showEditDialog = false
@@ -470,41 +454,6 @@ fun ScheduleScreen(
                     it.name == course.name && it.source == course.source
                 }.ifEmpty { listOf(course) }
                 showEditDialog = true
-            },
-        )
-    }
-
-    if (showSettings) {
-        SemesterSettingsDialog(
-            current = state.semester,
-            hasSample = state.hasSample,
-            hiddenCourses = state.hiddenCourses,
-            reminderEnabled = reminderEnabled,
-            reminderMinutes = reminderMinutes,
-            hideWeekend = hideWeekend,
-            reminderSchedule = reminderSchedule,
-            onDismiss = { showSettings = false },
-            onSave = { viewModel.saveSemester(it) },
-            onReminderChange = { enabled, minutes -> viewModel.setReminder(enabled, minutes) },
-            onHideWeekendChange = { viewModel.setHideWeekend(it) },
-            onClearSample = { viewModel.clearSampleData() },
-            // 恢复也必须按整组：隐藏是按合并组做的（一张卡 N 行），只恢复一行会留下
-            // 一张"残废"卡片（例如只剩第 7 周有课），且隐藏列表里还有同名项要反复点。
-            onRestoreCourse = { id ->
-                state.courses.firstOrNull { it.id == id }
-                    ?.let { row -> viewModel.setCoursesHidden(groupOf(row).map { it.id }, false) }
-                    ?: viewModel.setCourseHidden(id, false)
-            },
-            onRequestNotificationPermission = { onGranted ->
-                if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
-                        context, Manifest.permission.POST_NOTIFICATIONS,
-                    ) == PackageManager.PERMISSION_GRANTED
-                ) {
-                    onGranted()
-                } else {
-                    pendingEnableReminder = true
-                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
             },
         )
     }

@@ -46,6 +46,8 @@ sealed interface UpdateState {
          * 否则保持浏览器打开的旧链路（依赖系统同签名检查兜底）。
          */
         val apkSha256: String = "",
+        /** APK 大小（字节）；0 = 未知（GitHub 兜底路径没有可靠大小）。 */
+        val size: Long = 0,
     ) : UpdateState
     data class Failed(val message: String) : UpdateState
 }
@@ -244,7 +246,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         val trustedSha256 = if (coverage == UpdateSignature.SignatureCoverage.FULL) latest.apkSha256 else ""
         if (latest.versionCode > installed) {
             UpdateState.Available(
-                latest.versionName, latest.changelog, latest.url, latest.force, trustedSha256,
+                latest.versionName, latest.changelog, latest.url, latest.force, trustedSha256, latest.size,
             )
         } else {
             UpdateState.UpToDate
