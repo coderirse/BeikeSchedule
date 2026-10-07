@@ -215,7 +215,13 @@ fun ScheduleScreen(
             // 直接回写会把"首次定位当前周"覆盖成第 1 周——DataStore 异步读盘必然晚于这一帧，
             // 于是每次启动课表都停在第 1 页，且写完后 selectedWeek 非空、定位永不发生。
             .drop(1)
-            .collect { viewModel.selectWeek(it + 1) }
+            .collect {
+                // 数据未加载完不回写：首帧 uiState 还是默认值（selectedWeek=1），而此时 Pager
+                // 可能正带着"进程在后台被回收后恢复出来的旧页"被下面的定位效果滚向第 1 页。
+                // 那次程序性滚动一旦被当成用户滑动写回，selectedWeek 就从"未选"变成第 1 周，
+                // "重进定位当前周"被覆盖 —— 进程被杀后重进必现（真机后台回收是常态）。
+                if (state.loaded) viewModel.selectWeek(it + 1)
+            }
     }
     // 选中周变化（含学期设置改动后重新定位）→ Pager 跟随。
     // 此前只以 currentWeek 为键：DataStore 写入让 selectedWeek 变成当前周时 Pager 不动，
@@ -224,7 +230,10 @@ fun ScheduleScreen(
     // 重新进入 App（新前台会话）时 ViewModel 会把 selectedWeek 打回当前周，走的就是这条路径。
     // 这里刻意用 scrollToPage 瞬间落位而非 animateScrollToPage：重进 App 应该第一眼就是本周，
     // 而不是让用户看着它从第 1 周一路滑到第 16 周。
-    LaunchedEffect(state.selectedWeek) {
+    LaunchedEffect(state.selectedWeek, state.loaded) {
+        // 数据未加载完不滚动：此时 selectedWeek 是默认 uiState 的第 1 周，滚过去只会把
+        // "进程重建后恢复出来的旧页"甩到第 1 页，等真实数据到达还得再跳一次本周（白闪一屏）
+        if (!state.loaded) return@LaunchedEffect
         val target = (state.selectedWeek - 1).coerceIn(0, (totalWeeks - 1).coerceAtLeast(0))
         if (pagerState.currentPage != target) pagerState.scrollToPage(target)
     }
