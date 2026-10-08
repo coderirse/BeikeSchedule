@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -38,6 +39,7 @@ object CloudApi {
     private const val PATH_LATEST = "/api/bs/app/latest"
     private const val PATH_LOGIN = "/api/bs/auth/login"
     private const val PATH_BACKUP = "/api/bs/backup"
+    private const val PATH_CLASS_SCHEDULE = "/api/bs/class-schedule"
     private const val TAG = "BeikeCloudApi"
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -118,6 +120,30 @@ object CloudApi {
         val request = authorized(Request.Builder().url("$BASE_URL$PATH_BACKUP").get(), token).build()
         parseOrThrow(execute(request), PATH_BACKUP, authRequired = true) { text ->
             json.decodeFromString(BackupEnvelope.serializer(), text)
+        }
+    }
+
+    /**
+     * 班级实验/上机安排（教务系统拿不到、任课老师在群里通知的数据）。
+     *
+     * [className] = 学籍里的班级名（App「我的」页显示的那个）：服务端按它匹配班级，
+     * 只有本班账号能拿到数据，未匹配/该学期未配置时返回空表。查词串由 HttpUrl 负责编码
+     * （班级名是中文，不能手工拼 URL）。
+     */
+    suspend fun classSchedule(
+        token: String,
+        xn: String,
+        xq: String,
+        className: String,
+    ): ClassSchedule = withContext(Dispatchers.IO) {
+        val url = "$BASE_URL$PATH_CLASS_SCHEDULE".toHttpUrl().newBuilder()
+            .addQueryParameter("xn", xn)
+            .addQueryParameter("xq", xq)
+            .addQueryParameter("cls", className)
+            .build()
+        val request = authorized(Request.Builder().url(url).get(), token).build()
+        parseOrThrow(execute(request), PATH_CLASS_SCHEDULE, authRequired = true) { text ->
+            json.decodeFromString(ClassSchedule.serializer(), text)
         }
     }
 

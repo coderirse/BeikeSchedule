@@ -46,6 +46,7 @@ class SyncPlanTest {
                 SyncStep.CLOUD_TOKEN,
                 SyncStep.TIMETABLE,
                 SyncStep.GRADES,
+                SyncStep.CLASS_LAB,
                 SyncStep.BACKUP,
             ),
             SyncPlanner.steps(CloudMode.UPLOAD),
@@ -53,9 +54,26 @@ class SyncPlanTest {
     }
 
     @Test
+    fun `班级实验安排三种方向都跑（含从云端恢复）`() {
+        // 它拉的是服务端按班级下发的数据、不碰教务数据，所以恢复模式也照跑；
+        // 且必须排在 BACKUP 之前，上传的快照才包含这批行。
+        listOf(CloudMode.UPLOAD, CloudMode.NO_UPLOAD, CloudMode.UNDECIDED, CloudMode.RESTORE)
+            .forEach { mode ->
+                assertTrue("$mode 缺少 CLASS_LAB", SyncPlanner.steps(mode).contains(SyncStep.CLASS_LAB))
+            }
+        val upload = SyncPlanner.steps(CloudMode.UPLOAD)
+        assertTrue(upload.indexOf(SyncStep.CLASS_LAB) < upload.indexOf(SyncStep.BACKUP))
+        // 班级名来自学籍抓取，必须排在 GRADES 之后
+        assertTrue(upload.indexOf(SyncStep.CLASS_LAB) > upload.indexOf(SyncStep.GRADES))
+    }
+
+    @Test
     fun `从云端恢复跳过抓取与上传`() {
         val steps = SyncPlanner.steps(CloudMode.RESTORE)
-        assertEquals(listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN, SyncStep.RESTORE), steps)
+        assertEquals(
+            listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN, SyncStep.RESTORE, SyncStep.CLASS_LAB),
+            steps,
+        )
         assertFalse(steps.contains(SyncStep.TIMETABLE))
         assertFalse(steps.contains(SyncStep.GRADES))
         assertFalse(steps.contains(SyncStep.BACKUP))
@@ -76,7 +94,7 @@ class SyncPlanTest {
         )
         assertEquals(listOf(SyncStep.CLOUD_TOKEN), SyncPlanner.retryHead(results))
         assertEquals(
-            listOf(SyncStep.GRADES, SyncStep.BACKUP),
+            listOf(SyncStep.GRADES, SyncStep.CLASS_LAB, SyncStep.BACKUP),
             SyncPlanner.retryTail(CloudMode.UPLOAD, results),
         )
     }
@@ -89,6 +107,7 @@ class SyncPlanTest {
             SyncStep.RESTORE to SyncStepResult(SyncStep.RESTORE, SyncStatus.OK),
             SyncStep.TIMETABLE to SyncStepResult(SyncStep.TIMETABLE, SyncStatus.SKIPPED, "已跳过（用云端数据）"),
             SyncStep.GRADES to SyncStepResult(SyncStep.GRADES, SyncStatus.SKIPPED, "已跳过（用云端数据）"),
+            SyncStep.CLASS_LAB to SyncStepResult(SyncStep.CLASS_LAB, SyncStatus.OK),
         )
         assertTrue(SyncPlanner.retryHead(results).isEmpty())
         assertTrue(SyncPlanner.retryTail(CloudMode.RESTORE, results).isEmpty())
@@ -102,7 +121,7 @@ class SyncPlanTest {
         )
         assertEquals(listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN), SyncPlanner.retryHead(results))
         assertEquals(
-            listOf(SyncStep.TIMETABLE, SyncStep.GRADES),
+            listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB),
             SyncPlanner.retryTail(CloudMode.NO_UPLOAD, results),
         )
     }
@@ -120,8 +139,11 @@ class SyncPlanTest {
             SyncStep.GRADES to SyncStepResult(SyncStep.GRADES, SyncStatus.OK),
         )
         assertEquals(listOf(SyncStep.CLOUD_TOKEN), SyncPlanner.retryHead(results))
-        // 重试中云账号成功 → mode 变 UPLOAD：抓取两项已 OK 不重跑，只补上传
-        assertEquals(listOf(SyncStep.BACKUP), SyncPlanner.retryTail(CloudMode.UPLOAD, results))
+        // 重试中云账号成功 → mode 变 UPLOAD：抓取两项已 OK 不重跑，只补实验安排与上传
+        assertEquals(
+            listOf(SyncStep.CLASS_LAB, SyncStep.BACKUP),
+            SyncPlanner.retryTail(CloudMode.UPLOAD, results),
+        )
     }
 
     @Test
@@ -133,7 +155,7 @@ class SyncPlanTest {
             SyncStep.GRADES to SyncStepResult(SyncStep.GRADES, SyncStatus.FAILED, "会话失效"),
         )
         val tail = SyncPlanner.retryTail(CloudMode.RESTORE, results)
-        assertEquals(listOf(SyncStep.RESTORE), tail)
+        assertEquals(listOf(SyncStep.RESTORE, SyncStep.CLASS_LAB), tail)
         assertFalse(tail.contains(SyncStep.TIMETABLE))
         assertFalse(tail.contains(SyncStep.GRADES))
     }
@@ -145,6 +167,7 @@ class SyncPlanTest {
             SyncStep.CLOUD_TOKEN to SyncStepResult(SyncStep.CLOUD_TOKEN, SyncStatus.OK),
             SyncStep.TIMETABLE to SyncStepResult(SyncStep.TIMETABLE, SyncStatus.OK),
             SyncStep.GRADES to SyncStepResult(SyncStep.GRADES, SyncStatus.OK),
+            SyncStep.CLASS_LAB to SyncStepResult(SyncStep.CLASS_LAB, SyncStatus.OK),
             SyncStep.BACKUP to SyncStepResult(SyncStep.BACKUP, SyncStatus.FAILED, "网络中断"),
         )
         assertTrue(SyncPlanner.retryHead(results).isEmpty())

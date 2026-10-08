@@ -12,6 +12,8 @@ enum class SyncStep(val label: String) {
     CLOUD_TOKEN("登录云账号"),
     TIMETABLE("导入课表"),
     GRADES("抓取成绩"),
+    /** 服务端按班级下发的实验/上机安排（教务拿不到）。挂在成绩之后：班级名来自同一轮学籍抓取。 */
+    CLASS_LAB("更新实验安排"),
     BACKUP("上传云备份"),
     RESTORE("从云端恢复"),
 }
@@ -56,13 +58,19 @@ internal object SyncPlanner {
 
     fun steps(mode: CloudMode): List<SyncStep> = head + tail(mode)
 
-    /** 后半段（方向已定）。UNDECIDED 只出现在首轮前半段，按"不上传"取。 */
+    /**
+     * 后半段（方向已定）。UNDECIDED 只出现在首轮前半段，按"不上传"取。
+     *
+     * CLASS_LAB 三种方向都跑（含从云端恢复后）：它不碰教务数据，拉的是服务端按班级下发的
+     * 实验安排，按"每次同步自动拉取"的口径执行；放在 BACKUP 之前，上传的快照才包含它。
+     */
     fun tail(mode: CloudMode): List<SyncStep> = when (mode) {
-        CloudMode.RESTORE -> listOf(SyncStep.RESTORE)
-        CloudMode.UPLOAD -> listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.BACKUP)
+        CloudMode.RESTORE -> listOf(SyncStep.RESTORE, SyncStep.CLASS_LAB)
+        CloudMode.UPLOAD ->
+            listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB, SyncStep.BACKUP)
         CloudMode.UNDECIDED,
         CloudMode.NO_UPLOAD,
-        -> listOf(SyncStep.TIMETABLE, SyncStep.GRADES)
+        -> listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB)
     }
 
     /** 重试的前半段：只重跑未成功的身份/云账号步骤。 */

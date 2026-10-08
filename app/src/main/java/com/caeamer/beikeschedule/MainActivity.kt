@@ -54,6 +54,7 @@ import com.caeamer.beikeschedule.ui.sync.UnifiedSyncScreen
 import com.caeamer.beikeschedule.ui.grades.GradesScreen
 import com.caeamer.beikeschedule.ui.profile.ProfileScreen
 import com.caeamer.beikeschedule.ui.schedule.ScheduleScreen
+import com.caeamer.beikeschedule.ui.schedule.SemesterSettingsPage
 import com.caeamer.beikeschedule.ui.theme.BeikeScheduleTheme
 import com.caeamer.beikeschedule.ui.theme.CourseColors
 
@@ -167,6 +168,8 @@ class MainActivity : ComponentActivity() {
                 var tab by rememberSaveable { mutableStateOf("schedule") }
                 // 一键同步（登录 + 课表/成绩/云同步）为全屏流程，不显示底部 Tab
                 var showSync by rememberSaveable { mutableStateOf(false) }
+                // 学期设置全屏页：同模式，替换掉底部 Tab 框架（替代旧的全屏弹窗）
+                var showSemesterSettings by rememberSaveable { mutableStateOf(false) }
                 // 同步页的 WebView 展示的是浅底教务页面，需要临时切成深色状态栏图标
                 var syncLightPage by remember { mutableStateOf(false) }
 
@@ -188,6 +191,10 @@ class MainActivity : ComponentActivity() {
                         onDone = { showSync = false },
                         onLightBackgroundVisible = { syncLightPage = it },
                     )
+                } else if (showSemesterSettings) {
+                    // 学期设置：viewModel() 拿到的是与课表页同一个 Activity 级 ViewModel，
+                    // 改动即时生效，返回后课表页直接看到最新状态
+                    SemesterSettingsPage(onBack = { showSemesterSettings = false })
                 } else {
                     // 整屏渐变仅在「课表页」开启：浅色暖渐变/暗色暗渐变，其他页用主题默认背景
                     val useGradient = tab == "schedule"
@@ -239,6 +246,7 @@ class MainActivity : ComponentActivity() {
                                     "mine" -> ProfileScreen(onCloudLoginClick = { showSync = true })
                                     else -> ScheduleScreen(
                                         onImportClick = { showSync = true },
+                                        onOpenSettings = { showSemesterSettings = true },
                                     )
                                 }
                             }

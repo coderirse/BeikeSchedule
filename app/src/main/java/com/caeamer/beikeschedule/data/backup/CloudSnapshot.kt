@@ -92,6 +92,8 @@ data class CourseDto(
     val colorIndex: Int = 0,
     val source: Int = CourseEntity.SOURCE_MANUAL,
     val hidden: Boolean = false,
+    /** 备注（班级实验安排等来源；旧快照没有该字段，默认空串）。 */
+    val note: String = "",
 )
 
 @Serializable
@@ -251,11 +253,13 @@ object CloudSnapshotCodec {
         val db = AppDatabase.get(context)
 
         db.withTransaction {
-            // course 无 clear()：三个 source 全删即整表清空；插入时 id 置 0 重新自增
+            // course 无 clear()：四个 source（含班级实验安排）全删即整表清空；
+            // LAB 行必须一起删——它也在快照里，不删会与快照插入的同 id 行重复。
             listOf(
                 CourseEntity.SOURCE_IMPORT,
                 CourseEntity.SOURCE_MANUAL,
                 CourseEntity.SOURCE_SAMPLE,
+                CourseEntity.SOURCE_LAB,
             ).forEach { repo.clearCoursesBySource(it) }
             repo.insertCourses(snapshot.courses.map { it.toEntity() })
 
@@ -295,12 +299,14 @@ object CloudSnapshotCodec {
         taskId = taskId, name = name, teacher = teacher, location = location,
         dayOfWeek = dayOfWeek, startSection = startSection, endSection = endSection,
         weekBitmap = weekBitmap, colorIndex = colorIndex, source = source, hidden = hidden,
+        note = note,
     )
 
     private fun CourseDto.toEntity() = CourseEntity(
         id = 0, taskId = taskId, name = name, teacher = teacher, location = location,
         dayOfWeek = dayOfWeek, startSection = startSection, endSection = endSection,
         weekBitmap = weekBitmap, colorIndex = colorIndex, source = source, hidden = hidden,
+        note = note,
     )
 
     private fun GradeDto.toEntity() = GradeEntity(

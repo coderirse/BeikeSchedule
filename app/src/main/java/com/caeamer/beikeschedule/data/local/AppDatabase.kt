@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [CourseEntity::class, SectionTimeEntity::class, GradeEntity::class, ExamEntity::class, TodoEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -78,6 +78,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v5 → v6：course 表新增 note 列（班级实验/上机安排的备注；教务导入行为空串）。 */
+        private val MIGRATE_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `course` ADD COLUMN `note` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -88,7 +95,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "beike_schedule.db",
                 )
-                    .addMigrations(MIGRATE_1_2, MIGRATE_2_3, MIGRATE_3_4, MIGRATE_4_5)
+                    .addMigrations(MIGRATE_1_2, MIGRATE_2_3, MIGRATE_3_4, MIGRATE_4_5, MIGRATE_5_6)
                     // 迁移失败的兜底保险丝。
                     //
                     // **只兜"找不到迁移路径"这一种情况**（Room 的 fallbackToDestructiveMigration

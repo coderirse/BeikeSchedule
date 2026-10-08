@@ -28,6 +28,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -87,14 +88,7 @@ import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import java.time.LocalDate
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.saveable.Saver
-import androidx.core.content.ContextCompat
-import androidx.compose.ui.platform.LocalContext
 import kotlinx.serialization.json.Json
 
 private val WEEKDAY_NAMES = listOf("一", "二", "三", "四", "五", "六", "日")
@@ -131,6 +125,8 @@ private fun daySchedulesFor(
 @Composable
 fun ScheduleScreen(
     onImportClick: () -> Unit = {},
+    /** 点顶栏学期名 → 打开学期设置全屏页（由 MainActivity 承载，与同步页同模式）。 */
+    onOpenSettings: () -> Unit = {},
     viewModel: ScheduleViewModel = viewModel(),
 ) {
     // withLifecycle：退到后台停止收集（WhileSubscribed 才能在后台真正停流）
@@ -141,18 +137,6 @@ fun ScheduleScreen(
     val hideInactiveCourses by viewModel.hideInactiveCourses.collectAsStateWithLifecycle()
     val reminderSchedule by viewModel.reminderSchedule.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-
-    // 开启上课提醒前需要先拿到通知权限（Android 13+）
-    // saveable：权限系统弹窗由独立 Activity 承载，期间旋转会重建本组合——裸 remember
-    // 会丢掉"用户要开提醒"的意图，权限给了但开关没打开
-    var pendingEnableReminder by rememberSaveable { mutableStateOf(false) }
-    val notificationPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted && pendingEnableReminder) viewModel.setReminder(true, reminderMinutes)
-        pendingEnableReminder = false
-    }
 
     var weekMenuExpanded by rememberSaveable { mutableStateOf(false) }
     var detailCourse by rememberSaveable(stateSaver = DetailCourseSaver) { mutableStateOf<CourseEntity?>(null) }
@@ -163,8 +147,6 @@ fun ScheduleScreen(
     // 只恢复"打开"标志会得到"对话框回来了、输入全丢"的假恢复，比关掉更糟（记录在案）。
     // showEditDialog 与 editCourseGroup 保持成对裸 remember（一起丢）就是这个原因。
     var showEditDialog by remember { mutableStateOf(false) }
-    // 学期设置对话框内容全部从 state 现读，且对话框内部字段已 saveable，旋转恢复打开态安全
-    var showSettings by rememberSaveable { mutableStateOf(false) }
     // 长按空白格后待激活的"添加课程"格子（周几, 大节下标）：Pair 非 Saveable 原生类型，
     // 旋转后消失属可接受（重新长按即可）
     var pendingSlot by remember { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -234,7 +216,13 @@ fun ScheduleScreen(
             // 直接回写会把"首次定位当前周"覆盖成第 1 周——DataStore 异步读盘必然晚于这一帧，
             // 于是每次启动课表都停在第 1 页，且写完后 selectedWeek 非空、定位永不发生。
             .drop(1)
-            .collect { viewModel.selectWeek(it + 1) }
+            .collect {
+                // 数据未加载完不回写：首帧 uiState 还是默认值（selectedWeek=1），而此时 Pager
+                // 可能正带着"进程在后台被回收后恢复出来的旧页"被下面的定位效果滚向第 1 页。
+                // 那次程序性滚动一旦被当成用户滑动写回，selectedWeek 就从"未选"变成第 1 周，
+                // "重进定位当前周"被覆盖 —— 进程被杀后重进必现（真机后台回收是常态）。
+                if (state.loaded) viewModel.selectWeek(it + 1)
+            }
     }
     // 选中周变化（含学期设置改动后重新定位）→ Pager 跟随。
     // 此前只以 currentWeek 为键：DataStore 写入让 selectedWeek 变成当前周时 Pager 不动，
@@ -243,7 +231,10 @@ fun ScheduleScreen(
     // 重新进入 App（新前台会话）时 ViewModel 会把 selectedWeek 打回当前周，走的就是这条路径。
     // 这里刻意用 scrollToPage 瞬间落位而非 animateScrollToPage：重进 App 应该第一眼就是本周，
     // 而不是让用户看着它从第 1 周一路滑到第 16 周。
-    LaunchedEffect(state.selectedWeek) {
+    LaunchedEffect(state.selectedWeek, state.loaded) {
+        // 数据未加载完不滚动：此时 selectedWeek 是默认 uiState 的第 1 周，滚过去只会把
+        // "进程重建后恢复出来的旧页"甩到第 1 页，等真实数据到达还得再跳一次本周（白闪一屏）
+        if (!state.loaded) return@LaunchedEffect
         val target = (state.selectedWeek - 1).coerceIn(0, (totalWeeks - 1).coerceAtLeast(0))
         if (pagerState.currentPage != target) pagerState.scrollToPage(target)
     }
@@ -265,8 +256,8 @@ fun ScheduleScreen(
                         .padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // 学期名（下挂今天日期与周次状态）可点击 → 学期设置
-                    TextButton(onClick = { showSettings = true }) {
+                    // 学期名（下挂今天日期与周次状态）可点击 → 学期设置全屏页
+                    TextButton(onClick = onOpenSettings) {
                         Column(horizontalAlignment = Alignment.Start) {
                             Text(
                                 text = state.semester.name.ifBlank { "贝壳课表" },
@@ -418,6 +409,7 @@ fun ScheduleScreen(
             sectionTimes = state.sectionTimes,
             isSample = course.source == CourseEntity.SOURCE_SAMPLE,
             isImported = course.source == CourseEntity.SOURCE_IMPORT,
+            isLab = course.source == CourseEntity.SOURCE_LAB,
             onDismiss = { detailCourse = null },
             onEdit = {
                 detailCourse = null
@@ -445,6 +437,9 @@ fun ScheduleScreen(
             initialRows = editCourseGroup.orEmpty(),
             totalWeeks = totalWeeks,
             prefill = prefillSession,
+            // 新课程的默认周次 = 正在浏览的教学周：在哪一周的页面点的加号就默认那周
+            // （编辑已有课程时该参数被忽略，各时段保留原周次）
+            defaultWeek = state.selectedWeek,
             manualNamesInUse = manualNamesInUse,
             onDismiss = {
                 showEditDialog = false
@@ -470,41 +465,6 @@ fun ScheduleScreen(
                     it.name == course.name && it.source == course.source
                 }.ifEmpty { listOf(course) }
                 showEditDialog = true
-            },
-        )
-    }
-
-    if (showSettings) {
-        SemesterSettingsDialog(
-            current = state.semester,
-            hasSample = state.hasSample,
-            hiddenCourses = state.hiddenCourses,
-            reminderEnabled = reminderEnabled,
-            reminderMinutes = reminderMinutes,
-            hideWeekend = hideWeekend,
-            reminderSchedule = reminderSchedule,
-            onDismiss = { showSettings = false },
-            onSave = { viewModel.saveSemester(it) },
-            onReminderChange = { enabled, minutes -> viewModel.setReminder(enabled, minutes) },
-            onHideWeekendChange = { viewModel.setHideWeekend(it) },
-            onClearSample = { viewModel.clearSampleData() },
-            // 恢复也必须按整组：隐藏是按合并组做的（一张卡 N 行），只恢复一行会留下
-            // 一张"残废"卡片（例如只剩第 7 周有课），且隐藏列表里还有同名项要反复点。
-            onRestoreCourse = { id ->
-                state.courses.firstOrNull { it.id == id }
-                    ?.let { row -> viewModel.setCoursesHidden(groupOf(row).map { it.id }, false) }
-                    ?: viewModel.setCourseHidden(id, false)
-            },
-            onRequestNotificationPermission = { onGranted ->
-                if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
-                        context, Manifest.permission.POST_NOTIFICATIONS,
-                    ) == PackageManager.PERMISSION_GRANTED
-                ) {
-                    onGranted()
-                } else {
-                    pendingEnableReminder = true
-                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
             },
         )
     }
@@ -573,7 +533,12 @@ private fun DateRow(
                     modifier = Modifier.background(
                         if (isToday) MaterialTheme.colorScheme.primary else Color.Transparent,
                         RoundedCornerShape(10.dp),
-                    ).padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                        // 左右留白 6dp（原 8dp）：胶囊内文字可用宽度本就只剩 ~30dp，
+                        // 「10/20」这类两位宽数字的日期（ROM 比例字体下 "1" 窄、"0/2" 宽）
+                        // 会超出 1~2px，默认软换行把末位数字甩到第二行（像日期下挂了个小数字）。
+                        // 让出的这 2dp 正好覆盖这个余量，正常字号下日期无需缩放
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
@@ -586,6 +551,15 @@ private fun DateRow(
                         Text(
                             "${date.monthValue}/${date.dayOfMonth}",
                             fontSize = 10.sp,
+                            // 钉死单行 + 放不下时自动缩号：列宽随屏幕/字体缩放变化，
+                            // 一旦装不下就换行会误解读日期本身，缩号只是略小、语义不变
+                            maxLines = 1,
+                            softWrap = false,
+                            autoSize = TextAutoSize.StepBased(
+                                minFontSize = 8.sp,
+                                maxFontSize = 10.sp,
+                                stepSize = 0.5.sp,
+                            ),
                             color = if (isToday) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
                             else MaterialTheme.colorScheme.onSurfaceVariant,
                         )

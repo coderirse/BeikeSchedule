@@ -109,6 +109,37 @@ class ScheduleRepository(private val context: Context) {
             courseDao.insertAll(inserts)
         }.also { markCloudDirty() }
 
+    /**
+     * 应用服务端下发的班级实验/上机安排（**整组替换**，服务端数据是唯一真相）。
+     *
+     * - 旧 LAB 行的隐藏状态按稳定 taskId（= 服务端场次 id）保留：用户藏起来的实验课
+     *   不会被下一次同步翻出来；
+     * - [hideUnscheduledContaining] 命中的教务"无固定时间课程"自动隐藏——本班这些课
+     *   现在有真实时间了（就是上面这批行），继续挂在无固定时间列表里是重复信息。
+     *
+     * 只在服务端明确命中本班时调用（见 UnifiedSyncViewModel.stepClassLab）：
+     * "没匹配到班级"的空响应不能拿来清空本地已有的 LAB 行。
+     */
+    suspend fun applyClassSchedule(
+        courses: List<CourseEntity>,
+        hideUnscheduledContaining: List<String>,
+    ) = db.withTransaction {
+        val hiddenBefore = courseDao.getBySource(CourseEntity.SOURCE_LAB)
+            .filter { it.hidden }
+            .map { it.taskId }
+            .toSet()
+        courseDao.deleteBySource(CourseEntity.SOURCE_LAB)
+        courseDao.insertAll(courses.map { if (it.taskId in hiddenBefore) it.copy(hidden = true) else it })
+        if (hideUnscheduledContaining.isNotEmpty()) {
+            courseDao.getBySource(CourseEntity.SOURCE_IMPORT)
+                .filter { course ->
+                    course.isUnscheduled && !course.hidden &&
+                        hideUnscheduledContaining.any { p -> p.isNotBlank() && course.name.contains(p) }
+                }
+                .forEach { courseDao.setHidden(it.id, true) }
+        }
+    }.also { markCloudDirty() }
+
     /** 原样插入课程行（保留 source，用于编辑展开后的多行写回与云恢复）。 */
     suspend fun insertCourses(courses: List<CourseEntity>) =
         courseDao.insertAll(courses).also { markCloudDirty() }

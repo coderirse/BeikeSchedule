@@ -6,6 +6,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -22,12 +23,14 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -106,6 +109,8 @@ fun ProfileScreen(
     val cloudBusy by viewModel.cloudBusy.collectAsStateWithLifecycle()
     // 自有更新源失败时的原因：失败会静默回退 GitHub，没有这行用户/排查都看不到真相
     val serverCheckNote by viewModel.serverCheckNote.collectAsStateWithLifecycle()
+    // 应用内更新下载的字节级进度；null = 没有下载在进行
+    val downloadProgress by UpdateInstaller.progress.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showUpdateDialog by rememberSaveable { mutableStateOf(false) }
     var showClearCacheConfirm by rememberSaveable { mutableStateOf(false) }
@@ -307,16 +312,19 @@ fun ProfileScreen(
                 icon = { Icon(Icons.Default.SystemUpdate, null, Modifier.size(20.dp)) },
                 title = "检查更新",
                 value = updateSubtitle,
+                // 有更新时这一行退化为状态展示，详情与操作都在下方的更新卡片里
                 trailing = if (update is UpdateState.Available) {
-                    { TextButton(onClick = { showUpdateDialog = true }) { Text("查看") } }
+                    null
                 } else {
                     { TextButton(onClick = { viewModel.checkUpdate() }) { Text("检查") } }
                 },
                 onClick = {
-                    val u = update
-                    if (u is UpdateState.Available) showUpdateDialog = true else viewModel.checkUpdate()
+                    if (update !is UpdateState.Available) viewModel.checkUpdate()
                 },
             )
+            (update as? UpdateState.Available)?.let { available ->
+                UpdateCard(available, downloadProgress)
+            }
             if (serverCheckNote != null) {
                 // 自有源挂了但 GitHub 兜底成功时，这一行是唯一的可见线索：
                 // 例如"签名校验未通过"= 响应在链路上被改过，"读不到本机版本号"= 系统包管理异常
@@ -496,53 +504,45 @@ fun ProfileScreen(
         }
     }
 
+    // force 强更保留不可关闭的阻塞弹窗（页内卡片会被滚走，"必须升级"的语义只能由弹窗
+    // 承担）；非 force 更新一律走上面「检查更新」行下方的页内卡片，不再弹窗。
     if (showUpdateDialog) {
         val u = update
-        // 强更弹窗点「前往下载」后不关闭，按钮必须能禁：连点会重复排队同一文件名，
-        // 两个完成广播各自触发一次校验与拉起安装器
-        val downloading by UpdateInstaller.downloading.collectAsStateWithLifecycle()
-        if (u is UpdateState.Available) {
-            // force 版本：强制更新，弹窗不可点击外部/返回键关闭，也不给"关闭"按钮
+        if (u is UpdateState.Available && u.force) {
+            val dl = downloadProgress
             AlertDialog(
-                onDismissRequest = { if (!u.force) showUpdateDialog = false },
+                onDismissRequest = { /* 必要更新：不允许点外部/返回键关闭，也没有"关闭"按钮 */ },
                 title = { Text("发现新版本 v${u.latestVersion}") },
                 text = {
                     Column {
                         if (u.notes.isNotBlank()) {
                             Text(u.notes, style = MaterialTheme.typography.bodySmall)
                         }
-                        if (u.force) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "此版本为必要更新，请升级后继续使用",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        if (dl != null) {
                             Spacer(Modifier.height(8.dp))
-                            Text(
-                                "此版本为必要更新，请升级后继续使用",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
+                            if (dl.total > 0) {
+                                LinearProgressIndicator(
+                                    progress = { (dl.bytes.toFloat() / dl.total).coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            } else {
+                                LinearProgressIndicator(Modifier.fillMaxWidth())
+                            }
                         }
                     }
                 },
                 confirmButton = {
                     TextButton(
-                        enabled = !downloading,
-                        onClick = {
-                            // 直链 APK + 有签名认证过的摘要：应用内下载→校验→安装；
-                            // 其余（GitHub 页面/旧约定无摘要）保持浏览器链路，
-                            // 依赖系统同签名检查兜底
-                            if (UpdateInstaller.canInstallInApp(u.url, u.apkSha256)) {
-                                UpdateInstaller.downloadAndInstall(context, u.url, u.apkSha256)
-                            } else {
-                                context.openExternal(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(u.url)),
-                                    "未找到可打开网页的应用",
-                                )
-                            }
-                            if (!u.force) showUpdateDialog = false
-                        },
-                    ) { Text(if (downloading) "下载中…" else "前往下载") }
+                        enabled = dl == null,
+                        onClick = { startUpdateDownload(context, u) },
+                    ) { Text(if (dl == null) "前往下载" else "下载中…") }
                 },
-                dismissButton = if (!u.force) {
-                    { TextButton(onClick = { showUpdateDialog = false }) { Text("关闭") } }
-                } else null,
             )
         }
     }
@@ -748,6 +748,103 @@ private fun SettingsItemRow(
             trailing?.invoke()
         }
     }
+}
+
+/**
+ * 有新版本时在「检查更新」行下方原地展开的更新卡片：
+ * 版本号 + 大小 + 更新日志 + 「获取更新」按钮；点击后原地变进度条（应用内下载，
+ * 字节级进度来自 UpdateInstaller.progress），校验通过自动跳系统安装页。
+ */
+@Composable
+private fun UpdateCard(
+    available: UpdateState.Available,
+    download: UpdateInstaller.Progress?,
+) {
+    val context = LocalContext.current
+    Card(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)),
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "发现新版本 v${available.latestVersion}",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                if (available.size > 0) {
+                    Text(
+                        formatBytes(available.size),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (available.notes.isNotBlank()) {
+                Text(available.notes, style = MaterialTheme.typography.bodySmall)
+            }
+            if (available.force) {
+                Text(
+                    "此版本为必要更新，请升级后继续使用",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (download != null) {
+                // 下载中：进度条 + 百分比；服务端没给 Content-Length 时退化为不定长
+                if (download.total > 0) {
+                    val fraction = (download.bytes.toFloat() / download.total).coerceIn(0f, 1f)
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "下载中 ${(fraction * 100).toInt()}% · " +
+                            "${formatBytes(download.bytes)} / ${formatBytes(download.total)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text(
+                        "下载中 ${formatBytes(download.bytes)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { startUpdateDownload(context, available) },
+                ) { Text("获取更新") }
+            }
+        }
+    }
+}
+
+/**
+ * 启动更新获取：直链 APK + 有签名认证过的摘要 → 应用内下载→校验→跳系统安装页；
+ * 其余（GitHub 页面/旧约定无摘要）保持浏览器链路，依赖系统同签名检查兜底。
+ */
+private fun startUpdateDownload(context: Context, available: UpdateState.Available) {
+    if (UpdateInstaller.canInstallInApp(available.url, available.apkSha256)) {
+        UpdateInstaller.downloadAndInstall(context, available.url, available.apkSha256)
+    } else {
+        context.openExternal(
+            Intent(Intent.ACTION_VIEW, Uri.parse(available.url)),
+            "未找到可打开网页的应用",
+        )
+    }
+}
+
+/** 字节数的人类可读形式（更新卡片的大小与进度共用）。 */
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1L shl 20 -> "%.1f MB".format(bytes / 1048576f)
+    bytes >= 1L shl 10 -> "%.0f KB".format(bytes / 1024f)
+    else -> "$bytes B"
 }
 
 /** 学籍信息大卡片内的 label:value 行。 */
