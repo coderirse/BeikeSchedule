@@ -409,6 +409,7 @@ fun ScheduleScreen(
             sectionTimes = state.sectionTimes,
             isSample = course.source == CourseEntity.SOURCE_SAMPLE,
             isImported = course.source == CourseEntity.SOURCE_IMPORT,
+            isLab = course.source == CourseEntity.SOURCE_LAB,
             onDismiss = { detailCourse = null },
             onEdit = {
                 detailCourse = null

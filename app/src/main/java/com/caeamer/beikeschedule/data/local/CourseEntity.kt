@@ -24,8 +24,10 @@ data class CourseEntity(
     val endSection: Int,       // 结束小节（对应教务 JSJC）
     val weekBitmap: String,    // 教务 ZC 位图：ZC[i] 对应第 i 周（index 0 恒为 '0' 占位），'1'=该周有课
     val colorIndex: Int,       // 色板下标（教务 XB；99999 视为无固定时间课程）
-    val source: Int,           // 0=教务导入 1=手动添加 2=示例
+    val source: Int,           // 0=教务导入 1=手动添加 2=示例 3=班级实验安排
     val hidden: Boolean = false, // 教务导入课程可隐藏而非删除（手动/示例课程不可用）
+    /** 备注（如"8:30 到岗"）。教务导入没有该字段，仅班级实验安排等来源使用。 */
+    val note: String = "",
 ) {
     fun hasClassOnWeek(week: Int): Boolean =
         week in 1 until weekBitmap.length && weekBitmap[week] == '1'
@@ -36,6 +38,11 @@ data class CourseEntity(
         const val SOURCE_IMPORT = 0
         const val SOURCE_MANUAL = 1
         const val SOURCE_SAMPLE = 2   // 示例数据，可一键清除
+        /**
+         * 班级实验/上机安排（服务端按班级下发，教务系统拿不到）。
+         * 每次"登录并同步"整组替换，按 [taskId]（= 服务端场次稳定 id）保留用户的隐藏状态。
+         */
+        const val SOURCE_LAB = 3
         const val COLOR_UNSCHEDULED = 99999
     }
 }

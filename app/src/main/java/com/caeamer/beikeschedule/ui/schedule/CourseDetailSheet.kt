@@ -31,7 +31,7 @@ import com.caeamer.beikeschedule.model.WeekUtils
 /** 周一..周日的中文单字；下标 0 起。 */
 private const val WEEKDAY_NAMES = "一二三四五六日"
 
-/** 课程详情底部弹层：信息展示 + 编辑/删除（手动或示例）/隐藏（教务导入）入口。 */
+/** 课程详情底部弹层：信息展示 + 编辑/删除（手动或示例）/隐藏（教务导入、班级实验安排）入口。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CourseDetailSheet(
@@ -39,6 +39,8 @@ fun CourseDetailSheet(
     sectionTimes: List<SectionTimeEntity>,
     isSample: Boolean,
     isImported: Boolean,
+    /** 班级实验安排（服务端下发）：每次同步整组替换，只能隐藏不能删除。 */
+    isLab: Boolean = false,
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -67,6 +69,13 @@ fun CourseDetailSheet(
                 InfoText("周$dayName $bigSection $time")
             }
             InfoText("周数：${WeekUtils.describe(course.weekBitmap)}")
+            // 备注来自班级实验安排（如"8:30 到岗"）：教务导入行没有该字段，非空才显示
+            if (course.note.isNotBlank()) {
+                InfoText("备注：${course.note}")
+            }
+            if (isLab) {
+                InfoText("来自班级实验安排，每次同步自动更新")
+            }
 
             Spacer(Modifier.height(24.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -86,9 +95,9 @@ fun CourseDetailSheet(
                     Spacer(Modifier.width(4.dp))
                     Text("隐藏", color = MaterialTheme.colorScheme.error)
                 }
-                // 教务导入课只能隐藏不能删除（下次导入会原样回来，删了没意义）；
+                // 教务导入课与班级实验安排都只能隐藏不能删除（下次导入/同步会原样回来）；
                 // 自定义课与示例课保留删除。
-                if (!isImported) {
+                if (!isImported && !isLab) {
                     TextButton(onClick = onDelete) {
                         Icon(
                             Icons.Default.Delete, null, Modifier.size(18.dp),

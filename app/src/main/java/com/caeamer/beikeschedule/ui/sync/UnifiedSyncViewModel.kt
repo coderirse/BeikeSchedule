@@ -8,6 +8,8 @@ import com.caeamer.beikeschedule.BuildConfig
 import com.caeamer.beikeschedule.data.backup.CloudSync
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.data.remote.CloudApi
+import com.caeamer.beikeschedule.data.remote.CloudAuthException
+import com.caeamer.beikeschedule.data.remote.ClassScheduleMapper
 import com.caeamer.beikeschedule.data.remote.JwSessionTicket
 import com.caeamer.beikeschedule.data.remote.QrAuthApi
 import com.caeamer.beikeschedule.data.remote.QrTargetTracker
@@ -285,6 +287,7 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
             SyncStep.CLOUD_TOKEN -> stepCloudToken()
             SyncStep.TIMETABLE -> stepTimetable()
             SyncStep.GRADES -> stepGrades()
+            SyncStep.CLASS_LAB -> stepClassLab()
             SyncStep.BACKUP -> stepBackup()
             SyncStep.RESTORE -> stepRestore()
         }
@@ -497,8 +500,40 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun stepBackup(): SyncStepResult {
-        token ?: return failed(SyncStep.BACKUP, "未登录云账号")
+    /**
+     * 班级实验/上机安排：教务系统**拿不到**的数据（老师在群里通知），服务端按班级下发。
+     *
+     * 依赖前两步的产物：云 token（②）+ 班级名（④ 抓取的学籍，或云端恢复里的 profile）。
+     * 失败不阻断其余步骤，但标成失败——「重试失败项」会把它补跑；反过来，服务端**明确
+     * 没匹配到本班**（响应 class 为空）不是失败，保持本地已有 LAB 行不动。
+     */
+    private suspend fun stepClassLab(): SyncStepResult {
+        val cloudToken = token ?: return failed(SyncStep.CLASS_LAB, "未登录云账号")
+        return try {
+            val semester = settings.semester.first()
+            val cls = settings.studentProfile.first().bjmc.trim()
+            if (semester.xn.isBlank() || semester.xq.isBlank()) {
+                return failed(SyncStep.CLASS_LAB, "未取得学年学期，请先完成课表导入")
+            }
+            if (cls.isBlank()) return failed(SyncStep.CLASS_LAB, "未取得班级（学籍），请重新同步")
+            val schedule = CloudApi.classSchedule(cloudToken, semester.xn, semester.xq, cls)
+            if (schedule.className.isBlank()) {
+                return ok(SyncStep.CLASS_LAB, "本班暂无实验/上机安排")
+            }
+            val courses = ClassScheduleMapper.toCourses(schedule.sessions)
+            repo.applyClassSchedule(courses, schedule.hideUnscheduledContaining)
+            if (courses.isEmpty()) return ok(SyncStep.CLASS_LAB, "本班暂无实验/上机安排")
+            ok(SyncStep.CLASS_LAB, "已更新 ${courses.size} 场实验/上机 · ${schedule.className}")
+        } catch (e: CloudAuthException) {
+            failed(SyncStep.CLASS_LAB, e.message ?: "登录已过期，请重新同步")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failed(SyncStep.CLASS_LAB, "更新失败：${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    private suspend fun stepBackup(): SyncStepResult {        token ?: return failed(SyncStep.BACKUP, "未登录云账号")
         return try {
             settings.setCloudSyncEnabled(true)
             val result = withContext(Dispatchers.IO) { CloudSync.manualBackup(getApplication()) }

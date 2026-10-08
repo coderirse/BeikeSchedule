@@ -497,6 +497,7 @@ private fun SwitchRow(
 private fun courseSourceLabel(course: CourseEntity): String = when (course.source) {
     CourseEntity.SOURCE_IMPORT -> "教务"
     CourseEntity.SOURCE_SAMPLE -> "示例"
+    CourseEntity.SOURCE_LAB -> "实验安排"
     else -> "自定义"
 }
 
