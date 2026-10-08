@@ -28,6 +28,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -531,7 +532,12 @@ private fun DateRow(
                     modifier = Modifier.background(
                         if (isToday) MaterialTheme.colorScheme.primary else Color.Transparent,
                         RoundedCornerShape(10.dp),
-                    ).padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                        // 左右留白 6dp（原 8dp）：胶囊内文字可用宽度本就只剩 ~30dp，
+                        // 「10/20」这类两位宽数字的日期（ROM 比例字体下 "1" 窄、"0/2" 宽）
+                        // 会超出 1~2px，默认软换行把末位数字甩到第二行（像日期下挂了个小数字）。
+                        // 让出的这 2dp 正好覆盖这个余量，正常字号下日期无需缩放
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
@@ -544,6 +550,15 @@ private fun DateRow(
                         Text(
                             "${date.monthValue}/${date.dayOfMonth}",
                             fontSize = 10.sp,
+                            // 钉死单行 + 放不下时自动缩号：列宽随屏幕/字体缩放变化，
+                            // 一旦装不下就换行会误解读日期本身，缩号只是略小、语义不变
+                            maxLines = 1,
+                            softWrap = false,
+                            autoSize = TextAutoSize.StepBased(
+                                minFontSize = 8.sp,
+                                maxFontSize = 10.sp,
+                                stepSize = 0.5.sp,
+                            ),
                             color = if (isToday) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
                             else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
