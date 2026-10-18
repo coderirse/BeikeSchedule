@@ -1,0 +1,14 @@
+[Unit]
+Description=BeikeSchedule server
+After=network.target mysql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/beike
+ExecStart=/usr/local/bin/node /opt/beike/src/index.js
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

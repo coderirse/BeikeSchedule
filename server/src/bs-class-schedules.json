@@ -1,0 +1,89 @@
+{
+  "_comment": "班级实验/上机安排（教务系统拿不到、由任课老师在群里通知的数据）。按「学年-学期」→「班级」组织，班级键与客户端上报的学籍班级名做包含匹配；每个班一份 sessions + 需要自动隐藏的无固定时间课程名片段。改这里的内容后跑 scripts/deploy.sh 即生效，客户端无需发版。",
+  "semesters": {
+    "2026-2027-1": {
+      "机243": {
+        "hideUnscheduledContaining": ["工程数值计算", "电工实验"],
+        "sessions": [
+          {
+            "id": "lab-2627-1-num-1",
+            "name": "工程数值计算（上机）",
+            "dayOfWeek": 3,
+            "startSection": 1,
+            "endSection": 2,
+            "weeks": [7],
+            "location": "",
+            "note": "",
+            "colorIndex": 2
+          },
+          {
+            "id": "lab-2627-1-ee-1",
+            "name": "电工实验（第1次）",
+            "dayOfWeek": 5,
+            "startSection": 1,
+            "endSection": 4,
+            "weeks": [7],
+            "location": "201/202 实验室",
+            "note": "8:30 到岗",
+            "colorIndex": 5
+          },
+          {
+            "id": "lab-2627-1-num-2",
+            "name": "工程数值计算（上机）",
+            "dayOfWeek": 1,
+            "startSection": 7,
+            "endSection": 10,
+            "weeks": [8],
+            "location": "",
+            "note": "",
+            "colorIndex": 2
+          },
+          {
+            "id": "lab-2627-1-ee-2",
+            "name": "电工实验（第2次）",
+            "dayOfWeek": 2,
+            "startSection": 1,
+            "endSection": 4,
+            "weeks": [9],
+            "location": "201/202 实验室",
+            "note": "8:30 到岗",
+            "colorIndex": 5
+          },
+          {
+            "id": "lab-2627-1-ee-3",
+            "name": "电工实验（第3次）",
+            "dayOfWeek": 2,
+            "startSection": 1,
+            "endSection": 4,
+            "weeks": [11],
+            "location": "201/202 实验室",
+            "note": "8:30 到岗",
+            "colorIndex": 5
+          },
+          {
+            "id": "lab-2627-1-ee-4",
+            "name": "电工实验（第4次）",
+            "dayOfWeek": 2,
+            "startSection": 1,
+            "endSection": 4,
+            "weeks": [13],
+            "location": "201/202 实验室",
+            "note": "8:30 到岗",
+            "colorIndex": 5
+          },
+          {
+            "id": "lab-2627-1-ee-5",
+            "name": "电工实验（第5次）",
+            "dayOfWeek": 2,
+            "startSection": 1,
+            "endSection": 4,
+            "weeks": [15],
+            "location": "201/202 实验室",
+            "note": "8:30 到岗，本学期最后一次",
+            "colorIndex": 5
+          }
+        ]
+      }
+    }
+  }
+}
