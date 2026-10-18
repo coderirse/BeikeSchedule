@@ -24,9 +24,9 @@ LOCAL_PATH="$TARBALL"
 command -v cygpath >/dev/null && LOCAL_PATH="$(cygpath -w "$TARBALL")"
 MSYS_NO_PATHCONV=1 "$WB" upload "$LOCAL_PATH" /tmp/ --instance-id "$INSTANCE_ID" --region "$REGION" -f
 
-echo "[3/4] 服务器解压（先删旧 src，避免残留模块）..."
+echo "[3/4] 服务器解压（先删旧 src，避免残留模块；私钥从 secrets/ 恢复）..."
 MSYS_NO_PATHCONV=1 "$WB" exec --instance-id "$INSTANCE_ID" --region "$REGION" \
-  --command "mkdir -p $REMOTE_DIR && rm -rf $REMOTE_DIR/src && tar -xzf /tmp/beike-server.tar.gz -C $REMOTE_DIR && rm -f /tmp/beike-server.tar.gz" \
+  --command "mkdir -p $REMOTE_DIR && rm -rf $REMOTE_DIR/src && tar -xzf /tmp/beike-server.tar.gz -C $REMOTE_DIR && rm -f /tmp/beike-server.tar.gz && for f in $REMOTE_DIR/secrets/*.pem; do [ -f \"\$f\" ] && cp -f \"\$f\" $REMOTE_DIR/src/; done" \
   --timeout 120
 
 echo "[4/4] 重启服务并健康检查..."
