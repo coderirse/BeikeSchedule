@@ -37,3 +37,15 @@ keystore/
 /latest_*.json
 __pycache__/
 .workbuddy/
+
+# Kotlin/Gradle 会话产物与本机取证输出目录
+.kotlin/
+/out/
+
+# AI 工具残留（会话库/计划/插件缓存，不入库）
+.v2c/
+.zcode/
+.zcodeignore
+.kilo/
+/nul
+/tmpwebapp*.log
