@@ -235,7 +235,7 @@ MainActivity 内手写状态机：`tab`（schedule/jw/mine）+ `showSync` + `sho
 ### 阶段 0：低风险高收益（1–2 天）
 - 修 §5.1「隐藏周末吞补课列」bug（含单测）。
 - MainActivity `onCreate` 补一次考试/日程 `reschedule`（消除"打开 App 不重排"的隐式依赖），并把每日脉冲武装与上课重排解耦。
-- ~~仓库卫生 P0~~（2026-11-07 已大扫除：AI 残留/取证文件已删、28 个已合并本地分支已删、gitignore 增补防再生；**剩余**：根目录 28 个历史 APK + 11 个 latest json 待归档、远端已合并分支未清、`docs/TECH_DESIGN.md` 历史标注未加）。
+- ~~仓库卫生 P0~~（2026-11-07 已大扫除：AI 残留/取证文件已删、28 个已合并本地分支已删、gitignore 增补防再生；2026-11-08 历史 APK 归档完成：6 个有源码提交的版本补 tag + GitHub Release，8 个无提交孤儿包与 latest_*.json 挪 `D:\Archive\BeikeSchedule-releases\`，根目录 APK 全清。**剩余**：远端已合并分支未清、`docs/TECH_DESIGN.md` 历史标注未加）。
 - 发版脚本化：一个脚本校验 versionCode/README/latest json/签名脚本四处一致并产出元数据（当前最高频人为事故点）。
 
 ### 阶段 1：接手必须补的"门禁"（约 1 周）
@@ -266,7 +266,7 @@ MainActivity 内手写状态机：`tab`（schedule/jw/mine）+ `showSync` + `sho
 - [x] ~~修 §5.1 bug 并提交（含中文反引号名单测）~~（2026-11-07，05a8bf2）。
 - [ ] 真机装 v1.5.3 → 走一遍"扫码登录/课表/成绩/日程/无课教室/云同步/检查更新"。
 - [ ] 决定 §5.2 三项产品/安全口径，排入 backlog。
-- [x] 清理仓库卫生（2026-11-07：AI 残留/本地已合并分支已清；历史 APK/latest json 归档与 TECH_DESIGN 历史标注仍待做）。
+- [x] 清理仓库卫生（2026-11-07/08：AI 残留/本地已合并分支/根目录 APK 已清，历史包归档 GitHub 与 `D:\Archive\BeikeSchedule-releases\`；TECH_DESIGN 历史标注仍待做）。
 
 ---
 
