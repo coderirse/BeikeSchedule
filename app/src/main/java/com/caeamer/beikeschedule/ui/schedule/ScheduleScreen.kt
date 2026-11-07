@@ -160,13 +160,10 @@ fun ScheduleScreen(
     // 「隐藏周末」开启时，若所选教学周里有周末补课日（如 10/10 周六补周三的课），
     // 周六/周日列仍要显示——否则补课的课在网格上无处可看
     val visibleDays = remember(hideWeekend, state.semester, state.selectedWeek) {
-        if (!hideWeekend) {
+        if (!hideWeekend || WeekResolver.hasWeekendMakeup(state.semester, state.selectedWeek)) {
             (1..7).toList()
         } else {
-            val monday = WeekResolver.weekMonday(state.semester, state.selectedWeek)
-            val hasWeekendMakeup = monday != null && WeekResolver.parseMakeups(state.semester.makeups)
-                .any { (date, _) -> date.dayOfWeek.value >= 6 && !date.isBefore(monday) && !date.isAfter(monday.plusDays(6)) }
-            if (hasWeekendMakeup) (1..7).toList() else (1..5).toList()
+            (1..5).toList()
         }
     }
 

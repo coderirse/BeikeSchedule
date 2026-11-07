@@ -134,6 +134,33 @@ class WeekResolverDayScheduleTest {
     }
 
     @Test
+    fun `隐藏周末_内置周六补课周仍显示周末列`() {
+        // 回归：visibleDays 曾只查存量 makeups，内置补课（10/10 周六）整列被吞但提醒照排
+        assertTrue(semester.makeups.isEmpty())
+        assertTrue(WeekResolver.hasWeekendMakeup(semester, 4))
+    }
+
+    @Test
+    fun `隐藏周末_无补课的教学周不显示周末列`() {
+        assertFalse(WeekResolver.hasWeekendMakeup(semester, 5))
+    }
+
+    @Test
+    fun `隐藏周末_存量周末补课配置仍生效`() {
+        // 无内置数据的学期，走存量配置路径（云恢复兼容）；10/17 周六落在第 5 周
+        val other = semester.copy(xn = "other-school", xq = "2", makeups = listOf("2026-10-17:3"))
+        assertTrue(WeekResolver.hasWeekendMakeup(other, 5))
+        assertFalse(WeekResolver.hasWeekendMakeup(other, 4))
+    }
+
+    @Test
+    fun `隐藏周末_工作日补课不触发周末列`() {
+        // 10/14 周三补课（少见但口径上不算"周末补课日"）；换学期避开内置 10/10 数据
+        val other = semester.copy(xn = "other-school", xq = "2", makeups = listOf("2026-10-14:3"))
+        assertFalse(WeekResolver.hasWeekendMakeup(other, 4))
+    }
+
+    @Test
     fun `坏数据逐条丢弃不整体作废`() {
         assertTrue(WeekResolver.parseHolidays(listOf("2026-10-05", "not-a-date")).size == 1)
         assertTrue(WeekResolver.parseHolidays(listOf(" 2026-10-06 ")).size == 1)

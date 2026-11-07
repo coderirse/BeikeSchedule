@@ -138,6 +138,18 @@ object WeekResolver {
         return DaySchedule(week, date.dayOfWeek.value, holiday, makeup = false)
     }
 
+    /**
+     * 「隐藏周末」时第 [week] 教学周是否仍要显示周末列：本周内有周末补课日。
+     * 必须用与 [daySchedule] 相同的"内置 ∪ 存量"口径——只查存量会把内置补课日
+     * （如 2026-10-10 周六补周三）整列吞掉，而提醒照排，"看不见却会响"。
+     */
+    fun hasWeekendMakeup(semester: SettingsStore.SemesterConfig, week: Int): Boolean {
+        val monday = weekMonday(semester, week) ?: return false
+        val sunday = monday.plusDays(6)
+        val makeups = parseMakeups(semester.makeups) + SchoolAdjustments.makeupsFor(semester.xn, semester.xq)
+        return makeups.keys.any { it.dayOfWeek.value >= 6 && !it.isBefore(monday) && !it.isAfter(sunday) }
+    }
+
     /** 放假日集合：非法日期串逐条丢弃（集合无下标，不存在 weekMondays 那种错位问题）。 */
     fun parseHolidays(holidays: List<String>): Set<LocalDate> =
         holidays.mapNotNullTo(mutableSetOf()) { runCatching { LocalDate.parse(it.trim()) }.getOrNull() }
