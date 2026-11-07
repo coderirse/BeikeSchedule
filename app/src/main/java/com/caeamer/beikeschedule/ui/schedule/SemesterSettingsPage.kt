@@ -72,6 +72,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.reminder.ClassReminderScheduler
+import com.caeamer.beikeschedule.reminder.ReminderBackgroundAccess
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -142,9 +143,17 @@ fun SemesterSettingsPage(
     // 页面会一直挂着"已被系统关闭"的过期结论，用户得退出重进才看到真相。
     var notificationsBlocked by remember { mutableStateOf(areNotificationsBlocked(context)) }
     var exactAlarmBlocked by remember { mutableStateOf(isExactAlarmBlocked(context)) }
+    var batteryOptimizationIgnored by remember {
+        mutableStateOf(ReminderBackgroundAccess.isBatteryOptimizationIgnored(context))
+    }
+    var backgroundRestricted by remember {
+        mutableStateOf(ReminderBackgroundAccess.isBackgroundRestricted(context))
+    }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         notificationsBlocked = areNotificationsBlocked(context)
         exactAlarmBlocked = isExactAlarmBlocked(context)
+        batteryOptimizationIgnored = ReminderBackgroundAccess.isBatteryOptimizationIgnored(context)
+        backgroundRestricted = ReminderBackgroundAccess.isBackgroundRestricted(context)
     }
 
     // 开启上课提醒前需要先拿到通知权限（Android 13+）；saveable：权限系统弹窗由独立
@@ -323,7 +332,7 @@ fun SemesterSettingsPage(
                             }
                             if (exactAlarmBlocked) {
                                 Text(
-                                    "系统未授予精确闹钟权限，提醒可能延迟几分钟",
+                                    "系统未授予精确闹钟权限，课前提醒可能延迟。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.error,
                                 )
@@ -332,10 +341,34 @@ fun SemesterSettingsPage(
                                     runCatching {
                                         context.startActivity(
                                             Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                                                .setData(android.net.Uri.parse("package:${context.packageName}"))
                                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                                         )
                                     }
                                 }) { Text("去开启精确闹钟") }
+                            }
+                            if (!batteryOptimizationIgnored || backgroundRestricted) {
+                                Text(
+                                    "后台运行受系统限制，锁屏或退出后可能收不到提醒。请允许本应用在后台运行。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                                TextButton(onClick = { ReminderBackgroundAccess.openBatterySettings(context) }) {
+                                    Text("允许后台运行")
+                                }
+                            }
+                            if (ReminderBackgroundAccess.isVivo) {
+                                Text(
+                                    "为保证锁屏和后台提醒，请允许后台耗电并开启自启动。可在应用信息 → 电量 → 后台耗电管理中设置，返回后会自动恢复提醒。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                TextButton(onClick = { ReminderBackgroundAccess.openVivoBackgroundSettings(context) }) {
+                                    Text("检查后台耗电设置")
+                                }
+                                TextButton(onClick = { ReminderBackgroundAccess.openVivoStartupSettings(context) }) {
+                                    Text("检查自启动设置")
+                                }
                             }
                         }
                     }
@@ -527,7 +560,7 @@ private fun openNotificationSettings(context: Context) {
 /** 诊断文案："已排 N 个提醒 · 最近一次：明天 07:45"。 */
 private fun reminderStatusText(info: ReminderScheduleInfo): String {
     val next = info.nextTriggerAtMillis ?: return "当前没有需要提醒的课（未开学 / 假期中 / 本学期已结束）"
-    return "已排 ${info.scheduledCount} 个提醒 · 最近一次：${formatTrigger(next)}"
+    return "提醒计划 ${info.scheduledCount} 个 · 最近一次：${formatTrigger(next)}"
 }
 
 private fun formatTrigger(millis: Long): String {

@@ -46,6 +46,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.lifecycleScope
+import com.caeamer.beikeschedule.reminder.ReminderRecovery
+import kotlinx.coroutines.launch
 import com.caeamer.beikeschedule.data.backup.CloudSync
 import com.caeamer.beikeschedule.data.pref.AppSession
 import com.caeamer.beikeschedule.data.pref.ScorePrivacy
@@ -119,6 +122,13 @@ private fun TabItem(
 }
 
 class MainActivity : ComponentActivity() {
+
+    override fun onResume() {
+        super.onResume()
+        // 从后台/权限设置返回时 ViewModel 往往仍存活，distinctUntilChanged 不会再发射。
+        // 必须独立恢复系统闹钟，不能相信上次写入的排期记录仍然有效。
+        lifecycleScope.launch { ReminderRecovery.rescheduleAll(applicationContext) }
+    }
 
     /**
      * 成绩隐私复位 + 课表定位复位：App 退到后台（Home/切应用/锁屏/划掉后台）即生效。

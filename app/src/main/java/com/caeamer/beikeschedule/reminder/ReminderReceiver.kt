@@ -36,11 +36,7 @@ class ReminderReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             val app = context.applicationContext
             try {
-                // 根协程未捕获异常会直接崩进程，所以每个都要 runCatching；但**不能**共用一个
-                // 包住三个——第一个抛异常会连带跳过考试与日程的重排（与 BootReceiver 同口径）。
-                runCatching { ClassReminderScheduler.reschedule(app) }
-                runCatching { ExamReminderScheduler.reschedule(app) }
-                runCatching { TodoReminderScheduler.reschedule(app) }
+                ReminderRecovery.rescheduleAll(app)
             } finally {
                 pending.finish()
             }

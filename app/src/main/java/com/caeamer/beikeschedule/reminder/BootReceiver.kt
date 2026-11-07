@@ -1,5 +1,6 @@
 package com.caeamer.beikeschedule.reminder
 
+import android.app.AlarmManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -26,19 +27,18 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_TIMEZONE_CHANGED,
             Intent.ACTION_DATE_CHANGED,
             Intent.ACTION_MY_PACKAGE_REPLACED,
+            AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED,
             -> Unit
             else -> return
         }
+        if (intent.action == AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED &&
+            !context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+        ) return
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             val app = context.applicationContext
             try {
-                // 根协程未捕获异常会直接崩进程，所以每个都要 runCatching；但**不能**共用一个
-                // 包住三个——第一个抛异常（DataStore/Room IO 错误，SettingsStore 注释里自认
-                // 可能发生）会连带跳过考试与日程的重排。
-                runCatching { ClassReminderScheduler.reschedule(app) }
-                runCatching { ExamReminderScheduler.reschedule(app) }
-                runCatching { TodoReminderScheduler.reschedule(app) }
+                ReminderRecovery.rescheduleAll(app)
             } finally {
                 pending.finish()
             }
