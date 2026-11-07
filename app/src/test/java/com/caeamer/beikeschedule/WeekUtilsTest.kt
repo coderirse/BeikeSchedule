@@ -7,6 +7,24 @@ import org.junit.Test
 /** 周次位图工具单测。 */
 class WeekUtilsTest {
 
+    @Test fun `single occurrence uses explicit week instead of parity`() {
+        for (week in listOf(7, 8)) {
+            val bitmap = WeekUtils.buildWeekBitmap(week, week, WeekUtils.WEEK_TYPE_ALL, 20)
+            assertEquals("", WeekUtils.oddEvenLabel(bitmap))
+            assertEquals("第${week}周", WeekUtils.cardLabel(bitmap))
+            assertEquals("${week}周", WeekUtils.describe(bitmap))
+        }
+    }
+
+    @Test fun `card labels require consecutive alternating weeks`() {
+        assertEquals("单周", WeekUtils.cardLabel("010101010"))
+        assertEquals("双周", WeekUtils.cardLabel("001010101"))
+        assertEquals("", WeekUtils.cardLabel("001000001")) // 第2、8周，不能推断为双周课。
+        assertEquals("", WeekUtils.cardLabel("011111111"))
+        assertEquals("", WeekUtils.cardLabel("000000000"))
+        assertEquals("", WeekUtils.cardLabel("0101010001"))
+    }
+
     @Test
     fun `buildWeekBitmap - 连续周`() {
         val bitmap = WeekUtils.buildWeekBitmap(1, 8, WeekUtils.WEEK_TYPE_ALL, 20)

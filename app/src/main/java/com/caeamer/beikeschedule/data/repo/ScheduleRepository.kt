@@ -5,6 +5,7 @@ import androidx.room.withTransaction
 import com.caeamer.beikeschedule.data.backup.CloudSync
 import com.caeamer.beikeschedule.data.local.AppDatabase
 import com.caeamer.beikeschedule.data.local.CourseEntity
+import com.caeamer.beikeschedule.model.CourseVisibility
 import com.caeamer.beikeschedule.data.local.ExamEntity
 import com.caeamer.beikeschedule.data.local.GradeEntity
 import com.caeamer.beikeschedule.data.local.SectionTimeEntity
@@ -88,12 +89,13 @@ class ScheduleRepository(private val context: Context) {
         sectionTimes: List<SectionTimeEntity>,
         clearSample: Boolean = true,
     ) = db.withTransaction {
-        val hiddenBefore = courseDao.getBySource(CourseEntity.SOURCE_IMPORT)
+        val previous = courseDao.getBySource(CourseEntity.SOURCE_IMPORT)
+        val hiddenBefore = previous
             .filter { it.hidden }
             .map { it.taskId to it.name }
             .toSet()
         courseDao.deleteBySource(CourseEntity.SOURCE_IMPORT)
-        val restored = assignImportColors(courses).map { course ->
+        val restored = CourseVisibility.preserveDates(previous, assignImportColors(courses)).map { course ->
             if ((course.taskId to course.name) in hiddenBefore) course.copy(hidden = true) else course
         }
         courseDao.insertAll(restored)
@@ -124,12 +126,14 @@ class ScheduleRepository(private val context: Context) {
         courses: List<CourseEntity>,
         hideUnscheduledContaining: List<String>,
     ) = db.withTransaction {
-        val hiddenBefore = courseDao.getBySource(CourseEntity.SOURCE_LAB)
+        val previous = courseDao.getBySource(CourseEntity.SOURCE_LAB)
+        val hiddenBefore = previous
             .filter { it.hidden }
             .map { it.taskId }
             .toSet()
         courseDao.deleteBySource(CourseEntity.SOURCE_LAB)
-        courseDao.insertAll(courses.map { if (it.taskId in hiddenBefore) it.copy(hidden = true) else it })
+        courseDao.insertAll(CourseVisibility.preserveDates(previous, courses)
+            .map { if (it.taskId in hiddenBefore) it.copy(hidden = true) else it })
         if (hideUnscheduledContaining.isNotEmpty()) {
             courseDao.getBySource(CourseEntity.SOURCE_IMPORT)
                 .filter { course ->
@@ -165,6 +169,13 @@ class ScheduleRepository(private val context: Context) {
     /** 整组隐藏/恢复：单条 UPDATE，不会出现"同一张卡一半隐藏一半显示"的中间态。 */
     suspend fun setCoursesHidden(ids: List<Long>, hidden: Boolean) =
         courseDao.setHiddenForIds(ids, hidden).also { markCloudDirty() }
+
+    suspend fun setCourseOccurrenceHidden(ids: List<Long>, date: LocalDate, hidden: Boolean) =
+        db.withTransaction {
+            courseDao.getByIds(ids).forEach { course ->
+                courseDao.setHiddenDates(course.id, CourseVisibility.withDate(course, date, hidden))
+            }
+        }.also { markCloudDirty() }
 
     /** 载入示例课表（assets 内置的真实教务样本），source=SOURCE_SAMPLE 便于一键清除。 */
     suspend fun loadSampleData(courses: List<CourseEntity>, sectionTimes: List<SectionTimeEntity>) =

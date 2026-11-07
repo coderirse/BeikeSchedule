@@ -20,14 +20,15 @@ class CloudSnapshotTest {
                 CourseDto(
                     taskId = "T001", name = "高等数学", teacher = "张三", location = "【校本部】教学楼101",
                     dayOfWeek = 1, startSection = 1, endSection = 2, weekBitmap = "01111111111111111111111111111111",
-                    colorIndex = 3, source = 0, hidden = true,
+                    colorIndex = 3, source = 0, hidden = true, hiddenDates = "2026-11-05,2026-11-12",
                 ),
             ),
             sectionTimes = listOf(SectionTimeDto(1, "08:00", "08:45")),
             grades = listOf(GradeDto(kcdm = "MATH101", kcmc = "高等数学", xf = 4.0, zzcj = "92", sffx = false)),
             exams = listOf(ExamDto(kcdm = "MATH101", kcmc = "高等数学", ksrq = "2026-09-21", kssj = "09:00")),
             todos = listOf(TodoEntity(id = 7, title = "自习", time = "19:00", repeatMode = TodoEntity.REPEAT_ONCE, date = "2026-09-21")),
-            settings = SettingsDto(semester = SemesterDto(xn = "2026-2027", xq = "1", firstMonday = "2026-09-07")),
+            settings = SettingsDto(semester = SemesterDto(xn = "2026-2027", xq = "1", firstMonday = "2026-09-07"),
+                gradesFetchedAt = 100, examsFetchedAt = 200),
         )
 
         val decoded = CloudSnapshot.decode(CloudSnapshot.encode(snapshot))
@@ -68,6 +69,8 @@ class CloudSnapshotTest {
         assertEquals(1, snapshot.courses.size)
         assertEquals("高等数学", snapshot.courses[0].name)
         assertEquals(2, snapshot.courses[0].dayOfWeek)
+        assertEquals("", snapshot.courses[0].hiddenDates)
+        assertEquals(0L, snapshot.settings.examsFetchedAt)
         assertTrue(snapshot.grades.isEmpty())
     }
 

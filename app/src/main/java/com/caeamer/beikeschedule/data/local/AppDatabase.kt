@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [CourseEntity::class, SectionTimeEntity::class, GradeEntity::class, ExamEntity::class, TodoEntity::class],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -85,6 +85,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v6 → v7：保留原始周次，以日期记录单次隐藏。 */
+        internal val MIGRATE_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `course` ADD COLUMN `hiddenDates` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -95,7 +102,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "beike_schedule.db",
                 )
-                    .addMigrations(MIGRATE_1_2, MIGRATE_2_3, MIGRATE_3_4, MIGRATE_4_5, MIGRATE_5_6)
+                    .addMigrations(MIGRATE_1_2, MIGRATE_2_3, MIGRATE_3_4, MIGRATE_4_5, MIGRATE_5_6, MIGRATE_6_7)
                     // 迁移失败的兜底保险丝。
                     //
                     // **只兜"找不到迁移路径"这一种情况**（Room 的 fallbackToDestructiveMigration

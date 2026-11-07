@@ -176,6 +176,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             val repo = ScheduleRepository(getApplication())
             CloudSync.withoutDirtyMarking {
                 settings.saveGradesMeta("", 0L)
+                settings.saveExamsFetchedAt(0L)
                 settings.saveCreditMeta("", "")
                 repo.replaceGrades(emptyList())
                 repo.replaceExams(emptyList())

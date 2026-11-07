@@ -1,6 +1,7 @@
 package com.caeamer.beikeschedule.data.local
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
 
@@ -25,9 +26,11 @@ data class CourseEntity(
     val weekBitmap: String,    // 教务 ZC 位图：ZC[i] 对应第 i 周（index 0 恒为 '0' 占位），'1'=该周有课
     val colorIndex: Int,       // 色板下标（教务 XB；99999 视为无固定时间课程）
     val source: Int,           // 0=教务导入 1=手动添加 2=示例 3=班级实验安排
-    val hidden: Boolean = false, // 教务导入课程可隐藏而非删除（手动/示例课程不可用）
+    val hidden: Boolean = false, // 整个学期隐藏，适用于所有来源
     /** 备注（如"8:30 到岗"）。教务导入没有该字段，仅班级实验安排等来源使用。 */
     val note: String = "",
+    /** 仅隐藏指定日期的这一次课，ISO 日期以逗号分隔；不改变原始周次。 */
+    @ColumnInfo(defaultValue = "''") val hiddenDates: String = "",
 ) {
     fun hasClassOnWeek(week: Int): Boolean =
         week in 1 until weekBitmap.length && weekBitmap[week] == '1'

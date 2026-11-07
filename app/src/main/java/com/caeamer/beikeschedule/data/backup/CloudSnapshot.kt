@@ -94,6 +94,7 @@ data class CourseDto(
     val hidden: Boolean = false,
     /** 备注（班级实验安排等来源；旧快照没有该字段，默认空串）。 */
     val note: String = "",
+    val hiddenDates: String = "",
 )
 
 @Serializable
@@ -145,6 +146,7 @@ data class SettingsDto(
     val themeMode: String = "",
     val gpaJson: String = "",
     val gradesFetchedAt: Long = 0,
+    val examsFetchedAt: Long = 0,
     val xflbyqJson: String = "",
     val bxkqkJson: String = "",
     val studentProfile: StudentProfileDto = StudentProfileDto(),
@@ -228,6 +230,7 @@ object CloudSnapshotCodec {
                     themeMode = settings.themeMode.first().name,
                     gpaJson = settings.gpaCache.first(),
                     gradesFetchedAt = settings.gradesFetchedAt.first(),
+                    examsFetchedAt = settings.examsFetchedAt.first(),
                     xflbyqJson = settings.xflbyqJson.first(),
                     bxkqkJson = settings.bxkqkJson.first(),
                     studentProfile = StudentProfileDto(
@@ -277,6 +280,7 @@ object CloudSnapshotCodec {
         val theme = runCatching { SettingsStore.ThemeMode.valueOf(s.themeMode) }.getOrNull()
         if (theme != null) settings.setThemeMode(theme)
         settings.saveGradesMeta(s.gpaJson, s.gradesFetchedAt)
+        settings.saveExamsFetchedAt(s.examsFetchedAt.takeIf { it > 0 } ?: s.gradesFetchedAt)
         settings.saveCreditMeta(s.xflbyqJson, s.bxkqkJson)
         settings.saveStudentProfile(
             SettingsStore.StudentProfile(
@@ -299,14 +303,14 @@ object CloudSnapshotCodec {
         taskId = taskId, name = name, teacher = teacher, location = location,
         dayOfWeek = dayOfWeek, startSection = startSection, endSection = endSection,
         weekBitmap = weekBitmap, colorIndex = colorIndex, source = source, hidden = hidden,
-        note = note,
+        note = note, hiddenDates = hiddenDates,
     )
 
     private fun CourseDto.toEntity() = CourseEntity(
         id = 0, taskId = taskId, name = name, teacher = teacher, location = location,
         dayOfWeek = dayOfWeek, startSection = startSection, endSection = endSection,
         weekBitmap = weekBitmap, colorIndex = colorIndex, source = source, hidden = hidden,
-        note = note,
+        note = note, hiddenDates = hiddenDates,
     )
 
     private fun GradeDto.toEntity() = GradeEntity(

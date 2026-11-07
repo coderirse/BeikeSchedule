@@ -83,6 +83,7 @@ import com.caeamer.beikeschedule.model.SessionExpander
 import com.caeamer.beikeschedule.model.WeekLayout
 import com.caeamer.beikeschedule.model.WeekResolver
 import com.caeamer.beikeschedule.model.WeekUtils
+import com.caeamer.beikeschedule.model.CourseVisibility
 import com.caeamer.beikeschedule.ui.common.rememberNow
 import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.coroutines.flow.drop
@@ -140,6 +141,7 @@ fun ScheduleScreen(
 
     var weekMenuExpanded by rememberSaveable { mutableStateOf(false) }
     var detailCourse by rememberSaveable(stateSaver = DetailCourseSaver) { mutableStateOf<CourseEntity?>(null) }
+    var detailDate by rememberSaveable { mutableStateOf<String?>(null) }
     // 多时段课程编辑：存该课的全部行（同「名字+来源」），传给编辑框加载全部时段
     var editCourseGroup by remember { mutableStateOf<List<CourseEntity>?>(null) }
     var prefillSession by remember { mutableStateOf<SessionExpander.Session?>(null) }
@@ -171,7 +173,7 @@ fun ScheduleScreen(
      * 取某张卡片对应的**全部存储行**（同课程名 + 同来源）。
      *
      * 卡片是 CourseMerger 的合并结果，只带基准行的 id；而教务单双周/调课拆行、
-     * 手动多时段课都有多行。隐藏/删除/编辑都必须按这个组来做。
+     * 手动多时段课都有多行。整个学期隐藏/删除/编辑按此分组，单次隐藏按卡片与日期。
      */
     fun groupOf(course: CourseEntity): List<CourseEntity> =
         state.courses.filter { it.name == course.name && it.source == course.source }
@@ -192,7 +194,7 @@ fun ScheduleScreen(
     }
     val nextClassId = remember(state.scheduledCourses, state.sectionTimes, todayPlan, now) {
         NextClass.resolve(
-            courses = CourseMerger.mergeSameSlot(state.scheduledCourses),
+            courses = state.scheduledCourses,
             sectionStartTimes = state.sectionTimes.associate { it.section to it.startTime },
             todayPlan = todayPlan,
             now = now,
@@ -375,6 +377,7 @@ fun ScheduleScreen(
                 ) { page ->
                     WeekGrid(
                         week = page + 1,
+                        monday = WeekResolver.weekMonday(state.semester, page + 1),
                         courses = state.scheduledCourses,
                         sectionTimes = state.sectionTimes,
                         days = visibleDays,
@@ -393,7 +396,10 @@ fun ScheduleScreen(
                             }
                             pendingSlot = null
                         },
-                        onCourseClick = { detailCourse = it },
+                        onCourseClick = { course, date ->
+                            detailDate = date?.toString()
+                            detailCourse = course
+                        },
                     )
                 }
             }
@@ -401,6 +407,10 @@ fun ScheduleScreen(
     }
 
     detailCourse?.let { course ->
+        val occurrence = detailDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+        val plan = occurrence?.let { WeekResolver.daySchedule(state.semester, it) }
+        val canHideOccurrence = occurrence != null && plan?.week != null && plan.holiday == false &&
+            course.dayOfWeek == plan.coursesDayOfWeek && course.hasClassOnWeek(plan.week!!)
         CourseDetailSheet(
             course = course,
             sectionTimes = state.sectionTimes,
@@ -414,7 +424,7 @@ fun ScheduleScreen(
                 editCourseGroup = groupOf(course).ifEmpty { listOf(course) }
                 showEditDialog = true
             },
-            // 隐藏/删除必须作用于**整组合并行**，不能只用卡片 id。
+            // 整个学期隐藏/删除作用于整门课的所有行，不能只用卡片 id。
             // 卡片来自 CourseMerger.mergeSameSlot，它的 id 是基准行的 id；教务单双周/
             // 调课拆行与手动多时段课都有 N 行，只改一行会让卡片原样留在网格上——
             // 用户看到的是"点了隐藏没反应"。
@@ -426,6 +436,15 @@ fun ScheduleScreen(
                 viewModel.setCoursesHidden(groupOf(course).map { it.id }, true)
                 detailCourse = null
             },
+            occurrenceText = if (canHideOccurrence) {
+                "第${plan?.week}周 · ${occurrence} · " +
+                    SectionMap.describeBigSections(course.startSection, course.endSection)
+            } else null,
+            onHideOccurrence = if (canHideOccurrence) ({
+                val rows = CourseMerger.rowsForCard(state.scheduledCourses, course)
+                viewModel.setCourseOccurrenceHidden(rows.map { it.id }, occurrence!!, true)
+                detailCourse = null
+            }) else null,
         )
     }
 
@@ -588,6 +607,7 @@ private val SECTION_COL_WIDTH = 36.dp
 @Composable
 private fun WeekGrid(
     week: Int,
+    monday: LocalDate?,
     courses: List<CourseEntity>,
     sectionTimes: List<SectionTimeEntity>,
     days: List<Int>,
@@ -599,11 +619,10 @@ private fun WeekGrid(
     hideInactiveCourses: Boolean,
     onSlotLongPress: (day: Int, big: Int) -> Unit,
     onSlotClick: (day: Int, big: Int) -> Unit,
-    onCourseClick: (CourseEntity) -> Unit,
+    onCourseClick: (CourseEntity, LocalDate?) -> Unit,
 ) {
     val timeMap = remember(sectionTimes) { sectionTimes.associateBy { it.section } }
     // 同名同段多行（教务单周调课/单双周拆分）先合并成一张卡，再进冲突聚类
-    val mergedCourses = remember(courses) { CourseMerger.mergeSameSlot(courses) }
     // 产品逻辑：课表 = 一整页模拟真实课表，**永不纵向滚动**，视口再矮也按权重压缩整页放下。
     // 底部留出 FAB 的净空：FAB 压住的最后一天最后一个大节是**看不回来**的。
     Row(Modifier.fillMaxSize().padding(bottom = FAB_CLEARANCE)) {
@@ -628,6 +647,10 @@ private fun WeekGrid(
         }
         // N 天列（隐藏周末时为 5 天）
         days.forEach { day ->
+            val date = monday?.plusDays((day - 1).toLong())
+            val mergedCourses = remember(courses, date) {
+                if (date == null) CourseMerger.mergeSameSlot(courses) else CourseVisibility.onDate(courses, date)
+            }
             val schedule = daySchedules[day]
             // 冲突簇（本周重叠 → 并排窄列）与非本周淡化课的分拣逻辑见 WeekLayout（纯函数，有单测）。
             // 开启"隐藏本周不上的课"后 inactives 为空，网格只留本周真正要上的课。
@@ -702,7 +725,7 @@ private fun WeekGrid(
                                     course = course,
                                     active = true,
                                     isNext = course.id == nextClassId,
-                                    onClick = { onCourseClick(course) },
+                                    onClick = { onCourseClick(course, date) },
                                 )
                             }
                         }
@@ -713,7 +736,7 @@ private fun WeekGrid(
                         course = course,
                         active = false,
                         isNext = false,
-                        onClick = { onCourseClick(course) },
+                        onClick = { onCourseClick(course, date) },
                     )
                 }
             }
@@ -735,7 +758,7 @@ private fun androidx.compose.foundation.layout.BoxScope.CourseCard(
     val clampedStart = course.startSection.coerceAtMost(SectionMap.TOTAL_SMALL_SECTIONS)
     val clampedEnd = course.endSection.coerceAtMost(SectionMap.TOTAL_SMALL_SECTIONS)
     val span = (clampedEnd - clampedStart + 1).coerceAtLeast(1)
-    val oddEven = WeekUtils.oddEvenLabel(course.weekBitmap)
+    val oddEven = WeekUtils.cardLabel(course.weekBitmap)
     val nameMaxLines = when {
         span <= 1 -> 1
         span == 2 -> 3

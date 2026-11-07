@@ -6,17 +6,21 @@ package com.caeamer.beikeschedule.ui.sync
  * 三条抓取脚本共用同一个 WebView 会话：先拿学号（身份），再换云 token 并决定
  * "云端数据怎么办"，最后才抓课表/成绩，必要时补一次上传。"从云端恢复"是唯一
  * 跳过抓取的分支——刚恢复就抓一遍会把云端数据又覆盖掉。
+ * 考试页使用 EXAMS_ONLY 范围，仅运行身份核对与考试步骤，不访问云账号。
  */
 enum class SyncStep(val label: String) {
     IDENTITY("获取学号"),
     CLOUD_TOKEN("登录云账号"),
     TIMETABLE("导入课表"),
     GRADES("抓取成绩"),
+    EXAMS("获取考试安排"),
     /** 服务端按班级下发的实验/上机安排（教务拿不到）。挂在成绩之后：班级名来自同一轮学籍抓取。 */
     CLASS_LAB("更新实验安排"),
     BACKUP("上传云备份"),
     RESTORE("从云端恢复"),
 }
+
+enum class SyncScope { ALL, EXAMS_ONLY }
 
 enum class SyncStatus { OK, FAILED, SKIPPED }
 
@@ -56,7 +60,10 @@ internal object SyncPlanner {
      */
     val head: List<SyncStep> = listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN)
 
-    fun steps(mode: CloudMode): List<SyncStep> = head + tail(mode)
+    fun head(scope: SyncScope): List<SyncStep> =
+        if (scope == SyncScope.EXAMS_ONLY) listOf(SyncStep.IDENTITY) else head
+
+    fun steps(mode: CloudMode, scope: SyncScope = SyncScope.ALL): List<SyncStep> = head(scope) + tail(mode, scope)
 
     /**
      * 后半段（方向已定）。UNDECIDED 只出现在首轮前半段，按"不上传"取。
@@ -64,18 +71,19 @@ internal object SyncPlanner {
      * CLASS_LAB 三种方向都跑（含从云端恢复后）：它不碰教务数据，拉的是服务端按班级下发的
      * 实验安排，按"每次同步自动拉取"的口径执行；放在 BACKUP 之前，上传的快照才包含它。
      */
-    fun tail(mode: CloudMode): List<SyncStep> = when (mode) {
-        CloudMode.RESTORE -> listOf(SyncStep.RESTORE, SyncStep.CLASS_LAB)
-        CloudMode.UPLOAD ->
-            listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB, SyncStep.BACKUP)
-        CloudMode.UNDECIDED,
-        CloudMode.NO_UPLOAD,
-        -> listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB)
-    }
+    fun tail(mode: CloudMode, scope: SyncScope = SyncScope.ALL): List<SyncStep> =
+        if (scope == SyncScope.EXAMS_ONLY) listOf(SyncStep.EXAMS) else when (mode) {
+            CloudMode.RESTORE -> listOf(SyncStep.RESTORE, SyncStep.CLASS_LAB)
+            CloudMode.UPLOAD ->
+                listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB, SyncStep.BACKUP)
+            CloudMode.UNDECIDED,
+            CloudMode.NO_UPLOAD,
+            -> listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB)
+        }
 
     /** 重试的前半段：只重跑未成功的身份/云账号步骤。 */
-    fun retryHead(results: Map<SyncStep, SyncStepResult>): List<SyncStep> =
-        head.filter { results[it]?.status != SyncStatus.OK }
+    fun retryHead(results: Map<SyncStep, SyncStepResult>, scope: SyncScope = SyncScope.ALL): List<SyncStep> =
+        head(scope).filter { results[it]?.status != SyncStatus.OK }
 
     /**
      * 重试的后半段：按**当前** mode 取未成功的步骤（跳过的步骤不再补跑）。
@@ -84,8 +92,8 @@ internal object SyncPlanner {
      * 决策出 UPLOAD/RESTORE。若照 UNDECIDED 的表重试，云端那一半（上传或恢复）永远不会补跑——
      * 用户明确选了"从云端恢复"却只抓到本机数据，还会被提示"将上传本机数据"。
      */
-    fun retryTail(mode: CloudMode, results: Map<SyncStep, SyncStepResult>): List<SyncStep> =
-        tail(mode).filter { results[it]?.status != SyncStatus.OK }
+    fun retryTail(mode: CloudMode, results: Map<SyncStep, SyncStepResult>, scope: SyncScope = SyncScope.ALL): List<SyncStep> =
+        tail(mode, scope).filter { results[it]?.status != SyncStatus.OK }
 }
 
 /**

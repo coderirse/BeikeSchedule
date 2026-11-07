@@ -43,6 +43,13 @@ jobs:
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --console=plain
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Exam import script tests
+        run: node --test app/src/test/js/jw_exams.test.cjs
+
       - name: Android Lint
         run: ./gradlew lintDebug --console=plain
 

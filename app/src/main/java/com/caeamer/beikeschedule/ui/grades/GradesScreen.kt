@@ -124,7 +124,7 @@ private val DetailGradeSaver = Saver<GradeEntity?, String>(
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GradesScreen(onResync: () -> Unit, viewModel: GradesViewModel = viewModel()) {
+fun GradesScreen(onResync: () -> Unit, onRefreshExams: () -> Unit = onResync, viewModel: GradesViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showRefreshConfirm by rememberSaveable { mutableStateOf(false) }
     // GradeEntity 可 JSON 序列化：详情弹层旋转后恢复（Saver 见文件顶部）
@@ -152,7 +152,7 @@ fun GradesScreen(onResync: () -> Unit, viewModel: GradesViewModel = viewModel())
                         state.section != GradesSection.TODO
                     ) {
                         IconButton(onClick = { showRefreshConfirm = true }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "刷新成绩与考试")
+                            Icon(Icons.Default.Refresh, contentDescription = if (state.section == GradesSection.EXAMS) "刷新考试" else "刷新成绩与考试")
                         }
                     }
                 }
@@ -166,14 +166,16 @@ fun GradesScreen(onResync: () -> Unit, viewModel: GradesViewModel = viewModel())
                     title = { Text("重新抓取") },
                     text = {
                         Text(
-                            "将进入教务系统：一次扫码同时导入课表、抓取成绩/GPA/考试安排/学业进度，" +
+                            if (state.section == GradesSection.EXAMS) {
+                                "将进入教务系统获取本学期考试安排，登录有效时会直接获取。获取成功后更新本地考试和考前提醒。"
+                            } else "将进入教务系统：一次扫码同时导入课表、抓取成绩/GPA/考试安排/学业进度，" +
                                 "并登录云账号（云端已有备份时会让你选择以哪边为准）。当前本地数据会保留到抓取成功。是否继续？",
                         )
                     },
                     confirmButton = {
                         TextButton(onClick = {
                             showRefreshConfirm = false
-                            onResync()
+                            if (state.section == GradesSection.EXAMS) onRefreshExams() else onResync()
                         }) { Text("继续") }
                     },
                     dismissButton = { TextButton(onClick = { showRefreshConfirm = false }) { Text("取消") } },
@@ -200,8 +202,8 @@ fun GradesScreen(onResync: () -> Unit, viewModel: GradesViewModel = viewModel())
                     GradesSection.EXAMS == state.section -> ExamListContent(
                         exams = state.examsSorted,
                         error = state.error,
-                        fetchedAt = state.fetchedAt,
-                        onFetch = onResync,
+                        fetchedAt = state.examsFetchedAt,
+                        onFetch = onRefreshExams,
                         onDismissError = viewModel::dismissError,
                     )
 

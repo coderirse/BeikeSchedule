@@ -83,6 +83,7 @@ class SettingsStore(private val context: Context) {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val GPA_CACHE = stringPreferencesKey("gpa_cache")
         val GRADES_FETCHED_AT = longPreferencesKey("grades_fetched_at")
+        val EXAMS_FETCHED_AT = longPreferencesKey("exams_fetched_at")
         val SP_XM = stringPreferencesKey("sp_xm")
         val SP_XH = stringPreferencesKey("sp_xh")
         val SP_YXMC = stringPreferencesKey("sp_yxmc")
@@ -200,10 +201,23 @@ class SettingsStore(private val context: Context) {
     /** GPA 概览缓存（getgpa 原始 JSON）与成绩刷新时间（epoch 毫秒，0=从未抓取）。 */
     val gpaCache: Flow<String> = context.dataStore.data.map { p -> p[Keys.GPA_CACHE] ?: "" }
     val gradesFetchedAt: Flow<Long> = context.dataStore.data.map { p -> p[Keys.GRADES_FETCHED_AT] ?: 0L }
+    // 老版本考试随成绩一起抓取；缺少独立时间时沿用该时间，兼容已有空考试结果。
+    val examsFetchedAt: Flow<Long> = context.dataStore.data.map { p ->
+        p[Keys.EXAMS_FETCHED_AT] ?: p[Keys.GRADES_FETCHED_AT] ?: 0L
+    }
+
+    suspend fun saveExamsFetchedAt(fetchedAt: Long) {
+        noteCloudDirty()
+        context.dataStore.edit { p -> p[Keys.EXAMS_FETCHED_AT] = fetchedAt }
+    }
 
     suspend fun saveGradesMeta(gpaJson: String, fetchedAt: Long) {
         noteCloudDirty()
         context.dataStore.edit { p ->
+            // 首次写入新版成绩时固定旧考试时间，避免此后成绩刷新失败/成功改变考试更新时间。
+            if (p[Keys.EXAMS_FETCHED_AT] == null) {
+                p[Keys.EXAMS_FETCHED_AT] = p[Keys.GRADES_FETCHED_AT] ?: 0L
+            }
             p[Keys.GPA_CACHE] = gpaJson
             p[Keys.GRADES_FETCHED_AT] = fetchedAt
         }

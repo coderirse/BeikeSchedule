@@ -240,6 +240,10 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repo.setCoursesHidden(ids, hidden) }
     }
 
+    fun setCourseOccurrenceHidden(ids: List<Long>, date: LocalDate, hidden: Boolean) {
+        viewModelScope.launch { repo.setCourseOccurrenceHidden(ids, date, hidden) }
+    }
+
     /** 从 assets 载入示例课表；若未设置开学日期，则把本周一设为第 1 周周一便于立即查看。 */
     fun loadSampleData() {
         viewModelScope.launch {

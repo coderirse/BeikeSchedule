@@ -118,6 +118,7 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
     private var xm: String = ""
     private var token: String? = null
     private var runNote: String? = null
+    private var syncScope = SyncScope.ALL
 
     init {
         // 行级解析失败接到 logcat：教务改字段格式导致整行/整表被静默跳过时有据可查
@@ -134,10 +135,11 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
      * ViewModel 是 Activity 级的（离开组合不销毁）：不清的话，同一进程内再次进入本页
      * 会直接看到上一次的汇总，而 onPageReady 又会因终态被忽略，等于"进不去"。
      */
-    fun resetIfFinished() {
+    fun resetIfFinished(scope: SyncScope = SyncScope.ALL) {
         if (runJob?.isActive == true) return
         val finished = _state.value is UnifiedSyncUiState.Done || _state.value is UnifiedSyncUiState.Failed
-        if (!finished) return
+        if (!finished && syncScope == scope) return
+        syncScope = scope
         results.clear()
         mode = CloudMode.UNDECIDED
         runNote = null
@@ -151,9 +153,10 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** WebView 到达教务主页（onMainPage）：自动开跑；执行中/已完成的重复回调忽略。 */
-    fun onPageReady() {
+    fun onPageReady(scope: SyncScope = syncScope) {
         if (runJob?.isActive == true) return
         if (_state.value is UnifiedSyncUiState.Done) return
+        syncScope = scope
         startRun(retryOnlyFailed = false)
     }
 
@@ -228,6 +231,10 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    fun onExamsResult(semester: String, exams: String) = completeScript(SyncStep.EXAMS) {
+        ScriptOutcome.Ok(listOf(semester, exams))
+    }
+
     /** 脚本报错：只有当前步骤的报错才作数（切页/重入可能带来旧脚本的残留回调）。 */
     fun onScriptError(step: SyncStep, message: String) =
         completeScript(step) { ScriptOutcome.Err(message) }
@@ -262,9 +269,9 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
             }
             // 两段式：先跑"身份 + 云账号"（后者包含云端探测与决策），再按**最终**方向取后续步骤。
             // 重试同样分两段——首轮云账号失败时方向还没定，只有 head 跑完才知道该上传还是该恢复。
-            val head = if (retryOnlyFailed) SyncPlanner.retryHead(results) else SyncPlanner.head
+            val head = if (retryOnlyFailed) SyncPlanner.retryHead(results, syncScope) else SyncPlanner.head(syncScope)
             head.forEach { executeStep(it) }
-            val tail = if (retryOnlyFailed) SyncPlanner.retryTail(mode, results) else SyncPlanner.tail(mode)
+            val tail = if (retryOnlyFailed) SyncPlanner.retryTail(mode, results, syncScope) else SyncPlanner.tail(mode, syncScope)
             tail.forEach { executeStep(it) }
             if (mode == CloudMode.RESTORE) {
                 // 抓取按设计跳过：汇总里标出来，避免用户以为"这两步没跑"。
@@ -287,6 +294,7 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
             SyncStep.CLOUD_TOKEN -> stepCloudToken()
             SyncStep.TIMETABLE -> stepTimetable()
             SyncStep.GRADES -> stepGrades()
+            SyncStep.EXAMS -> stepExams()
             SyncStep.CLASS_LAB -> stepClassLab()
             SyncStep.BACKUP -> stepBackup()
             SyncStep.RESTORE -> stepRestore()
@@ -301,8 +309,10 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
         currentStep = step
         _state.value = UnifiedSyncUiState.Running(step, results.values.toList())
         _jsRequests.tryEmit(asset)
-        val outcome = withTimeoutOrNull(STEP_TIMEOUT_MS) { gate.await() }
-            ?: ScriptOutcome.Err("超时：${STEP_TIMEOUT_MS / 1000} 秒内没有返回结果")
+        // 独立考试脚本串行查询学期与考试，各自最多 20 秒；原生应等到脚本自己的超时返回。
+        val timeoutMillis = if (step == SyncStep.EXAMS) 45_000L else STEP_TIMEOUT_MS
+        val outcome = withTimeoutOrNull(timeoutMillis) { gate.await() }
+            ?: ScriptOutcome.Err("超时：${timeoutMillis / 1000} 秒内没有返回结果")
         scriptGate = null
         currentStep = null
         return outcome
@@ -474,7 +484,10 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
             // null = 没拿到考试数据（错误体/登录页 HTML/空响应），空列表 = 确实没有考试。
             // 只有后者才允许覆盖本地考试表——覆盖式写入把失败当"无考试"会连带取消未来提醒。
             val exams = ExamsParser.parseExams(examsJson, semXn + semXq)
-            if (exams != null) repo.replaceExams(exams)
+            if (exams != null) {
+                repo.replaceExams(exams)
+                settings.saveExamsFetchedAt(System.currentTimeMillis())
+            }
             if (xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()) {
                 settings.saveCreditMeta(xflbyqJson, bxkqkJson)
             }
@@ -497,6 +510,32 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
             throw e
         } catch (e: Exception) {
             failed(SyncStep.GRADES, "解析失败：${e.message}")
+        }
+    }
+
+    private suspend fun stepExams(): SyncStepResult {
+        val id = xh ?: return failed(SyncStep.EXAMS, "未取得学号，请重新登录后重试")
+        val profileId = settings.studentProfile.first().xh
+        val cloudId = settings.cloudAccount.first().xh
+        if (listOf(profileId, cloudId).any { it.isNotBlank() && it != id }) {
+            return failed(SyncStep.EXAMS, "登录学号与本机账号不同，请登录原账号，或通过完整同步切换账号")
+        }
+        val out = awaitScript(SyncStep.EXAMS, "import/jw_exams.js")
+        if (out is ScriptOutcome.Err) return failed(SyncStep.EXAMS, "获取失败：${out.message}；已保留上次数据")
+        return try {
+            val args = (out as ScriptOutcome.Ok).args
+            val (xn, xq, _) = JwParser.parseCurrentSemester(args.getOrElse(0) { "" })
+            if (xn.isBlank() || xq.isBlank()) return failed(SyncStep.EXAMS, "当前学期无效，已保留上次数据")
+            val exams = ExamsParser.parseExams(args.getOrElse(1) { "" }, xn + xq)
+                ?: return failed(SyncStep.EXAMS, "考试安排解析失败，已保留上次数据")
+            repo.replaceExams(exams)
+            settings.saveExamsFetchedAt(System.currentTimeMillis())
+            ExamReminderScheduler.reschedule(getApplication())
+            ok(SyncStep.EXAMS, if (exams.isEmpty()) "本学期暂无考试安排" else "已获取 ${exams.size} 场考试")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failed(SyncStep.EXAMS, "获取失败：${e.message}")
         }
     }
 

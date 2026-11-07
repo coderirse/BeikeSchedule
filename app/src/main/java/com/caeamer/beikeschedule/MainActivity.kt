@@ -54,6 +54,7 @@ import com.caeamer.beikeschedule.data.pref.AppSession
 import com.caeamer.beikeschedule.data.pref.ScorePrivacy
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.ui.sync.UnifiedSyncScreen
+import com.caeamer.beikeschedule.ui.sync.SyncScope
 import com.caeamer.beikeschedule.ui.grades.GradesScreen
 import com.caeamer.beikeschedule.ui.profile.ProfileScreen
 import com.caeamer.beikeschedule.ui.schedule.ScheduleScreen
@@ -178,6 +179,11 @@ class MainActivity : ComponentActivity() {
                 var tab by rememberSaveable { mutableStateOf("schedule") }
                 // 一键同步（登录 + 课表/成绩/云同步）为全屏流程，不显示底部 Tab
                 var showSync by rememberSaveable { mutableStateOf(false) }
+                var syncScope by rememberSaveable { mutableStateOf(SyncScope.ALL) }
+                fun openSync(scope: SyncScope = SyncScope.ALL) {
+                    syncScope = scope
+                    showSync = true
+                }
                 // 学期设置全屏页：同模式，替换掉底部 Tab 框架（替代旧的全屏弹窗）
                 var showSemesterSettings by rememberSaveable { mutableStateOf(false) }
                 // 同步页的 WebView 展示的是浅底教务页面，需要临时切成深色状态栏图标
@@ -198,6 +204,7 @@ class MainActivity : ComponentActivity() {
                 if (showSync) {
                     // 一次扫码跑完课表导入 + 成绩抓取 + 云账号登录（必要时上传备份）
                     UnifiedSyncScreen(
+                        scope = syncScope,
                         onDone = { showSync = false },
                         onLightBackgroundVisible = { syncLightPage = it },
                     )
@@ -252,10 +259,13 @@ class MainActivity : ComponentActivity() {
                         ) { padding ->
                             Box(Modifier.padding(padding)) {
                                 when (tab) {
-                                    "jw" -> GradesScreen(onResync = { showSync = true })
-                                    "mine" -> ProfileScreen(onCloudLoginClick = { showSync = true })
+                                    "jw" -> GradesScreen(
+                                        onResync = { openSync() },
+                                        onRefreshExams = { openSync(SyncScope.EXAMS_ONLY) },
+                                    )
+                                    "mine" -> ProfileScreen(onCloudLoginClick = { openSync() })
                                     else -> ScheduleScreen(
-                                        onImportClick = { showSync = true },
+                                        onImportClick = { openSync() },
                                         onOpenSettings = { showSemesterSettings = true },
                                     )
                                 }

@@ -26,15 +26,21 @@ object WeekUtils {
     fun weeksOf(bitmap: String): List<Int> =
         (1 until bitmap.length).filter { bitmap[it] == '1' }
 
-    /** 单/双周标签：全部奇数周→"单"，全部偶数周→"双"，否则空串。 */
+    /** 至少两次、且每两周连续上课才属于单双周；单次或零散同奇偶周不能据此推断。 */
     fun oddEvenLabel(bitmap: String): String {
         val weeks = weeksOf(bitmap)
-        if (weeks.isEmpty()) return ""
+        if (weeks.size < 2 || weeks.zipWithNext().any { (a, b) -> b - a != 2 }) return ""
         return when {
             weeks.all { it % 2 == 1 } -> "单"
             weeks.all { it % 2 == 0 } -> "双"
             else -> ""
         }
+    }
+
+    fun cardLabel(bitmap: String): String {
+        val weeks = weeksOf(bitmap)
+        if (weeks.size == 1) return "第${weeks.single()}周"
+        return oddEvenLabel(bitmap).let { if (it.isEmpty()) "" else "${it}周" }
     }
 
     /** 人类可读周数描述，如 "1-8周"、"1-16周 单周"、"1-3,5-8周"。 */

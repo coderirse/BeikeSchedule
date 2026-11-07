@@ -58,6 +58,7 @@ data class GradesUiState(
     val exams: List<ExamEntity> = emptyList(),
     val gpa: GpaInfo? = null,
     val fetchedAt: Long = 0L,
+    val examsFetchedAt: Long = 0L,
     val error: String? = null,
     val scoreMode: ScoreMode = ScoreMode.WEIGHTED,
     /** 学期筛选：空=全部学期。 */
@@ -260,6 +261,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         val fetchedAt: Long,
         val section: GradesSection,
         val hideScores: Boolean,
+        val examsFetchedAt: Long,
     )
 
     /**
@@ -281,8 +283,8 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
         repo.exams,
         creditParsed,
         combine(
-            repo.settings.gradesFetchedAt, section, ScorePrivacy.hidden,
-        ) { a, b, c -> FetchInfo(a, b, c) },
+            repo.settings.gradesFetchedAt, section, ScorePrivacy.hidden, repo.settings.examsFetchedAt,
+        ) { a, b, c, d -> FetchInfo(a, b, c, d) },
         combine(
             gpaFromCache, error, scoreMode, semesterFilter,
             combine(schoolYearFilter, excludedCourses) { y, x -> y to x },
@@ -294,6 +296,7 @@ class GradesViewModel(app: Application) : AndroidViewModel(app) {
             exams = exams,
             gpa = prefs.gpa,
             fetchedAt = info.fetchedAt,
+            examsFetchedAt = info.examsFetchedAt,
             error = prefs.error,
             scoreMode = prefs.mode,
             semesterFilter = prefs.filter,

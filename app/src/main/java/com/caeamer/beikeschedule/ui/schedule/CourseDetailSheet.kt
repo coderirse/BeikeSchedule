@@ -2,6 +2,7 @@ package com.caeamer.beikeschedule.ui.schedule
 
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,14 +19,20 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -50,7 +57,39 @@ fun CourseDetailSheet(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onHide: () -> Unit,
+    occurrenceText: String? = null,
+    onHideOccurrence: (() -> Unit)? = null,
 ) {
+    var showHideOptions by rememberSaveable { mutableStateOf(false) }
+    if (showHideOptions) {
+        AlertDialog(
+            onDismissRequest = { showHideOptions = false },
+            title = { Text("隐藏课程") },
+            text = {
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(course.name)
+                    Text(occurrenceText ?: "本课程没有可隐藏的当前课次，可选择隐藏整个学期。")
+                    Text("隐藏后不再显示和提醒，可在学期设置中恢复。")
+                    if (onHideOccurrence != null) {
+                        OutlinedButton(
+                            onClick = { showHideOptions = false; onHideOccurrence() },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("仅本次") }
+                    }
+                    TextButton(
+                        onClick = { showHideOptions = false; onHide() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("整个学期", color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHideOptions = false }) { Text("取消") }
+            },
+        )
+    }
     // 只留 Expanded 锚点：半展开 + 可滚动内容会形成"滚动↔弹层高度"自激抖动
     // （根因见 ScheduleScreen.UnscheduledSheet 注释）。短内容时 Expanded 仍包裹内容，观感不变；
     // 大字号/小屏内容放不下时改为内部滚动，而不是被裁掉。
@@ -103,7 +142,7 @@ fun CourseDetailSheet(
                 Spacer(Modifier.weight(1f))
                 // 三类课程（教务导入 / 自定义 / 示例）都能隐藏：隐藏 = 课表不显示、也不再提醒，
                 // 可在「我的」→ 隐藏的课程里恢复。
-                TextButton(onClick = onHide) {
+                TextButton(onClick = { showHideOptions = true }) {
                     Icon(
                         Icons.Default.VisibilityOff, null, Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.error,

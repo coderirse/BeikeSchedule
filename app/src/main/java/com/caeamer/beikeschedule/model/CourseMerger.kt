@@ -18,8 +18,15 @@ object CourseMerger {
     private val CAMPUS_PREFIX = Regex("【[^】]*】")
 
     fun mergeSameSlot(courses: List<CourseEntity>): List<CourseEntity> =
+        cardGroups(courses).map { mergeGroup(it) }
+
+    /** 与卡片完全一致的原始行组，供仅隐藏本次及恢复使用。 */
+    fun cardGroups(courses: List<CourseEntity>): List<List<CourseEntity>> =
         courses.groupBy { SlotKey(it.name, it.source, it.dayOfWeek, it.startSection, it.endSection) }
-            .flatMap { (_, rows) -> merge(rows) }
+            .flatMap { (_, rows) -> locationGroups(rows) }
+
+    fun rowsForCard(courses: List<CourseEntity>, card: CourseEntity): List<CourseEntity> =
+        cardGroups(courses).firstOrNull { rows -> rows.any { it.id == card.id } }.orEmpty()
 
     private data class SlotKey(val name: String, val source: Int, val day: Int, val start: Int, val end: Int)
 
@@ -29,10 +36,10 @@ object CourseMerger {
      * A 楼覆盖，提醒与详情把用户指去错误教室。占位符行（"-" / "【校区】-"/空）无地点信息，
      * 仍并入其所属地点组；同地点多行合并为一张卡、周次取并集。
      */
-    private fun merge(rows: List<CourseEntity>): List<CourseEntity> {
-        if (rows.size <= 1) return rows
+    private fun locationGroups(rows: List<CourseEntity>): List<List<CourseEntity>> {
+        if (rows.size <= 1) return listOf(rows)
         val realRows = rows.filter { plausibleLocation(it.location) }
-        if (realRows.isEmpty()) return listOf(mergeGroup(rows))
+        if (realRows.isEmpty()) return listOf(rows)
         val baseLocation = stripCampusPrefix(realRows.first().location)
         val baseGroup = rows.filter {
             !plausibleLocation(it.location) || stripCampusPrefix(it.location) == baseLocation
@@ -40,7 +47,7 @@ object CourseMerger {
         val otherGroups = realRows
             .filter { stripCampusPrefix(it.location) != baseLocation }
             .groupBy { stripCampusPrefix(it.location) }
-        return listOf(mergeGroup(baseGroup)) + otherGroups.values.map { mergeGroup(it) }
+        return listOf(baseGroup) + otherGroups.values
     }
 
     /** 同地点多行 → 一张卡：地点取**首个有真实地点**的行（占位符行可能排在前面），

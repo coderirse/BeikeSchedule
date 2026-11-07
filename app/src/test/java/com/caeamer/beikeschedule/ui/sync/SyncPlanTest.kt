@@ -13,6 +13,23 @@ import org.junit.Test
  */
 class SyncPlanTest {
 
+    @Test fun `exam refresh never imports unrelated data or accesses cloud regardless of mode`() {
+        CloudMode.entries.forEach { mode ->
+            assertEquals(listOf(SyncStep.IDENTITY, SyncStep.EXAMS), SyncPlanner.steps(mode, SyncScope.EXAMS_ONLY))
+        }
+    }
+
+    @Test fun `exam retry remains scoped to failed exam request`() {
+        val results = mapOf(
+            SyncStep.IDENTITY to SyncStepResult(SyncStep.IDENTITY, SyncStatus.OK),
+            SyncStep.EXAMS to SyncStepResult(SyncStep.EXAMS, SyncStatus.FAILED),
+        )
+        assertTrue(SyncPlanner.retryHead(results, SyncScope.EXAMS_ONLY).isEmpty())
+        assertEquals(listOf(SyncStep.EXAMS), SyncPlanner.retryTail(CloudMode.UNDECIDED, results, SyncScope.EXAMS_ONLY))
+        val success = results + (SyncStep.EXAMS to SyncStepResult(SyncStep.EXAMS, SyncStatus.OK))
+        assertTrue(SyncPlanner.retryTail(CloudMode.UNDECIDED, success, SyncScope.EXAMS_ONLY).isEmpty())
+    }
+
     @Test
     fun `云端没有备份时按本机上传`() {
         assertEquals(CloudMode.UPLOAD, defaultCloudMode(probeFailed = false, cloudHasBackup = false, localHasData = true))

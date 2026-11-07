@@ -63,7 +63,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -71,6 +70,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.CourseEntity
 import com.caeamer.beikeschedule.data.pref.SettingsStore
+import com.caeamer.beikeschedule.model.CourseVisibility
+import com.caeamer.beikeschedule.model.CourseMerger
+import com.caeamer.beikeschedule.model.WeekUtils
+import com.caeamer.beikeschedule.model.WeekResolver
+import com.caeamer.beikeschedule.model.SectionMap
 import com.caeamer.beikeschedule.reminder.ClassReminderScheduler
 import com.caeamer.beikeschedule.reminder.ReminderBackgroundAccess
 import java.time.Instant
@@ -166,12 +170,14 @@ fun SemesterSettingsPage(
         pendingEnableReminder = false
     }
 
-    // 恢复必须按整组：隐藏是按合并组做的（一张卡 N 行），只恢复一行会留下
-    // 一张"残废"卡片（例如只剩第 7 周有课），且隐藏列表里还有同名项要反复点。
-    fun restoreCourse(course: CourseEntity) {
-        val group = state.courses.filter { it.name == course.name && it.source == course.source }
-        if (group.isEmpty()) viewModel.setCourseHidden(course.id, false)
-        else viewModel.setCoursesHidden(group.map { it.id }, false)
+    val hiddenEntries = remember(state.courses) { CourseVisibility.hiddenEntries(state.courses) }
+    fun restoreCourse(entry: CourseVisibility.HiddenEntry) {
+        if (entry.date != null) {
+            viewModel.setCourseOccurrenceHidden(entry.ids, entry.date, false)
+        } else {
+            val group = state.courses.filter { it.name == entry.course.name && it.source == entry.course.source }
+            viewModel.setCoursesHidden(group.map { it.id }, false)
+        }
     }
 
     Scaffold(
@@ -378,32 +384,47 @@ fun SemesterSettingsPage(
             SectionLabel("隐藏的课程")
             SectionCard {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (state.hiddenCourses.isEmpty()) {
+                    if (hiddenEntries.isEmpty()) {
                         Text(
                             "暂无隐藏课程",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     } else {
-                        state.hiddenCourses.forEach { course ->
+                        hiddenEntries.forEach { entry ->
+                            val course = entry.course
                             Row(
-                                Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
+                                Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.Top,
                             ) {
-                                Text(
-                                    course.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.weight(1f, fill = false),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    "· " + courseSourceLabel(course),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Spacer(Modifier.weight(1f))
-                                TextButton(onClick = { restoreCourse(course) }) { Text("恢复") }
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(course.name, style = MaterialTheme.typography.bodyMedium)
+                                    val date = entry.date
+                                    val scope = if (date == null) "整个学期" else {
+                                        val week = WeekResolver.daySchedule(current, date).week
+                                        "仅本次 · ${date}" + (week?.let { " · 第${it}周" } ?: "")
+                                    }
+                                    Text(
+                                        "${courseSourceLabel(course)} · $scope",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    CourseMerger.mergeSameSlot(entry.rows).forEach { row ->
+                                        val day = if (date != null) date.dayOfWeek.value else row.dayOfWeek
+                                        val slot = if (row.isUnscheduled) "无固定时间" else {
+                                            "周${"一二三四五六日".getOrNull(day - 1) ?: '?'} " +
+                                                SectionMap.describeBigSections(row.startSection, row.endSection)
+                                        }
+                                        Text(
+                                            listOf(slot, CourseMerger.stripCampusPrefix(row.location),
+                                                if (date == null) WeekUtils.describe(row.weekBitmap) else "")
+                                                .filter { it.isNotBlank() }.joinToString(" · "),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                                TextButton(onClick = { restoreCourse(entry) }) { Text("恢复") }
                             }
                         }
                         Text(

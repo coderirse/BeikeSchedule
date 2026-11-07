@@ -1,6 +1,7 @@
 package com.caeamer.beikeschedule.model
 
 import com.caeamer.beikeschedule.data.local.CourseEntity
+import java.time.LocalDate
 
 /**
  * 上课提醒的课程筛选（纯函数，便于单测）。
@@ -11,6 +12,8 @@ import com.caeamer.beikeschedule.data.local.CourseEntity
  */
 object ReminderCourses {
 
-    fun eligible(all: List<CourseEntity>): List<CourseEntity> =
-        CourseMerger.mergeSameSlot(all.filter { !it.isUnscheduled && !it.hidden })
+    fun eligible(all: List<CourseEntity>, date: LocalDate? = null): List<CourseEntity> =
+        CourseMerger.mergeSameSlot(all.filter {
+            !it.isUnscheduled && !it.hidden && (date == null || CourseVisibility.visibleOn(it, date))
+        })
 }

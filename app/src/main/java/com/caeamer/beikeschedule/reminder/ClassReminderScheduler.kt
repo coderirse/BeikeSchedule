@@ -96,7 +96,7 @@ object ClassReminderScheduler {
             val planned = if (enabled) {
                 val minutes = settings.reminderMinutes.first()
                 val semester = settings.semester.first()
-                val courses = reminderCourses(repo.courses.first())
+                val courses = repo.courses.first()
                 val startTimes = repo.sectionTimes.first().associate { it.section to it.startTime }
                 planClassReminders(courses, startTimes, semester, minutes, now, zone)
             } else {
@@ -150,7 +150,7 @@ object ClassReminderScheduler {
             val plan = WeekResolver.daySchedule(semester, date)
             val week = plan.week ?: continue
             if (plan.holiday) continue
-            courses.forEach { course ->
+            ReminderCourses.eligible(courses, date).forEach { course ->
                 if (course.dayOfWeek != plan.coursesDayOfWeek || !course.hasClassOnWeek(week)) return@forEach
                 val startTime = sectionStartTimes[course.startSection] ?: return@forEach
                 val start = runCatching { LocalTime.parse(startTime) }.getOrNull() ?: return@forEach

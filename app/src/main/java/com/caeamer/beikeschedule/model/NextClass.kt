@@ -24,7 +24,7 @@ object NextClass {
     )
 
     /**
-     * @param courses 课表渲染用的合并后课程（与卡片 id 一致，见 CourseMerger）
+     * @param courses 原始课程行，与课表一样按今天过滤后再合并，保证卡片 id 一致
      * @param sectionStartTimes 小节号 → 开始时间（"08:00"）
      * @param todayPlan 今天的上课计划（[WeekResolver.daySchedule]）：
      *   开学前/假期跳周/学期后为 week=null、官方放假日 holiday=true —— 一律不标记；
@@ -41,7 +41,7 @@ object NextClass {
         if (todayPlan.holiday) return null
         val day = todayPlan.coursesDayOfWeek
         val nowTime = now.toLocalTime()
-        return courses.asSequence()
+        return CourseVisibility.onDate(courses, now.toLocalDate()).asSequence()
             .filter { !it.isUnscheduled && it.dayOfWeek == day && it.hasClassOnWeek(week) }
             .mapNotNull { course ->
                 // 节次时间缺失/格式异常时跳过该课，不让它阻断其他候选

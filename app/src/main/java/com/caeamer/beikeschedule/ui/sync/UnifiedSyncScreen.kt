@@ -55,6 +55,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.remote.QrAuthApi
 import com.caeamer.beikeschedule.import.CloudLoginBridge
 import com.caeamer.beikeschedule.import.GradesBridge
+import com.caeamer.beikeschedule.import.ExamsBridge
 import com.caeamer.beikeschedule.import.JwImportBridge
 import com.caeamer.beikeschedule.import.JwWebView
 import com.caeamer.beikeschedule.import.JW_SSO_ENTRY_URL
@@ -81,6 +82,7 @@ fun UnifiedSyncScreen(
     onDone: () -> Unit,
     onLightBackgroundVisible: (Boolean) -> Unit = {},
     viewModel: UnifiedSyncViewModel = viewModel(),
+    scope: SyncScope = SyncScope.ALL,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val qrSid by viewModel.qrSid.collectAsStateWithLifecycle()
@@ -93,7 +95,7 @@ fun UnifiedSyncScreen(
     BackHandler { onDone() }
     LaunchedEffect(state) { onLightBackgroundVisible(true) }
     // 同一进程内再次进入本页时，清掉上一次流程留下的终态（否则会直接看到旧汇总）
-    LaunchedEffect(Unit) { viewModel.resetIfFinished() }
+    LaunchedEffect(scope) { viewModel.resetIfFinished(scope) }
     DisposableEffect(Unit) {
         onDispose {
             // 离开即取消：写库是单事务、上传/恢复各自带锁，取消不会留下半截数据
@@ -147,7 +149,7 @@ fun UnifiedSyncScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("登录并同步") },
+                title = { Text(if (scope == SyncScope.EXAMS_ONLY) "获取考试安排" else "登录并同步") },
                 navigationIcon = {
                     IconButton(onClick = onDone) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -224,9 +226,15 @@ fun UnifiedSyncScreen(
                             },
                             onFailure = { msg -> webView?.post { viewModel.onScriptError(SyncStep.GRADES, msg) } },
                         ),
+                        "BeikeExams" to ExamsBridge(
+                            onResult = { semester, exams -> webView?.post {
+                                if (isByytHost(webView?.url)) viewModel.onExamsResult(semester, exams)
+                            } },
+                            onFailure = { msg -> webView?.post { viewModel.onScriptError(SyncStep.EXAMS, msg) } },
+                        ),
                     ),
                     startUrl = JW_SSO_ENTRY_URL,
-                    onMainPage = { viewModel.onPageReady() },
+                    onMainPage = { viewModel.onPageReady(scope) },
                     onCreated = { webView = it },
                     onPageStarted = { pageLoading = true },
                     onPageError = { msg -> pageLoading = false; viewModel.onPageError(msg) },
