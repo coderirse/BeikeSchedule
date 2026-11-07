@@ -23,8 +23,8 @@ import kotlinx.coroutines.withContext
  *
  * **为什么是"脏标记 + 机会式上传"而不是实时推送**：改动点散落在课程/日程/成绩各处，
  * 每次改动都立即上传既费流量又容易与用户连续操作打架。这里只做三件事：
- * 1. 改动点调 [markDirty]：落一个 DataStore 脏标记（进程被杀也不丢），若云同步已开启
- *    且已登录，再排一个 8 秒去抖上传——连续编辑只会上传最后一次状态；
+ * 1. 改动点调 [markDirty]：云同步开启时落一个 DataStore 脏标记（进程被杀也不丢），
+ *    已登录再排一个 8 秒去抖上传——连续编辑只会上传最后一次状态；
  * 2. App 启动时调 [uploadIfDirty]：补传上次进程死亡漏掉的上传；
  * 3. 「我的」页的"立即备份"/"从云端恢复"直接调 [backupNow] / [restore]。
  *
@@ -47,15 +47,19 @@ object CloudSync {
     @Volatile
     private var suppressDirty = false
 
-    /** 数据变更点调用：落脏标记；已开启云同步且已登录时排去抖上传。 */
+    /** 数据变更点调用：云同步开启时落脏标记（已脏则不写）并排去抖上传；未开启直接返回。 */
     fun markDirty(context: Context) {
         if (suppressDirty) return
         val app = context.applicationContext
         scope.launch {
             val settings = SettingsStore(app)
-            settings.markCloudDirty()
+            // 同步没开就不置脏也不解密 token：脏标记此时没有消费者（开启开关的每条路径
+            // 都会立刻强制全量备份），而 DataStore 写会让全部设置 Flow 重发射、
+            // AndroidKeyStore 解密是跨进程 IPC——写库是高频路径，不能白付这两笔钱。
+            if (!settings.cloudSyncEnabled.first()) return@launch
+            if (!settings.cloudDirty.first()) settings.markCloudDirty()
             val account = settings.cloudAccount.first()
-            if (account.isLoggedIn && settings.cloudSyncEnabled.first()) scheduleDebouncedUpload(app)
+            if (account.isLoggedIn) scheduleDebouncedUpload(app)
         }
     }
 
@@ -64,8 +68,10 @@ object CloudSync {
         val app = context.applicationContext
         scope.launch {
             val settings = SettingsStore(app)
-            val account = settings.cloudAccount.first()
-            if (account.isLoggedIn && settings.cloudSyncEnabled.first() && settings.cloudDirty.first()) {
+            // 先查开关与脏标记再读账号（读账号 = 解密 token），没改动的启动不会白解密
+            if (settings.cloudSyncEnabled.first() && settings.cloudDirty.first() &&
+                settings.cloudAccount.first().isLoggedIn
+            ) {
                 runCatching { backupNow(app) }
             }
         }
