@@ -186,12 +186,12 @@ MainActivity 内手写状态机：`tab`（schedule/jw/mine）+ `showSync` + `sho
 ### 6.2 发版 SOP（现状全手工，四处需同步）
 
 1. 改 `app/build.gradle.kts` 的 `versionCode` / `versionName`（惯例：每个 fix 提交也递增 versionCode）。
-2. `./gradlew :app:assembleRelease` → 产物复制到根目录 `BeikeSchedule-<version>-release.apk`（根目录 APK 已被 gitignore，不入库）。
+2. `./gradlew :app:assembleRelease` → 产物复制到 `server/public/downloads/beike/BeikeSchedule-<version>-release.apk`（`*.apk` 已 gitignore；**根目录不再放发版产物**，2026-11-07 起）。
 3. `apksigner verify --print-certs <apk>` 校验（证书 CN=BeikeSchedule；SHA-256 前缀 53acb30e…，与旧包一致才能覆盖升级）。
-4. 生成更新元数据：
-   `python tools/sign_update.py --key keystore/update_signing_private.pem --version-code N --version-name X --changelog "…" --url "https://api.caeamer.com/downloads/beike/…apk" --apk <apk>`
-   （canonical 规则见 `tools/sign_update.py:40-47`；服务端 `/api/bs/app/latest` 原样返回该 JSON。）
-5. 上传 APK 到服务端 `/downloads/beike/`，更新 `beike.js` 的 latest 响应（当前元数据样本：根目录 `latest_1.5.3.json`，已实测 size/SHA-256 与 APK 一致）。
+4. 生成更新元数据到 `server/src/bs-app-version.json`：
+   `python -X utf8 tools/sign_update.py --key keystore/update_signing_private.pem --version-code N --version-name X --changelog "…" --url "https://api.caeamer.com/downloads/beike/…apk" --apk <apk>`
+   （canonical 规则见 `tools/sign_update.py:40-47`；中文 changelog 不能走 bash 命令行——Git Bash→GBK 乱码，用 UTF-8 文件读入后传入；服务端 `/api/bs/app/latest` 原样返回该 JSON。）
+5. APK 用 workbench 单独上传到 `/opt/beike/public/downloads/beike/`（deploy 不打包 public，它是服务器持久状态），然后 `bash server/scripts/deploy.sh` 让版本 json 原子生效；线上核对 latest 版本/签名与 APK SHA-256。
 6. 同步 README 版本行、必要时更新 `SchoolAdjustments` 新学期补课数据。
 7. **真机验证**（当前缺闭环）：覆盖安装升级、应用内检查更新→下载→校验→安装、扫码登录、提醒重建。
 
