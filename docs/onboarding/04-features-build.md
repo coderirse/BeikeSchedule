@@ -155,13 +155,13 @@
   1. Doze 投递延迟：靠"已到点不取消 + 6h 宽限 + 先算后换"兜住，不会丢；
   2. 精确闹钟权限被收：退化为非精确，国产 ROM 省电管控下可能严重延迟；
   3. 通知权限被拒：静默不弹（提醒记录仍正常排）；
-  4. force-stop / OEM 清理：系统清空该包全部闹钟（含每日脉冲）——恢复依赖"打开 App 触发上课重排 → 重排里重新武装每日脉冲 → 脉冲再重排考试/日程"；**考试提醒本身没有"打开 App 即重排"入口**（只有抓取成功/清缓存/云恢复/脉冲/开机 5 个入口），若这条链断（例如上课提醒链路异常）考试提醒会缺失到下次脉冲；
+  4. force-stop / OEM 清理：系统清空该包全部闹钟（含每日脉冲）——~~恢复依赖"打开 App 触发上课重排"的隐式链~~（2026-10-19 已修：MainActivity.onResume 独立走 `ReminderRecovery.rescheduleAll`，三类串行恢复，不再依赖上课链路；见 `docs/REMINDER_FIX_2026-10-19.md`）；
   5. 应用自更新后闹钟被清：已由 `MY_PACKAGE_REPLACED` 覆盖（v1.4.0 修复）；
   6. 无 WorkManager/前台服务兜底，也没有"精确闹钟不可用"的降级 UI 之外的补偿。
 
 ## 7. 构建与发布工程
 
-- **版本号唯一来源**：`app/build.gradle.kts:26-27`（versionCode=58 / versionName="1.5.3"）；同步点三处均为手工：`README.md:37`、服务端 `/api/bs/app/latest` 响应（本机快照 `latest_1.5.3.json` 未入库）、`tools/sign_update.py` 的 `--version-code/--version-name` 参数 `tools/sign_update.py:18-26`。无脚本/CI 校验四处一致。
+- **版本号唯一来源**：`app/build.gradle.kts:26-27`（当前 versionCode=59 / versionName="1.5.4"）；同步点三处均为手工：`README.md:37`、服务端 `/api/bs/app/latest` 响应（2026-11-07 起为入库的 `server/src/bs-app-version.json`，此前是未入库的本机快照 `latest_*.json`）、`tools/sign_update.py` 的 `--version-code/--version-name` 参数 `tools/sign_update.py:18-26`。无脚本/CI 校验四处一致。
 - 包名：`com.caeamer.beikeschedule`（2026-08 起，旧 `com.example` 包的安装无法覆盖升级）；debug 用 `applicationIdSuffix=".debug"` 与正式包并存，便于真机排查不丢数据 `app/build.gradle.kts:16, 22-27, 41-45`。
 - SDK/工具链：`compileSdk { version = release(37) }`（AGP 9 新 DSL）、`minSdk 34`、`targetSdk 37`、Java 11 字节码 `app/build.gradle.kts:17-25, 61-64`；Gradle 9.4.1 `gradle/wrapper/gradle-wrapper.properties:4`；JDK toolchain 21 `gradle/gradle-daemon-jvm.properties:12`、`ci.yml:33-38`；AGP 9.2.1 `libs.versions.toml:2`；**未应用 `org.jetbrains.kotlin.android`**，走 AGP 9 内置 Kotlin（`build.gradle.kts:3-8`、`gradle.properties:20-21`）。
 - R8/资源裁剪：release `isMinifyEnabled=true` + `isShrinkResources=true` + `proguard-android-optimize.txt` + 项目最小 keep 规则（kotlinx.serialization 序列化器、`eddsa` 的 JDK 内部类 `dontwarn`）`app/build.gradle.kts:46-59`、`app/proguard-rules.pro:1-23`。历史上未声明 proguardFiles 靠 consumer rules 裸跑，现已显式化。
@@ -172,8 +172,8 @@
   3. `testDebugUnitTest`（43-44）→ `lintDebug`（46-47）→ `assembleDebug`（51-52）→ `minifyReleaseWithR8`（57-58，不需要签名，专门覆盖只在 R8 下暴露的问题）；
   4. 始终上传 test report / lint html（60-74）；
   5. 明确不接 ktlint（注释说明会产生淹没真实改动的巨型 diff，11-12），无 instrumented 测试、无 release 打包、无版本一致性校验。
-- **发布手工流程（由产物反推，v1.5.3 闭环成立）**：`assembleRelease` → 根目录 `BeikeSchedule-1.5.3-release.apk`（4,455,632 B，未入库 `.gitignore:21-22`）→ 上传 `https://api.caeamer.com/downloads/beike/...` → `tools/sign_update.py --apk ...` 规范化 7 字段 JSON（键序固定、紧凑、无 sig）并 Ed25519 签名，输出为 `GET /api/bs/app/latest` 响应体（`tools/sign_update.py:7-16, 40-47, 105-120`；客户端约定见 `UpdateSignature.kt:18-32`）→ 客户端验签（覆盖范围 FULL 含 APK SHA-256，旧约定 METADATA_ONLY 时摘要不可信）`UpdateSignature.kt:51-52, 136-151` → 比较 versionCode → 应用内下载后再核对 SHA-256 `UpdateInstaller.kt:155-170`。
-  - 现场一致性证据：`latest_1.5.3.json` 的 size=4455632、apkSha256=`c085ccf7…` 与根目录 APK 实测 SHA-256 完全一致，说明当前发布链可用；但 `latest_*.json` 全部未入库（`.gitignore:37`），元数据丢失只能从服务器取回或重签。
+- **发布手工流程（2026-11-07 起，v1.5.4 闭环成立）**：`assembleRelease` → `server/public/downloads/beike/BeikeSchedule-<version>-release.apk`（`*.apk` 未入库；**不再写根目录**）→ workbench 单独上传 APK 到 `/opt/beike/public/downloads/beike/`（deploy 不打包 public）→ `tools/sign_update.py --apk ...` 规范化 7 字段 JSON（键序固定、紧凑、无 sig）并 Ed25519 签名，输出到入库的 `server/src/bs-app-version.json`（`tools/sign_update.py:7-16, 40-47, 105-120`；客户端约定见 `UpdateSignature.kt:18-32`）→ `bash server/scripts/deploy.sh` 原子生效 → 客户端验签（覆盖范围 FULL 含 APK SHA-256，旧约定 METADATA_ONLY 时摘要不可信）`UpdateSignature.kt:51-52, 136-151` → 比较 versionCode → 应用内下载后再核对 SHA-256 `UpdateInstaller.kt:155-170`。
+  - 现场一致性证据（v1.5.4）：线上 latest 与入库 json 逐字段一致、OpenSSL 验签通过、线上 APK 实测 SHA-256 与签名覆盖值一致。历史各版 `latest_*.json` 样本仍在本机根目录（未入库），当前版元数据已随 `server/src/bs-app-version.json` 入库，不再怕丢。
 - 网络安全：`network_security_config` 全量禁明文（`app/src/main/res/xml/network_security_config.xml:10`）；Manifest 里"应用内更新走明文 HTTP"的注释已过时（1.3.8 起全 HTTPS）`AndroidManifest.xml:7-11`、`README.md:39, 47`。
 
 ## 8. 依赖与工具链风险
@@ -192,6 +192,8 @@
 | 未引入项 | TECH_DESIGN 提到的 WorkManager/Glance/navigation 均未引入 `docs/TECH_DESIGN.md:75-80, 103` | 文档与现状脱节，新人按文档找代码会扑空 | 更新文档或标 OUTDATED |
 
 ## 9. 仓库与工程债务（量化 + 清理优先级）
+
+> **2026-11-07 状态更新**：xml/png/log/nul/out/.v2c/.zcode/.kilo/.workbuddy 残留已清，28 个已合并本地分支已删，`.gitignore` 已增补防再生；根目录 28 个历史 APK + 11 个 latest_*.json 保留待归档（方案 B 未执行）。以下为 2026-10-17 基线记录。
 
 **根目录未入库产物（均被 `.gitignore` 覆盖但占磁盘 / 干扰 git status）**：28 个 APK（1.1.11 → 1.5.3，含 1.3.0-r4 debug/release）、18 个 `*.xml`（uiautomator dump e1-e7 等）、11 个 `latest_*.json`、10 个 png（emu/cloud 截图）、2 个 log、1 个 `nul`（Windows 保留设备名，普通方式删不掉）；`out/` 19 个文件（截图 + latest.json + plan.md）**未被忽略**、常驻 `git status`；`.v2c/`、`.zcode/`、`.zcodeignore` 未跟踪，`.kilo/`、`.workbuddy/` 已忽略但仍在磁盘——四者合计 196 文件 / 2.2MB。忽略规则见 `.gitignore:21-39`（`*.apk`、`/e*.xml`、`/emu*.png`、`/latest_*.json`、`.workbuddy/` 等）。
 
