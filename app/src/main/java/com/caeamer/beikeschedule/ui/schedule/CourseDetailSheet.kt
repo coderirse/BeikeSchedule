@@ -1,5 +1,6 @@
 package com.caeamer.beikeschedule.ui.schedule
 
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,6 +9,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -20,7 +23,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -46,8 +51,19 @@ fun CourseDetailSheet(
     onDelete: () -> Unit,
     onHide: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
+    // 只留 Expanded 锚点：半展开 + 可滚动内容会形成"滚动↔弹层高度"自激抖动
+    // （根因见 ScheduleScreen.UnscheduledSheet 注释）。短内容时 Expanded 仍包裹内容，观感不变；
+    // 大字号/小屏内容放不下时改为内部滚动，而不是被裁掉。
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        CompositionLocalProvider(LocalOverscrollFactory provides null) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+        ) {
             Text(course.name, style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(16.dp))
 
@@ -111,6 +127,7 @@ fun CourseDetailSheet(
                     }
                 }
             }
+        }
         }
     }
 }

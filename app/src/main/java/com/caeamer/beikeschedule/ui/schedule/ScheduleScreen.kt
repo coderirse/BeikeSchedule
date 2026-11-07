@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -26,6 +27,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.TextAutoSize
@@ -106,8 +109,8 @@ private val DetailCourseSaver = Saver<CourseEntity?, String>(
  */
 private const val SCROLLABLE_SHEET_MIN_ITEMS = 5
 
-/** 网格底部为 FAB 预留的净空（40dp 按钮 + 16dp 边距，见 WeekGrid 注释）。 */
-private val FAB_CLEARANCE = 56.dp
+/** 网格最小高度：6 大节 × 90dp（课名 3 行 + 地点 2 行的可读下限），再低课程块就读不成了。 */
+private val MIN_GRID_HEIGHT = 540.dp
 
 /** 某教学周各可见列的上课计划（列号 1..7 → daySchedule）：放假列清空、补课列改写生效星期都靠它。 */
 private fun daySchedulesFor(
@@ -604,8 +607,13 @@ private fun WeekGrid(
     val timeMap = remember(sectionTimes) { sectionTimes.associateBy { it.section } }
     // 同名同段多行（教务单周调课/单双周拆分）先合并成一张卡，再进冲突聚类
     val mergedCourses = remember(courses) { CourseMerger.mergeSameSlot(courses) }
-    // 底部留出 FAB 的净空：网格不可滚动，FAB 压住的最后一天最后一个大节是**看不回来**的。
-    Row(Modifier.fillMaxSize().padding(bottom = FAB_CLEARANCE)) {
+    // 视口高度不足（横屏/分屏/大字号）时按最小高度撑开并纵向滚动，否则第 5-6 大节被压扁裁掉。
+    // 可滚动后不再给 FAB 留底部净空：被 FAB 压住的内容滚上来就能看，净空白吃视口高度
+    // （横屏视口本来就窄，留 56dp 后只剩一条缝）。
+    // verticalScroll 在 height 外层：滚动容器按视口钳制，内部 Row 拿有界高度，weight 才能用。
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val gridHeight = maxHeight.coerceAtLeast(MIN_GRID_HEIGHT)
+        Row(Modifier.verticalScroll(rememberScrollState()).height(gridHeight).fillMaxWidth()) {
         // 节次列
         // 节次列：按 6 大节显示（一~六 + 起止时间），行高按小节数加权
         Column(Modifier.width(SECTION_COL_WIDTH).fillMaxHeight()) {
@@ -716,6 +724,7 @@ private fun WeekGrid(
                     )
                 }
             }
+        }
         }
     }
 }
