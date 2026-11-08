@@ -83,6 +83,7 @@ fun UnifiedSyncScreen(
     onLightBackgroundVisible: (Boolean) -> Unit = {},
     viewModel: UnifiedSyncViewModel = viewModel(),
     scope: SyncScope = SyncScope.ALL,
+    onRefreshComplete: (String) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val qrSid by viewModel.qrSid.collectAsStateWithLifecycle()
@@ -91,11 +92,22 @@ fun UnifiedSyncScreen(
     val context = LocalContext.current
     var webView by remember { mutableStateOf<WebView?>(null) }
     var pageLoading by remember { mutableStateOf(true) }
+    var readyForResult by remember { mutableStateOf(false) }
 
     BackHandler { onDone() }
     LaunchedEffect(state) { onLightBackgroundVisible(true) }
     // 同一进程内再次进入本页时，清掉上一次流程留下的终态（否则会直接看到旧汇总）
     LaunchedEffect(scope) { viewModel.resetIfFinished(scope) }
+    LaunchedEffect(state) {
+        val done = state as? UnifiedSyncUiState.Done
+        if (done == null) {
+            readyForResult = true
+        } else if (readyForResult && scope != SyncScope.ALL &&
+            done.results.isNotEmpty() && done.results.all { it.status == SyncStatus.OK }) {
+            onRefreshComplete(done.results.last().message ?: "刷新完成")
+            onDone()
+        }
+    }
     DisposableEffect(Unit) {
         onDispose {
             // 离开即取消：写库是单事务、上传/恢复各自带锁，取消不会留下半截数据
@@ -142,14 +154,21 @@ fun UnifiedSyncScreen(
                 step?.let { viewModel.onScriptError(it, "请先登录并进入教务系统主页（当前不在教务页）") }
                 return@collect
             }
-            target.evaluateJavascript(loadAssetScript(context, asset), null)
+            val modeScript = if (asset == "import/jw_grades.js") {
+                "window.__beikeGradesOnly = ${scope == SyncScope.GRADES_ONLY};\n"
+            } else ""
+            target.evaluateJavascript(modeScript + loadAssetScript(context, asset), null)
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (scope == SyncScope.EXAMS_ONLY) "获取考试安排" else "登录并同步") },
+                title = { Text(when (scope) {
+                    SyncScope.EXAMS_ONLY -> "刷新考试"
+                    SyncScope.GRADES_ONLY -> "刷新成绩"
+                    SyncScope.ALL -> "登录并同步"
+                }) },
                 navigationIcon = {
                     IconButton(onClick = onDone) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")

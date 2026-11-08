@@ -13,6 +13,25 @@ import java.time.LocalTime
 /** 日程重复规则展开、分组排序与提醒时刻计算的纯逻辑单测。 */
 class TodoPlannerTest {
 
+    @Test fun `future occurrences never inherit today's check or accept completion`() {
+        val today = LocalDate.of(2026, 11, 8)
+        val todo = daily().copy(lastDoneDate = today.toString())
+        assertTrue(TodoPlanner.isDoneOn(todo, today, today))
+        assertFalse(TodoPlanner.isDoneOn(todo, today.plusDays(1), today))
+        assertFalse(TodoPlanner.canCompleteOn(todo, today.plusDays(1), today))
+        assertFalse(TodoPlanner.canCompleteOn(todo, today.minusDays(1), today))
+    }
+
+    @Test fun `past one-time completion persists beyond the day it was checked`() {
+        val today = LocalDate.of(2026, 11, 8)
+        val date = today.minusDays(3)
+        val todo = once(date.toString()).copy(lastDoneDate = today.minusDays(1).toString())
+        assertTrue(TodoPlanner.isDoneOn(todo, date, today))
+        assertTrue(TodoPlanner.expiredOnce(listOf(todo), today).isEmpty())
+        assertTrue(TodoPlanner.canCompleteOn(todo, date, today))
+        assertFalse(TodoPlanner.canCompleteOn(todo, today, today))
+    }
+
     // 2026-09-17 是周四（ISO dayOfWeek=4）
     private val thu = LocalDate.of(2026, 9, 17)
     private val fri = LocalDate.of(2026, 9, 18)

@@ -38,6 +38,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,6 +83,7 @@ import kotlin.math.roundToInt
 fun FreeRoomScreen(viewModel: FreeRoomViewModel = viewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+    var displayedBuildingId by rememberSaveable { mutableStateOf<String?>(null) }
 
     // "现在"每 30 秒复算一次：用于 进行中/已结束 判定与时段自动展开。
     // 与 ScheduleScreen/TodoScreen 共用 rememberNow（RESUMED-only 时钟）：此前这里
@@ -91,7 +93,12 @@ fun FreeRoomScreen(viewModel: FreeRoomViewModel = viewModel()) {
     // 换楼栋后回到列表顶部：LazyColumn 的 key 是大节 ID（与楼栋无关），
     // 不重置的话用户会被留在上一个楼栋的滚动位置
     LaunchedEffect(state.selectedBuildingId) {
-        if (state.selectedBuildingId.isNotBlank()) listState.scrollToItem(0)
+        if (state.selectedBuildingId.isNotBlank()) {
+            if (displayedBuildingId != null && displayedBuildingId != state.selectedBuildingId) {
+                listState.scrollToItem(0)
+            }
+            displayedBuildingId = state.selectedBuildingId
+        }
     }
 
     PullToRefreshBox(

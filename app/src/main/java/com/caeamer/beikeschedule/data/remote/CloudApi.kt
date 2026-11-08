@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -147,7 +148,7 @@ object CloudApi {
         }
     }
 
-    /** 上传整包快照。snapshotJson 已序列化好的快照字符串，服务端原样存取。 */
+    /** 上传整包快照，返回服务端版本时间；不使用客户端时钟作为冲突判断依据。 */
     suspend fun putBackup(token: String, snapshotJson: String, appVersionCode: Int) =
         withContext(Dispatchers.IO) {
             val body = json.encodeToString(
@@ -162,8 +163,9 @@ object CloudApi {
                 Request.Builder().url("$BASE_URL$PATH_BACKUP").put(body.toRequestBody(mediaType)),
                 token,
             ).build()
-            execute(request).use { resp ->
-                if (!resp.isSuccessful) throw httpError(resp, authRequired = true)
+            parseOrThrow(execute(request), PATH_BACKUP, authRequired = true) { text ->
+                json.parseToJsonElement(text).jsonObject["updatedAt"]?.jsonPrimitive?.longOrNull
+                    ?.takeIf { it > 0 } ?: throw IOException("缺少备份版本")
             }
         }
 

@@ -8,6 +8,7 @@
 (function () {
     if (window.__beikeGradesRunning) return;
     window.__beikeGradesRunning = true;
+    var gradesOnly = window.__beikeGradesOnly === true;
 
     /**
      * 回传桥消息。桥由平台按 origin 限定（WebViewCompat.addWebMessageListener，
@@ -96,11 +97,15 @@
                 xscjlb: null, sffx: null, yhdm: me.yhdm || null
             }),
             postForm('/UserManager/queryxsxx', {}).catch(function () { return ''; }),
-            postForm('/kscxtj/queryXsksByxhList', {
+            gradesOnly ? Promise.resolve('') : postForm('/kscxtj/queryXsksByxhList', {
                 pxn: sem.XN, pxq: sem.XQ, ppylx: '1', pageNum: 1, pageSize: 100
             }).catch(function () { return ''; }),
             fetchProgress(sem.XN, sem.XQ)
         ]).then(function (all) {
+            var grades = parseJson(all[1], '成绩解析失败');
+            if (!grades.content || !Array.isArray(grades.content.list)) {
+                throw new Error('成绩响应格式异常，已保留上次数据');
+            }
             window.__beikeGradesRunning = false;
             // all[0]=getgpa, all[1]=grcjcx, all[2]=queryxsxx, all[3]=考试, all[4]=[xflbyq, bxkqk]
             send('onGradesResult', [all[0], all[1], rs[1], all[2], rs[0], all[3], all[4][0], all[4][1]]);

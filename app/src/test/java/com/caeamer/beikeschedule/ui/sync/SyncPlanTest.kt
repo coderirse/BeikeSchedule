@@ -13,6 +13,26 @@ import org.junit.Test
  */
 class SyncPlanTest {
 
+    @Test fun `grades refresh and retry cannot import timetable exams or access cloud`() {
+        CloudMode.entries.forEach { mode ->
+            assertEquals(listOf(SyncStep.IDENTITY, SyncStep.GRADES), SyncPlanner.steps(mode, SyncScope.GRADES_ONLY))
+            val results = mapOf(SyncStep.IDENTITY to SyncStepResult(SyncStep.IDENTITY, SyncStatus.OK))
+            assertTrue(SyncPlanner.retryHead(results, SyncScope.GRADES_ONLY).isEmpty())
+            assertEquals(listOf(SyncStep.GRADES), SyncPlanner.retryTail(mode, results, SyncScope.GRADES_ONLY))
+        }
+    }
+
+    @Test fun `same confirmed cloud revision avoids repeated decision but remote changes never do`() {
+        assertTrue(knownBackupUnchanged(true, true, 123L, 123L))
+        assertFalse(knownBackupUnchanged(true, true, 123L, 124L))
+        assertFalse(knownBackupUnchanged(false, true, 123L, 123L))
+        assertFalse(knownBackupUnchanged(true, false, 123L, 123L))
+        assertFalse(knownBackupUnchanged(true, true, 0L, 0L))
+        assertEquals(CloudMode.UPLOAD, defaultCloudMode(false, true, true, knownBackupUnchanged = true))
+        assertEquals(CloudMode.NO_UPLOAD, defaultCloudMode(true, true, true, knownBackupUnchanged = true))
+        assertEquals(CloudMode.RESTORE, defaultCloudMode(false, true, false, knownBackupUnchanged = true))
+    }
+
     @Test fun `exam refresh never imports unrelated data or accesses cloud regardless of mode`() {
         CloudMode.entries.forEach { mode ->
             assertEquals(listOf(SyncStep.IDENTITY, SyncStep.EXAMS), SyncPlanner.steps(mode, SyncScope.EXAMS_ONLY))

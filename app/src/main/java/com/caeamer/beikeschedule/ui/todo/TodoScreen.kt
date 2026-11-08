@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
@@ -40,6 +42,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -59,9 +64,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.onClick
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -71,6 +73,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.data.local.TodoEntity
 import com.caeamer.beikeschedule.ui.common.rememberNow
+import com.caeamer.beikeschedule.model.TodoPlanner
 import com.caeamer.beikeschedule.ui.schedule.DropdownField
 import com.caeamer.beikeschedule.ui.theme.CourseColors
 import kotlinx.serialization.json.Json
@@ -93,6 +96,7 @@ private val EditingSaver = Saver<TodoEntity?, String>(
  * 日程页：按日期分组展示个人事项，支持新增/编辑/删除与每日打卡。
  * 数据来自本地 Room，与教务会话无关；提醒由 TodoReminderScheduler 独立调度。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -104,19 +108,58 @@ fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
     // rememberSaveable：旋转/进程回收时表单开关与编辑内容不丢（此前旋转即关表单、输入全丢）
     var editing by rememberSaveable(stateSaver = EditingSaver) { mutableStateOf<TodoEntity?>(null) } // null = 未在编辑
     var showForm by rememberSaveable { mutableStateOf(false) }
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    var savedId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var focusId by rememberSaveable { mutableStateOf<Long?>(null) }
 
     Box(Modifier.fillMaxSize()) {
-        if (!state.loaded) {
-            // Room 首次发射前的空窗：不渲染任何内容，避免闪一帧"还没有日程"
-        } else if (state.groups.isEmpty() && state.expired.isEmpty()) {
-            EmptyTodo(onAdd = { showForm = true })
-        } else {
-            TodoList(
-                state = state,
-                now = now,
-                onToggleDone = viewModel::toggleDone,
-                onClick = { editing = it; showForm = true },
-            )
+        Column(Modifier.fillMaxSize()) {
+            SingleChoiceSegmentedButtonRow(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                SegmentedButton(
+                    selected = !showAll,
+                    onClick = { showAll = false },
+                    shape = SegmentedButtonDefaults.itemShape(0, 2),
+                ) { Text("近期") }
+                SegmentedButton(
+                    selected = showAll,
+                    onClick = { showAll = true },
+                    shape = SegmentedButtonDefaults.itemShape(1, 2),
+                ) { Text("全部日程") }
+            }
+            if (!state.loaded) {
+                // Room 首次发射前不显示空态，避免闪烁。
+            } else if (state.allTodos.isEmpty()) {
+                EmptyTodo(onAdd = { editing = null; showForm = true })
+            } else if (showAll) {
+                AllTodos(
+                    todos = state.allTodos,
+                    now = now,
+                    savedId = savedId,
+                    focusId = focusId,
+                    onToggleDone = viewModel::toggleDone,
+                    onFocused = { focusId = null },
+                    onClick = { editing = it; showForm = true },
+                )
+            } else if (state.groups.isEmpty() && state.expired.isEmpty()) {
+                Column(
+                    Modifier.fillMaxSize().padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text("近期没有安排", style = MaterialTheme.typography.titleMedium)
+                    Text("已保存 ${state.allTodos.size} 个日程，可在全部日程中查看和编辑。")
+                    TextButton(onClick = { showAll = true }) { Text("查看全部日程") }
+                }
+            } else {
+                TodoList(
+                    state = state,
+                    now = now,
+                    onToggleDone = viewModel::toggleDone,
+                    onClick = { editing = it; showForm = true },
+                )
+            }
         }
         FloatingActionButton(
             onClick = { editing = null; showForm = true },
@@ -132,7 +175,14 @@ fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
         TodoFormSheet(
             initial = editing,
             onDismiss = { showForm = false },
-            onSave = { viewModel.save(it); showForm = false },
+            onSave = { todo ->
+                showForm = false
+                viewModel.save(todo) { id ->
+                    savedId = id
+                    focusId = id
+                    showAll = true
+                }
+            },
             onDelete = editing?.let { existing ->
                 { viewModel.delete(existing.id); showForm = false }
             },
@@ -167,10 +217,56 @@ private fun EmptyTodo(onAdd: () -> Unit) {
 }
 
 @Composable
+private fun AllTodos(
+    todos: List<TodoEntity>,
+    now: LocalDateTime,
+    savedId: Long?,
+    focusId: Long?,
+    onToggleDone: (Long, LocalDate) -> Unit,
+    onFocused: () -> Unit,
+    onClick: (TodoEntity) -> Unit,
+) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(focusId, todos.map { it.id }) {
+        val index = todos.indexOfFirst { it.id == focusId }
+        if (index >= 0) {
+            listState.animateScrollToItem(index)
+            onFocused()
+        }
+    }
+    val today = now.toLocalDate()
+    LazyColumn(Modifier.fillMaxSize(), state = listState) {
+        items(todos, key = { it.id }) { todo ->
+            val date = if (todo.repeatMode == TodoEntity.REPEAT_ONCE) {
+                runCatching { LocalDate.parse(todo.date) }.getOrNull()
+            } else today
+            val schedule = when (todo.repeatMode) {
+                TodoEntity.REPEAT_DAILY -> "每天"
+                TodoEntity.REPEAT_WEEKLY -> "每周" + "一二三四五六日".filterIndexed { index, _ ->
+                    todo.weekdays.getOrNull(index) == '1'
+                }.toList().joinToString("、")
+                else -> todo.date
+            }
+            TodoRow(
+                todo = todo,
+                canComplete = date != null && TodoPlanner.canCompleteOn(todo, date, today),
+                isPast = date?.isBefore(today) == true,
+                done = date != null && TodoPlanner.isDoneOn(todo, date, today),
+                onToggleDone = { date?.let { onToggleDone(todo.id, it) } },
+                onClick = { onClick(todo) },
+                scheduleText = schedule + if (todo.id == savedId) " · 已保存" else "",
+            )
+            HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+        }
+        item { Spacer(Modifier.height(88.dp)) }
+    }
+}
+
+@Composable
 private fun TodoList(
     state: TodoUiState,
     now: LocalDateTime,
-    onToggleDone: (Long) -> Unit,
+    onToggleDone: (Long, LocalDate) -> Unit,
     onClick: (TodoEntity) -> Unit,
 ) {
     val today = now.toLocalDate()
@@ -198,10 +294,10 @@ private fun TodoList(
             items(dayTodos, key = { "${date}_${it.id}" }) { todo ->
                 TodoRow(
                     todo = todo,
-                    isToday = date == today,
+                    canComplete = TodoPlanner.canCompleteOn(todo, date, today),
                     isPast = date == today && runCatching { LocalTime.parse(todo.time) }.getOrNull()?.isBefore(nowTime) == true,
-                    done = todo.id in state.doneIds,
-                    onToggleDone = { onToggleDone(todo.id) },
+                    done = TodoPlanner.isDoneOn(todo, date, today),
+                    onToggleDone = { onToggleDone(todo.id, date) },
                     onClick = { onClick(todo) },
                 )
                 HorizontalDivider(
@@ -228,12 +324,12 @@ private fun TodoList(
         items(state.expired, key = { "expired_${it.id}" }) { todo ->
             TodoRow(
                 todo = todo,
-                isToday = false,
+                canComplete = true,
                 isPast = true,
                 // 勾选态照实读：过期区的打卡是"补打卡"，打完这条就该从过期区消失
                 // （规则在 TodoPlanner.expiredOnce），硬编码 false 会让点击看起来毫无反应
                 done = todo.id in state.doneIds,
-                onToggleDone = { onToggleDone(todo.id) },
+                onToggleDone = { onToggleDone(todo.id, LocalDate.parse(todo.date)) },
                 onClick = { onClick(todo) },
             )
             HorizontalDivider(
@@ -248,11 +344,12 @@ private fun TodoList(
 @Composable
 private fun TodoRow(
     todo: TodoEntity,
-    isToday: Boolean,
+    canComplete: Boolean,
     isPast: Boolean,
     done: Boolean,
     onToggleDone: () -> Unit,
     onClick: () -> Unit,
+    scheduleText: String? = null,
 ) {
     // 色板取 (底色, 文字色)；已完成或已过时间的事项整体淡化
     val (bg, fg) = CourseColors.of(todo.colorIndex)
@@ -270,7 +367,7 @@ private fun TodoRow(
     ) {
         // 打卡圈：toggleable + Role.Checkbox 让 TalkBack 只报一个控件并读出勾选态，
         // 且把触摸区从 26dp 扩到 48dp（26dp 远低于最小交互尺寸）
-        Surface(
+        if (canComplete) Surface(
             shape = CircleShape,
             color = if (done) MaterialTheme.colorScheme.primary else Color.Transparent,
             border = if (done) null
@@ -294,6 +391,10 @@ private fun TodoRow(
                     modifier = Modifier.padding(4.dp),
                 )
             }
+        } else {
+            Icon(Icons.Default.Event, contentDescription = "未来安排，仅预览",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.width(48.dp).height(48.dp).padding(12.dp))
         }
         Spacer(Modifier.width(12.dp))
         // 色块 + 文字
@@ -311,6 +412,7 @@ private fun TodoRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                scheduleText?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = fg) }
                 if (todo.note.isNotBlank()) {
                     Text(
                         todo.note,
@@ -362,8 +464,9 @@ private fun TodoFormSheet(
     val date = runCatching { LocalDate.parse(dateText) }.getOrDefault(LocalDate.now())
     val time = runCatching { LocalTime.parse(timeText) }.getOrDefault(LocalTime.of(8, 0))
 
-    // 三个选择器都用原生滚轮/日历，不存在格式非法，仅需事项非空即可保存
-    val canSave = title.isNotBlank()
+    // 日期与时间由选择器保证格式；每周重复必须选择至少一天。
+    val canSave = title.isNotBlank() &&
+        (repeatMode != TodoEntity.REPEAT_WEEKLY || '1' in weekdays)
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         // 内容槽不会自动滚动：表单固有高度约 500dp（标题 + 2 个输入框 + 下拉 + 星期/日期条件块
@@ -414,6 +517,7 @@ private fun TodoFormSheet(
 
             if (repeatMode == TodoEntity.REPEAT_WEEKLY) {
                 WeekdaySelector(selected = weekdays, onSelect = { weekdays = it })
+                if ('1' !in weekdays) Text("请至少选择一天", color = MaterialTheme.colorScheme.error)
                 Spacer(Modifier.height(8.dp))
             }
             if (repeatMode == TodoEntity.REPEAT_ONCE) {
@@ -542,46 +646,38 @@ private fun TodoFormSheet(
 
 /** 周一~周日 7 个可点圆点。 */
 @Composable
-private fun WeekdaySelector(selected: String, onSelect: (String) -> Unit) {
+internal fun WeekdaySelector(selected: String, onSelect: (String) -> Unit) {
     val days = listOf("一", "二", "三", "四", "五", "六", "日")
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         days.forEachIndexed { i, label ->
             val on = selected.getOrNull(i) == '1'
-            // 与同文件 ColorSelector 逐字同构：尺寸/裁圆/底色/交互语义全在同一个 Box 上。
-            // 曾用 Surface 包一层——Surface 会把 modifier 链的语义与内层内容拆成两个无障碍节点
-            // （外层有勾选态没名字、内层有名字没状态），TalkBack 读不全，实测确认。
+            // toggleable 同时处理触摸与读屏；仅写 semantics.onClick 不会接收手指点击。
             Box(
                 Modifier
-                    // 视觉 36dp + minimumInteractiveComponentSize 扩到 48dp 触达；
-                    // 相邻 7 点 SpaceBetween，36dp 裸触区会互相挤占
+                    // 等分七列，避免窄屏上前六个目标耗尽宽度，把周日挤成椭圆。
+                    .weight(1f)
                     .minimumInteractiveComponentSize()
-                    .width(36.dp)
-                    .height(36.dp)
-                    .clip(CircleShape)
-                    .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
-                    // 名字/角色/勾选态/动作写进同一个语义块；名字挂在子 Text 上靠
-                    // mergeDescendants 上提——直接写在本块里会被落到内层布局节点上，
-                    // 与勾选态拆成两个无障碍节点（实测三种交互 modifier 组合都如此）
-                    .semantics(mergeDescendants = true) {
-                        role = Role.Checkbox
-                        // this. 不能省：外层参数也叫 selected（String），不显式指定 receiver
-                        // 会赋值到参数上而不是语义属性
-                        this.selected = on
-                        onClick(label = if (on) "取消周$label" else "选择周$label") {
-                            val chars = (selected + "0000000").take(7).toCharArray()
-                            chars[i] = if (on) '0' else '1'
-                            onSelect(String(chars))
-                            true
-                        }
-                    },
+                    .height(48.dp)
+                    .toggleable(value = on, role = Role.Checkbox, onValueChange = { checked ->
+                        val chars = (selected + "0000000").take(7).toCharArray()
+                        chars[i] = if (checked) '1' else '0'
+                        onSelect(String(chars))
+                    })
+                    .semantics(mergeDescendants = true) { contentDescription = "周$label" },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.semantics { contentDescription = "周$label" },
-                )
+                Box(
+                    Modifier.size(36.dp).clip(CircleShape).background(
+                        if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

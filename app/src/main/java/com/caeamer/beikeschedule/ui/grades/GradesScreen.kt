@@ -62,6 +62,7 @@ import androidx.compose.runtime.remember
 import kotlinx.serialization.json.Json
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -119,14 +120,13 @@ private val DetailGradeSaver = Saver<GradeEntity?, String>(
 /**
  * 教务 Tab：成绩/考试分段 + 加权/GPA 双模式 + 学期筛选 + 课程勾选 + 学分进度。
  *
- * 抓取本身已合并到「一键同步」页（一次扫码同时导入课表与成绩），这里的「重新抓取」
- * 只是把用户领到那个页面；本页保留列表展示与筛选。
+ * 成绩与考试各自刷新，共用登录能力；全量同步由课表或云同步入口触发。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GradesScreen(onResync: () -> Unit, onRefreshExams: () -> Unit = onResync, viewModel: GradesViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var showRefreshConfirm by rememberSaveable { mutableStateOf(false) }
+    val sectionStates = rememberSaveableStateHolder()
     // GradeEntity 可 JSON 序列化：详情弹层旋转后恢复（Saver 见文件顶部）
     var detailGrade by rememberSaveable(stateSaver = DetailGradeSaver) { mutableStateOf<GradeEntity?>(null) }
 
@@ -151,8 +151,10 @@ fun GradesScreen(onResync: () -> Unit, onRefreshExams: () -> Unit = onResync, vi
                         state.section != GradesSection.FREE_ROOM &&
                         state.section != GradesSection.TODO
                     ) {
-                        IconButton(onClick = { showRefreshConfirm = true }) {
-                            Icon(Icons.Default.Refresh, contentDescription = if (state.section == GradesSection.EXAMS) "刷新考试" else "刷新成绩与考试")
+                        IconButton(onClick = {
+                            if (state.section == GradesSection.EXAMS) onRefreshExams() else onResync()
+                        }) {
+                            Icon(Icons.Default.Refresh, contentDescription = if (state.section == GradesSection.EXAMS) "刷新考试" else "刷新成绩")
                         }
                     }
                 }
@@ -160,66 +162,43 @@ fun GradesScreen(onResync: () -> Unit, onRefreshExams: () -> Unit = onResync, vi
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            if (showRefreshConfirm) {
-                AlertDialog(
-                    onDismissRequest = { showRefreshConfirm = false },
-                    title = { Text("重新抓取") },
-                    text = {
-                        Text(
-                            if (state.section == GradesSection.EXAMS) {
-                                "将进入教务系统获取本学期考试安排，登录有效时会直接获取。获取成功后更新本地考试和考前提醒。"
-                            } else "将进入教务系统：一次扫码同时导入课表、抓取成绩/GPA/考试安排/学业进度，" +
-                                "并登录云账号（云端已有备份时会让你选择以哪边为准）。当前本地数据会保留到抓取成功。是否继续？",
-                        )
-                    },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            showRefreshConfirm = false
-                            if (state.section == GradesSection.EXAMS) onRefreshExams() else onResync()
-                        }) { Text("继续") }
-                    },
-                    dismissButton = { TextButton(onClick = { showRefreshConfirm = false }) { Text("取消") } },
-                )
-            }
             // 分段控件必须在**所有**分支之上，否则空态页会失去切换入口。
             Column(Modifier.fillMaxSize()) {
                 SectionTabs(section = state.section, onSelect = viewModel::setSection)
 
-                when {
-                    // 分段偏好还没从 DataStore 读到（冷启动最初几帧）：只显示上面的分段行。
-                    // 不能先用"无课教室"占位——那会立刻把 FreeRoomViewModel 创建出来并
-                    // 发出 4 个外网请求，而用户上次停的可能是成绩段，这些请求白做。
-                    state.section == null -> Unit
+                sectionStates.SaveableStateProvider(state.section?.name ?: "loading") {
+                    when {
+                        // 偏好读到之前不创建默认分区，避免发出用户不需要的网络请求。
+                        state.section == null -> Unit
 
-                    // 无课教室的数据来自校外平台，与教务会话无关，独立成页
-                    GradesSection.FREE_ROOM == state.section -> FreeRoomScreen()
+                        // 无课教室的数据来自校外平台，与教务会话无关。
+                        GradesSection.FREE_ROOM == state.section -> FreeRoomScreen()
 
-                    // 日程来自本地 Room，与教务会话无关
-                    GradesSection.TODO == state.section -> TodoScreen()
+                        GradesSection.TODO == state.section -> TodoScreen()
 
-                    // 考试分段自带 error/未抓取态：此前不传 error，失败提示在考试段永远看不到，
-                    // 而"从未抓取"也被说成"本学期暂无考试安排"
-                    GradesSection.EXAMS == state.section -> ExamListContent(
-                        exams = state.examsSorted,
-                        error = state.error,
-                        fetchedAt = state.examsFetchedAt,
-                        onFetch = onRefreshExams,
-                        onDismissError = viewModel::dismissError,
-                    )
+                        // 考试分区独立处理失败与从未获取，不能把它们误报成暂无考试。
+                        GradesSection.EXAMS == state.section -> ExamListContent(
+                            exams = state.examsSorted,
+                            error = state.error,
+                            fetchedAt = state.examsFetchedAt,
+                            onFetch = onRefreshExams,
+                            onDismissError = viewModel::dismissError,
+                        )
 
-                    state.grades.isEmpty() && state.exams.isEmpty() ->
-                        NoGradesYet(error = state.error, onFetch = onResync)
+                        state.grades.isEmpty() && state.exams.isEmpty() ->
+                            NoGradesYet(error = state.error, onFetch = onResync)
 
-                    else -> GradesContent(
-                        state = state,
-                        onModeChange = { viewModel.setScoreMode(it) },
-                        onSchoolYearFilter = { viewModel.setSchoolYearFilter(it) },
-                        onSemesterFilter = { viewModel.setSemesterFilter(it) },
-                        onToggleCourse = { viewModel.toggleExcluded(it) },
-                        onErrorDismiss = { viewModel.dismissError() },
-                        onGradeClick = { detailGrade = it },
-                        onToggleHideScores = { viewModel.toggleHideScores() },
-                    )
+                        else -> GradesContent(
+                            state = state,
+                            onModeChange = { viewModel.setScoreMode(it) },
+                            onSchoolYearFilter = { viewModel.setSchoolYearFilter(it) },
+                            onSemesterFilter = { viewModel.setSemesterFilter(it) },
+                            onToggleCourse = { viewModel.toggleExcluded(it) },
+                            onErrorDismiss = { viewModel.dismissError() },
+                            onGradeClick = { detailGrade = it },
+                            onToggleHideScores = { viewModel.toggleHideScores() },
+                        )
+                    }
                 }
             }
         }
@@ -274,7 +253,7 @@ private fun NoGradesYet(error: String?, onFetch: () -> Unit) {
         Text("还没有成绩数据", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(8.dp))
         Text(
-            "登录教务系统即可自动获取成绩、GPA 与考试安排",
+            "登录教务系统即可获取成绩、GPA 与学业进度",
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

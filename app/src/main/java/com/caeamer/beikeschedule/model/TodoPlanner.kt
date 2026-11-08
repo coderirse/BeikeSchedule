@@ -11,6 +11,18 @@ import java.time.LocalTime
  */
 object TodoPlanner {
 
+    /** 打卡属于具体日期；重复事项的未来日期只作预览，一次性过期事项可补打卡。 */
+    fun canCompleteOn(todo: TodoEntity, date: LocalDate, today: LocalDate): Boolean =
+        occursOn(todo, date) && (date == today ||
+            (todo.repeatMode == TodoEntity.REPEAT_ONCE && date.isBefore(today)))
+
+    fun isDoneOn(todo: TodoEntity, date: LocalDate, today: LocalDate): Boolean =
+        occursOn(todo, date) && if (todo.repeatMode == TodoEntity.REPEAT_ONCE) {
+            todo.lastDoneDate.isNotBlank()
+        } else {
+            date == today && todo.isDoneToday(today.toString())
+        }
+
     /**
      * 该事项在 [date] 这一天是否出现。
      *
@@ -75,16 +87,13 @@ object TodoPlanner {
      * 主列表只展示今天起 [days] 天，没有这个出口它们就成了"幽灵数据"——永远不可见、
      * 不可编辑、不可删，却仍参与提醒重排。
      *
-     * **打过卡即离开过期区**：`lastDoneDate == date` 是当天按时完成过，`lastDoneDate == today`
-     * 是用户刚在过期区补打了卡。此前只判前者，而补打卡写入的是今天 → 永远不等于过去的 date，
-     * 条目既不消失、勾选框也恒显示未勾，成了点了没反应的无效交互。
+     * **打过卡即离开过期区**：一次性事项任意日期完成都有效，补打卡不能次日重新变成未完成。
      */
     fun expiredOnce(todos: List<TodoEntity>, today: LocalDate): List<TodoEntity> =
         todos.filter { todo ->
             todo.repeatMode == TodoEntity.REPEAT_ONCE &&
                 runCatching { LocalDate.parse(todo.date) }.getOrNull()?.isBefore(today) == true &&
-                todo.lastDoneDate != todo.date &&
-                todo.lastDoneDate != today.toString()
+                todo.lastDoneDate.isBlank()
         }.sortedBy { it.date }
 
     /**

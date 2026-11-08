@@ -335,6 +335,9 @@ class SettingsStore(private val context: Context) {
 
     suspend fun saveCloudAccount(account: CloudAccount) {
         context.dataStore.edit { p ->
+            if (p[Keys.CLOUD_XH] != account.xh) {
+                p[Keys.CLOUD_LAST_BACKUP_AT] = 0L
+            }
             p[Keys.CLOUD_XH] = account.xh
             p[Keys.CLOUD_NAME] = account.name
             p[Keys.CLOUD_TOKEN] = TokenCipher.encrypt(account.token)

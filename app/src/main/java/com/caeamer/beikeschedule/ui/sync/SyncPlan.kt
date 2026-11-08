@@ -6,7 +6,7 @@ package com.caeamer.beikeschedule.ui.sync
  * 三条抓取脚本共用同一个 WebView 会话：先拿学号（身份），再换云 token 并决定
  * "云端数据怎么办"，最后才抓课表/成绩，必要时补一次上传。"从云端恢复"是唯一
  * 跳过抓取的分支——刚恢复就抓一遍会把云端数据又覆盖掉。
- * 考试页使用 EXAMS_ONLY 范围，仅运行身份核对与考试步骤，不访问云账号。
+ * 成绩、考试页只运行身份核对和对应数据步骤，不访问云账号。
  */
 enum class SyncStep(val label: String) {
     IDENTITY("获取学号"),
@@ -20,7 +20,7 @@ enum class SyncStep(val label: String) {
     RESTORE("从云端恢复"),
 }
 
-enum class SyncScope { ALL, EXAMS_ONLY }
+enum class SyncScope { ALL, EXAMS_ONLY, GRADES_ONLY }
 
 enum class SyncStatus { OK, FAILED, SKIPPED }
 
@@ -61,7 +61,7 @@ internal object SyncPlanner {
     val head: List<SyncStep> = listOf(SyncStep.IDENTITY, SyncStep.CLOUD_TOKEN)
 
     fun head(scope: SyncScope): List<SyncStep> =
-        if (scope == SyncScope.EXAMS_ONLY) listOf(SyncStep.IDENTITY) else head
+        if (scope != SyncScope.ALL) listOf(SyncStep.IDENTITY) else head
 
     fun steps(mode: CloudMode, scope: SyncScope = SyncScope.ALL): List<SyncStep> = head(scope) + tail(mode, scope)
 
@@ -72,13 +72,17 @@ internal object SyncPlanner {
      * 实验安排，按"每次同步自动拉取"的口径执行；放在 BACKUP 之前，上传的快照才包含它。
      */
     fun tail(mode: CloudMode, scope: SyncScope = SyncScope.ALL): List<SyncStep> =
-        if (scope == SyncScope.EXAMS_ONLY) listOf(SyncStep.EXAMS) else when (mode) {
-            CloudMode.RESTORE -> listOf(SyncStep.RESTORE, SyncStep.CLASS_LAB)
-            CloudMode.UPLOAD ->
-                listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB, SyncStep.BACKUP)
-            CloudMode.UNDECIDED,
-            CloudMode.NO_UPLOAD,
-            -> listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB)
+        when (scope) {
+            SyncScope.EXAMS_ONLY -> listOf(SyncStep.EXAMS)
+            SyncScope.GRADES_ONLY -> listOf(SyncStep.GRADES)
+            SyncScope.ALL -> when (mode) {
+                CloudMode.RESTORE -> listOf(SyncStep.RESTORE, SyncStep.CLASS_LAB)
+                CloudMode.UPLOAD ->
+                    listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB, SyncStep.BACKUP)
+                CloudMode.UNDECIDED,
+                CloudMode.NO_UPLOAD,
+                -> listOf(SyncStep.TIMETABLE, SyncStep.GRADES, SyncStep.CLASS_LAB)
+            }
         }
 
     /** 重试的前半段：只重跑未成功的身份/云账号步骤。 */
@@ -108,12 +112,22 @@ internal fun defaultCloudMode(
     probeFailed: Boolean,
     cloudHasBackup: Boolean,
     localHasData: Boolean,
+    knownBackupUnchanged: Boolean = false,
 ): CloudMode = when {
     probeFailed -> CloudMode.NO_UPLOAD
     !cloudHasBackup -> CloudMode.UPLOAD
     !localHasData -> CloudMode.RESTORE
+    knownBackupUnchanged -> CloudMode.UPLOAD
     else -> CloudMode.UNDECIDED
 }
 
 /** 是否需要弹"云端已有备份"三选一。 */
 internal fun needsCloudDecision(mode: CloudMode): Boolean = mode == CloudMode.UNDECIDED
+
+/** 必须有同账号成功备份依据；首次关联、已关闭同步或远端改变都不能静默覆盖。 */
+internal fun knownBackupUnchanged(
+    sameAccount: Boolean,
+    syncEnabled: Boolean,
+    localRevision: Long,
+    remoteRevision: Long,
+): Boolean = sameAccount && syncEnabled && localRevision > 0 && localRevision == remoteRevision

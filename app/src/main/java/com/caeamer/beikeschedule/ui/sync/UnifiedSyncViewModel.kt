@@ -368,11 +368,18 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             null
         }
-        val localHasData = repo.courses.first().isNotEmpty() || repo.grades.first().isNotEmpty()
+        val localHasData = repo.courses.first().isNotEmpty() || repo.grades.first().isNotEmpty() ||
+            repo.todos.first().isNotEmpty() || repo.exams.first().isNotEmpty()
         val initial = defaultCloudMode(
             probeFailed = envelope == null,
             cloudHasBackup = envelope?.exists == true,
             localHasData = localHasData,
+            knownBackupUnchanged = knownBackupUnchanged(
+                sameAccount = account.isLoggedIn && account.xh == id,
+                syncEnabled = settings.cloudSyncEnabled.first(),
+                localRevision = settings.cloudLastBackupAt.first(),
+                remoteRevision = envelope?.updatedAt ?: 0L,
+            ),
         )
         mode = if (needsCloudDecision(initial)) {
             runNote = "云端已有备份，已按你的选择处理"
@@ -460,6 +467,9 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun stepGrades(): SyncStepResult {
+        if (syncScope == SyncScope.GRADES_ONLY && !matchesLocalAccount()) {
+            return failed(SyncStep.GRADES, "登录学号与本机账号不同，请登录原账号，或通过完整同步切换账号")
+        }
         val out = awaitScript(SyncStep.GRADES, "import/jw_grades.js")
         if (out is ScriptOutcome.Err) return failed(SyncStep.GRADES, "抓取失败：${out.message}")
         val a = (out as ScriptOutcome.Ok).args
@@ -483,7 +493,7 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
             val (semXn, semXq, _) = JwParser.parseCurrentSemester(semJson)
             // null = 没拿到考试数据（错误体/登录页 HTML/空响应），空列表 = 确实没有考试。
             // 只有后者才允许覆盖本地考试表——覆盖式写入把失败当"无考试"会连带取消未来提醒。
-            val exams = ExamsParser.parseExams(examsJson, semXn + semXq)
+            val exams = if (syncScope == SyncScope.ALL) ExamsParser.parseExams(examsJson, semXn + semXq) else null
             if (exams != null) {
                 repo.replaceExams(exams)
                 settings.saveExamsFetchedAt(System.currentTimeMillis())
@@ -497,7 +507,7 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
 
             val notes = buildList {
                 if (grades.isEmpty()) add("未解析到成绩（可能未评教或成绩未发布）")
-                if (exams == null) add("考试安排获取失败，已保留上次数据")
+                if (syncScope == SyncScope.ALL && exams == null) add("考试安排获取失败，已保留上次数据")
             }
             val savedSomething = grades.isNotEmpty() || exams != null ||
                 xflbyqJson.isNotBlank() || bxkqkJson.isNotBlank()
@@ -514,10 +524,8 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun stepExams(): SyncStepResult {
-        val id = xh ?: return failed(SyncStep.EXAMS, "未取得学号，请重新登录后重试")
-        val profileId = settings.studentProfile.first().xh
-        val cloudId = settings.cloudAccount.first().xh
-        if (listOf(profileId, cloudId).any { it.isNotBlank() && it != id }) {
+        if (xh == null) return failed(SyncStep.EXAMS, "未取得学号，请重新登录后重试")
+        if (!matchesLocalAccount()) {
             return failed(SyncStep.EXAMS, "登录学号与本机账号不同，请登录原账号，或通过完整同步切换账号")
         }
         val out = awaitScript(SyncStep.EXAMS, "import/jw_exams.js")
@@ -537,6 +545,12 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             failed(SyncStep.EXAMS, "获取失败：${e.message}")
         }
+    }
+
+    private suspend fun matchesLocalAccount(): Boolean {
+        val id = xh ?: return false
+        return listOf(settings.studentProfile.first().xh, settings.cloudAccount.first().xh)
+            .none { it.isNotBlank() && it != id }
     }
 
     /**

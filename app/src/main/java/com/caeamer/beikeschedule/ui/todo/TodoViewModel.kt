@@ -25,6 +25,7 @@ typealias TodoDayGroup = Pair<LocalDate, List<TodoEntity>>
 
 /** 日程页状态。 */
 data class TodoUiState(
+    val allTodos: List<TodoEntity> = emptyList(),
     val groups: List<TodoDayGroup> = emptyList(),
     /** 已过期的一次性事项（规则见 [TodoPlanner.expiredOnce]：打过卡就离开这里）。 */
     val expired: List<TodoEntity> = emptyList(),
@@ -49,6 +50,7 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
 
     val uiState: StateFlow<TodoUiState> = combine(repo.todos, today) { todos, day ->
         TodoUiState(
+            allTodos = todos.sortedWith(compareBy<TodoEntity> { it.title }.thenBy { it.id }),
             groups = TodoPlanner.groupByDate(todos, day, DISPLAY_DAYS),
             expired = TodoPlanner.expiredOnce(todos, day),
             doneIds = todos.filter { it.isDoneToday(day.toString()) }.map { it.id }.toSet(),
@@ -63,8 +65,8 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 新增或更新（id=0 为新增）。 */
-    fun save(todo: TodoEntity) {
-        viewModelScope.launch { repo.upsertTodo(todo) }
+    fun save(todo: TodoEntity, onSaved: (Long) -> Unit = {}) {
+        viewModelScope.launch { onSaved(repo.upsertTodo(todo)) }
     }
 
     fun delete(id: Long) {
@@ -78,13 +80,15 @@ class TodoViewModel(app: Application) : AndroidViewModel(app) {
      * B 随即启动，两次读到同一份旧行 → "打卡→立刻取消"变成两次打卡。只"读最新值"关不掉这个
      * 窗口（读和写之间仍有挂起点），必须串行化。
      */
-    fun toggleDone(id: Long) {
+    fun toggleDone(id: Long, occurrenceDate: LocalDate) {
         refreshToday()
         viewModelScope.launch {
             toggleMutex.withLock {
-                val day = today.value.toString()
                 val todo = repo.todos.first().firstOrNull { it.id == id } ?: return@withLock
-                repo.setTodoDone(id, if (todo.isDoneToday(day)) "" else day)
+                refreshToday()
+                val day = today.value.toString()
+                if (!TodoPlanner.canCompleteOn(todo, occurrenceDate, today.value)) return@withLock
+                repo.setTodoDone(id, if (TodoPlanner.isDoneOn(todo, occurrenceDate, today.value)) "" else day)
             }
         }
     }

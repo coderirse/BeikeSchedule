@@ -1,7 +1,9 @@
 package com.caeamer.beikeschedule
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
@@ -36,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -177,6 +180,7 @@ class MainActivity : ComponentActivity() {
             }
             BeikeScheduleTheme(darkTheme = darkTheme) {
                 var tab by rememberSaveable { mutableStateOf("schedule") }
+                val tabStates = rememberSaveableStateHolder()
                 // 一键同步（登录 + 课表/成绩/云同步）为全屏流程，不显示底部 Tab
                 var showSync by rememberSaveable { mutableStateOf(false) }
                 var syncScope by rememberSaveable { mutableStateOf(SyncScope.ALL) }
@@ -188,6 +192,9 @@ class MainActivity : ComponentActivity() {
                 var showSemesterSettings by rememberSaveable { mutableStateOf(false) }
                 // 同步页的 WebView 展示的是浅底教务页面，需要临时切成深色状态栏图标
                 var syncLightPage by remember { mutableStateOf(false) }
+                BackHandler(enabled = !showSync && !showSemesterSettings && tab != "schedule") {
+                    tab = "schedule"
+                }
 
                 // 状态栏/导航栏图标明暗：themeMode 只是 Compose 内部的主题选择，
                 // 不会改资源 uiMode，而 enableEdgeToEdge() 的 SystemBarStyle.auto 只看 uiMode
@@ -207,6 +214,7 @@ class MainActivity : ComponentActivity() {
                         scope = syncScope,
                         onDone = { showSync = false },
                         onLightBackgroundVisible = { syncLightPage = it },
+                        onRefreshComplete = { Toast.makeText(this, it, Toast.LENGTH_LONG).show() },
                     )
                 } else if (showSemesterSettings) {
                     // 学期设置：viewModel() 拿到的是与课表页同一个 Activity 级 ViewModel，
@@ -258,16 +266,18 @@ class MainActivity : ComponentActivity() {
                             },
                         ) { padding ->
                             Box(Modifier.padding(padding)) {
-                                when (tab) {
-                                    "jw" -> GradesScreen(
-                                        onResync = { openSync() },
-                                        onRefreshExams = { openSync(SyncScope.EXAMS_ONLY) },
-                                    )
-                                    "mine" -> ProfileScreen(onCloudLoginClick = { openSync() })
-                                    else -> ScheduleScreen(
-                                        onImportClick = { openSync() },
-                                        onOpenSettings = { showSemesterSettings = true },
-                                    )
+                                tabStates.SaveableStateProvider(tab) {
+                                    when (tab) {
+                                        "jw" -> GradesScreen(
+                                            onResync = { openSync(SyncScope.GRADES_ONLY) },
+                                            onRefreshExams = { openSync(SyncScope.EXAMS_ONLY) },
+                                        )
+                                        "mine" -> ProfileScreen(onCloudLoginClick = { openSync() })
+                                        else -> ScheduleScreen(
+                                            onImportClick = { openSync() },
+                                            onOpenSettings = { showSemesterSettings = true },
+                                        )
+                                    }
                                 }
                             }
                         }

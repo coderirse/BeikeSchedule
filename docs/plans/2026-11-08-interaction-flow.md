@@ -32,3 +32,12 @@
 - 执行 ./gradlew testDebugUnitTest lintDebug assembleDebug minifyReleaseWithR8 assembleDebugAndroidTest --console=plain。
 - 执行 node --test app/src/test/js/*.test.cjs；如模拟器可用，运行新增设备测试。
 - git diff --check、自审范围和异常路径，提交后 git push -u origin codex/interaction-flow-improvements，核验远端提交。
+
+## 实施记录
+
+- 已完成四项；日程保留一次性事项的补打卡能力，且补打卡完成不会在次日重新出现。保存定位请求消费一次，后续切页继续恢复用户自己的浏览位置。
+- 小屏（360dp）实机模拟检查修正星期按钮宽度分配；设备测试用真实触摸验证周六、周日切换，避免仅语义点击通过但手指点击无效。
+- JVM 单测：430 项通过；JS 成绩/考试脚本：15 项通过。
+- 模拟器（Pixel_10_Pro，Android 17）：7 项通过，覆盖星期触摸、未来预览、远期记录、保存定位、Tab 滚动恢复、教务分区恢复、刷新范围与返回来源分区。
+- 全量验证命令：`./gradlew connectedDebugAndroidTest testDebugUnitTest lintDebug assembleDebug minifyReleaseWithR8 -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest --no-configuration-cache --max-workers=4 --console=plain`。
+- 未使用真实教务账号登录；教务请求范围、返回格式及失败语义使用 JS/编排测试验证，云端备份版本字段与仓库服务端实现核对。

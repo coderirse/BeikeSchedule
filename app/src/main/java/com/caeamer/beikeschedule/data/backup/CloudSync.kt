@@ -148,12 +148,12 @@ object CloudSync {
                 try {
                     val snapshot = CloudSnapshotCodec.build(app)
                     val encoded = CloudSnapshot.encode(snapshot)
-                    CloudApi.putBackup(account.token, encoded, appVersionCode(app))
+                    val revision = CloudApi.putBackup(account.token, encoded, appVersionCode(app))
                     val stillDirty = settings.cloudDirty.first()
                     if (!stillDirty || attempt >= MAX_REBUILD_ROUNDS) {
                         // 轮次耗尽仍脏：不 clear（最新改动留给下个去抖周期），本次内容已上云
                         if (!stillDirty) settings.clearCloudDirty()
-                        settings.setCloudLastBackupAt(System.currentTimeMillis())
+                        settings.setCloudLastBackupAt(revision)
                         return@withLock Result.success(Unit)
                     }
                     // stillDirty：构建期间有新写入，重建再传
