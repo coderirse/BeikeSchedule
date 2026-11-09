@@ -55,6 +55,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -62,6 +63,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.platform.testTag
+import com.caeamer.beikeschedule.ui.pet.SchedulePetHost
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -140,6 +145,7 @@ fun ScheduleScreen(
     val scope = rememberCoroutineScope()
 
     var weekMenuExpanded by rememberSaveable { mutableStateOf(false) }
+    var petInteractionEpoch by remember { mutableIntStateOf(0) }
     var detailCourse by rememberSaveable(stateSaver = DetailCourseSaver) { mutableStateOf<CourseEntity?>(null) }
     var detailDate by rememberSaveable { mutableStateOf<String?>(null) }
     // 多时段课程编辑：存该课的全部行（同「名字+来源」），传给编辑框加载全部时段
@@ -242,6 +248,7 @@ fun ScheduleScreen(
     Scaffold(
         modifier = Modifier.background(SolidColor(Color.Transparent)),
         containerColor = Color.Transparent,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         topBar = {
             // 自定义矮顶栏（替代 TopAppBar 64dp 大留白），内容单行紧凑排列
             // 外层 Scaffold 已不消费状态栏 inset（contentWindowInsets=0），故这里自行 statusBarsPadding
@@ -341,7 +348,16 @@ fun ScheduleScreen(
             }
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        // 观察器放在共同父节点而非覆盖全屏的宠物节点：不消费事件，不抢课表点击/滑动。
+        Box(Modifier.fillMaxSize().padding(padding).pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    if (event.changes.any { it.pressed && !it.previousPressed }) petInteractionEpoch++
+                }
+            }
+        }) {
+        Column(Modifier.fillMaxSize()) {
             if (state.loaded && state.courses.isEmpty()) {
                 EmptyState(
                     onLoadSample = { viewModel.loadSampleData() },
@@ -373,7 +389,7 @@ fun ScheduleScreen(
                 }
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("schedule-weeks"),
                 ) { page ->
                     WeekGrid(
                         week = page + 1,
@@ -403,6 +419,11 @@ fun ScheduleScreen(
                     )
                 }
             }
+        }
+        SchedulePetHost(
+            paused = showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null,
+            interactionEpoch = petInteractionEpoch,
+        )
         }
     }
 
