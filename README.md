@@ -84,7 +84,7 @@ node --test app/src/test/js/*.test.cjs # 成绩/考试脚本：请求范围、�
 交互回归覆盖滚轮初始化、拖动与快速确定、保存重开、提醒边界、日程查看与打卡、页面状态及刷新返回。需启动模拟器或连接 Android 设备：
 
 ```bash
-./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.PetInteractionTest,com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.WheelPickerInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest
+./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.PetBubbleTouchTest,com.caeamer.beikeschedule.PetInteractionTest,com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.WheelPickerInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest
 ```
 
 更多技术细节见 [docs/TECH_DESIGN.md](docs/TECH_DESIGN.md) 与 [docs/JWXT_API.md](docs/JWXT_API.md)。

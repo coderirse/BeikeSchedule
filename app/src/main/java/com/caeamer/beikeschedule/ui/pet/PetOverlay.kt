@@ -6,6 +6,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
@@ -17,6 +18,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
@@ -229,7 +232,7 @@ private fun PetSprite(atlas: ImageBitmap, row: Int, appearance: PetAppearance, m
 }
 
 @Composable
-private fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modifier: Modifier, onDismiss: () -> Unit) {
+internal fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modifier: Modifier, onDismiss: () -> Unit) {
     val color = MaterialTheme.colorScheme.secondaryContainer
     @Composable fun Tail() {
         Canvas(Modifier.fillMaxWidth().height(9.dp)) {
@@ -244,7 +247,10 @@ private fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modifi
     }
     Column(modifier.testTag("pet-bubble")) {
         if (below) Tail()
-        Surface(color = color, shape = MaterialTheme.shapes.large, shadowElevation = 3.dp) {
+        // Material Surface 即使无 onClick 也有拦截命中的 pointerInput；浮动气泡必须仅绘制。
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSecondaryContainer) {
+        Box(Modifier.shadow(3.dp, MaterialTheme.shapes.large).background(color, MaterialTheme.shapes.large)
+            .clip(MaterialTheme.shapes.large)) {
             Column(Modifier.padding(start = 14.dp, end = 10.dp, bottom = 12.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     Text(when (message.kind) { PetMessageKind.COURSE -> "课前小提醒"; PetMessageKind.EXAM -> "考前加油站"; else -> "大肥鱼说" },
@@ -256,6 +262,7 @@ private fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modifi
                 // 主体没有点击/拖动处理，不挡住下方课程；只有关闭按钮接收气泡操作。
                 Text(message.text, style = MaterialTheme.typography.bodyMedium, maxLines = 6, overflow = TextOverflow.Ellipsis)
             }
+        }
         }
         if (!below) Tail()
     }

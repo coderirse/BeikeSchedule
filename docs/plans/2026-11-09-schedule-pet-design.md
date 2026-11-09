@@ -41,6 +41,7 @@
 ## 实施结果与发布范围
 
 - 当前 v2.0.0 / 64 实现采用原生 Compose + 本地 WebP，未增加动画依赖、Manifest 权限、数据库迁移或系统提醒写入。
-- 441 项 JVM、15 项 JS、22 项设备交互测试通过；Lint 无错误；debug 和正式签名 release（含 R8）构建通过。
+- 441 项 JVM、15 项 JS、24 项设备交互测试通过；Lint 无错误；debug 和正式签名 release（含 R8）构建通过。
 - 设备验证包含自由拖动、气泡、角色启停、设置及称呼、翻周、课程点击/添加、前后台停用与位置恢复，并复测原有日程/导航/滚轮。
 - 用户查看真实预览并明确选择“直接发布 v2.0.0 到应用内更新源”。保留旧安装包及旧更新声明，完成签名和下载校验后发布；用户手机体验另行反馈。
+- 发布前额外核对了 [Material3 Surface 的命中处理](https://github.com/androidx/androidx/blob/androidx-main/compose/material3/material3/src/commonMain/kotlin/androidx/compose/material3/Surface.kt)：无 onClick 的 Surface 仍会阻止下层命中。新增真实触摸测试先复现失败，再将气泡改为纯绘制 Box 后通过；关闭按钮保留独立触摸响应。
