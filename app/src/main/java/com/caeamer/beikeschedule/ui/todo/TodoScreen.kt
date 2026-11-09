@@ -596,8 +596,8 @@ private fun TodoFormSheet(
     // 时间选择：iOS 风格双列滚轮（时/分，24 小时制），拖动吸附 + 点选居中。
     // 此前用 M3 时钟控件，用户明确要求改为图示的双列滚轮样式。
     if (showTimePicker) {
-        var selHour by rememberSaveable { mutableStateOf(time.hour) }
-        var selMinute by rememberSaveable { mutableStateOf(time.minute) }
+        val hourState = rememberLazyListState(initialFirstVisibleItemIndex = time.hour)
+        val minuteState = rememberLazyListState(initialFirstVisibleItemIndex = time.minute)
         AlertDialog(
             onDismissRequest = { showTimePicker = false },
             title = { Text("选择时间") },
@@ -605,15 +605,15 @@ private fun TodoFormSheet(
                 Row(Modifier.fillMaxWidth()) {
                     WheelColumn(
                         items = (0..23).map { String.format(java.util.Locale.US, "%02d", it) },
-                        initialIndex = selHour,
-                        onCenterChange = { selHour = it },
+                        initialIndex = time.hour,
+                        state = hourState,
                         suffix = "时",
                         modifier = Modifier.weight(1f),
                     )
                     WheelColumn(
                         items = (0..59).map { String.format(java.util.Locale.US, "%02d", it) },
-                        initialIndex = selMinute,
-                        onCenterChange = { selMinute = it },
+                        initialIndex = time.minute,
+                        state = minuteState,
                         suffix = "分",
                         modifier = Modifier.weight(1f),
                     )
@@ -621,7 +621,9 @@ private fun TodoFormSheet(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    timeText = String.format(java.util.Locale.US, "%02d:%02d", selHour, selMinute)
+                    val hour = hourState.centeredItemIndex(time.hour).coerceIn(0, 23)
+                    val minute = minuteState.centeredItemIndex(time.minute).coerceIn(0, 59)
+                    timeText = String.format(java.util.Locale.US, "%02d:%02d", hour, minute)
                     showTimePicker = false
                 }) { Text("确定") }
             },
@@ -737,22 +739,23 @@ private fun MinutesWheel(value: Int, onSelect: (Int) -> Unit, modifier: Modifier
         Text("提前 $value 分钟")
     }
     if (show) {
-        var selected by rememberSaveable { mutableStateOf(value.coerceIn(1, 120)) }
+        val initialIndex = value.coerceIn(1, 120) - 1
+        val wheelState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
         AlertDialog(
             onDismissRequest = { show = false },
             title = { Text("提前分钟") },
             text = {
                 WheelColumn(
                     items = (1..120).map { it.toString() },
-                    initialIndex = selected - 1,
-                    onCenterChange = { selected = it + 1 },
+                    initialIndex = initialIndex,
+                    state = wheelState,
                     suffix = "分钟",
                     modifier = Modifier.fillMaxWidth(),
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    onSelect(selected)
+                    onSelect(wheelState.centeredItemIndex(initialIndex).coerceIn(0, 119) + 1)
                     show = false
                 }) { Text("确定") }
             },

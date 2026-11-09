@@ -19,6 +19,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,7 +29,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -38,13 +40,11 @@ import kotlin.math.abs
  * 视口正中的项即"当前选中项"：放大提亮并显示单位后缀；上下项随距离增大渐隐渐小，
  * 滚动过程中按**分数距离**连续过渡（非离散三档），观感与系统滚轮一致。
  *
- * 两条与手势互不干扰的硬约束（改动前务必读完）：
- * 1. **只在滚动停止后回写选中值**。滚动中回写会经"父级 state → initialIndex"回流，
- *    让下面的定位 effect 在滑动途中重启并调用 `scrollToItem`；程序化滚动与 fling 同属
- *    `MutatePriority.Default`（MutatorMutex 对同优先级是"取消旧的"），快滑的惯性会在
- *    第一个中心项变化处被掐断——一次手势只能走约一格（120 项的分钟轮盘基本没法用）。
- *    父级只需要最终选中值，中间帧的高亮由项内 `distance` 自己驱动。
- * 2. **定位 effect 只在进入组合时执行一次**，不能以初始下标为键，否则约束 1 会被绕开。
+ * 初始位置直接交给 LazyListState，不在显示 0 后再异步定位，避免默认项覆盖父级值。
+ * 回调仅在停止滚动且布局有效时发出，同时观察中心项，不能仅观察 isScrollInProgress：
+ * 程序化定位的 true/false 可能合并，导致画面已换项而父级仍保留旧值。
+ * 确定按钮应直接读取同一个 state 的 centeredItemIndex，快速确认时也与高亮一致。
+ * 禁止根据回传的 initialIndex 重定位，否则会中断惯性滚动。
  *
  * @param items   各项文本（如 "00".."23"，调用方负责格式化）
  * @param suffix  选中项显示的单位后缀（如 "时"；null 则不显示）
@@ -55,16 +55,19 @@ import kotlin.math.abs
 fun WheelColumn(
     items: List<String>,
     initialIndex: Int,
-    onCenterChange: (Int) -> Unit,
+    onCenterChange: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
     suffix: String? = null,
     itemHeight: Dp = 44.dp,
     visibleCount: Int = 5,
+    state: LazyListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = initialIndex.coerceIn(0, items.lastIndex.coerceAtLeast(0)),
+    ),
 ) {
     require(visibleCount % 2 == 1 && visibleCount > 0) { "visibleCount 必须为正奇数，保证存在正中槽位" }
     require(items.isNotEmpty()) { "items 不能为空（没有可滚动的槽位）" }
-    val state = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val currentOnCenterChange by rememberUpdatedState(onCenterChange)
     val clampedInitial = initialIndex.coerceIn(0, items.lastIndex)
 
     // 上下各留半个视口的内容边距：首尾项也能滚到正中。
@@ -74,26 +77,17 @@ fun WheelColumn(
     // 视口中心项 = 当前选中项
     val centerIndex by remember(state) {
         derivedStateOf {
-            val info = state.layoutInfo
-            if (info.visibleItemsInfo.isEmpty()) return@derivedStateOf clampedInitial
-            val vc = (info.viewportStartOffset + info.viewportEndOffset) / 2
-            info.visibleItemsInfo
-                .minByOrNull { abs(it.offset + it.size / 2 - vc) }
-                ?.index ?: clampedInitial
+            state.centeredItemIndex(clampedInitial)
         }
     }
     // 滚动停止（含拖动与惯性都结束）时才把最终选中项回写父级
     LaunchedEffect(state) {
-        snapshotFlow { state.isScrollInProgress }
-            .filter { !it }
-            .collect { onCenterChange(centerIndex) }
-    }
-    // 打开时定位到初始项。键只有 state：进入组合时执行一次；
-    // 旋转重建由 LazyListState 自带的 Saver 恢复位置，这里最多再幂等定位一次。
-    LaunchedEffect(state) {
-        if (state.firstVisibleItemIndex != clampedInitial) {
-            state.scrollToItem(clampedInitial)
+        snapshotFlow {
+            if (state.isScrollInProgress || state.layoutInfo.visibleItemsInfo.isEmpty()) null else centerIndex
         }
+            .filterNotNull()
+            .distinctUntilChanged()
+            .collect { currentOnCenterChange(it) }
     }
 
     LazyColumn(
@@ -114,6 +108,13 @@ fun WheelColumn(
             )
         }
     }
+}
+
+/** 高亮和确认共用视口中心算法；尚未布局时保持原值，不把未测量状态误当作 0。 */
+internal fun LazyListState.centeredItemIndex(fallback: Int): Int {
+    val info = layoutInfo
+    val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+    return info.visibleItemsInfo.minByOrNull { abs(it.offset + it.size / 2f - center) }?.index ?: fallback
 }
 
 /** 滚轮的单个项：按自身与视口中心的分数距离插值缩放与透明度。 */

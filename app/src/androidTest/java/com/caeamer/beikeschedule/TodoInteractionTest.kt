@@ -19,6 +19,11 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onLast
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelected
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
@@ -31,6 +36,7 @@ import com.caeamer.beikeschedule.ui.theme.BeikeScheduleTheme
 import com.caeamer.beikeschedule.ui.todo.TodoScreen
 import com.caeamer.beikeschedule.ui.todo.WeekdaySelector
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -96,5 +102,97 @@ class TodoInteractionTest {
         awaitText("每天 · 已保存")
         compose.onNodeWithText("保存定位测试").assertIsDisplayed()
         compose.onNodeWithText("每天 · 已保存").assertIsDisplayed()
+    }
+
+    @Test fun changingOnlyMinutesKeepsHourThroughConfirmSaveAndReopen() {
+        runBlocking {
+            AppDatabase.get(context).todoDao().upsert(TodoEntity(title = "时间回归", time = "08:00"))
+        }
+        compose.setContent { BeikeScheduleTheme { TodoScreen() } }
+        awaitText("时间回归")
+        compose.onAllNodesWithText("时间回归").onFirst().performClick()
+        compose.onNodeWithText("时间：08:00").performScrollTo().performClick()
+        compose.onAllNodes(hasScrollToIndexAction()).onLast().performScrollToIndex(30)
+        compose.onNodeWithText("确定").performClick()
+        compose.onNodeWithText("时间：08:30").assertIsDisplayed()
+        compose.onNodeWithText("保存").performScrollTo().performClick()
+        awaitText("每天 · 已保存")
+        val saved = runBlocking { AppDatabase.get(context).todoDao().observeAll().first().single() }
+        org.junit.Assert.assertEquals("08:30", saved.time)
+        compose.onNodeWithText("时间回归").performClick()
+        compose.onNodeWithText("时间：08:30").performScrollTo().performClick()
+        compose.onNodeWithText("确定").performClick()
+        compose.onNodeWithText("时间：08:30").assertIsDisplayed()
+    }
+
+    @Test fun unchangedReminderLeadTimeDoesNotResetOnConfirm() {
+        runBlocking {
+            AppDatabase.get(context).todoDao().upsert(TodoEntity(title = "提前量回归", time = "08:30", remindMinutes = 45))
+        }
+        compose.setContent { BeikeScheduleTheme { TodoScreen() } }
+        awaitText("提前量回归")
+        compose.onAllNodesWithText("提前量回归").onFirst().performClick()
+        compose.onNodeWithText("提前 45 分钟").performScrollTo().performClick()
+        compose.onNodeWithText("确定").performClick()
+        compose.onNodeWithText("提前 45 分钟").assertIsDisplayed()
+    }
+
+    @Test fun confirmingDuringHourAnimationCommitsTheHighlightedHour() {
+        runBlocking {
+            AppDatabase.get(context).todoDao().upsert(TodoEntity(title = "快速确认回归", time = "08:30"))
+        }
+        compose.setContent { BeikeScheduleTheme { TodoScreen() } }
+        awaitText("快速确认回归")
+        compose.onAllNodesWithText("快速确认回归").onFirst().performClick()
+        compose.onNodeWithText("时间：08:30").performScrollTo().performClick()
+        compose.onNode(hasText("08") and isSelected()).assertIsDisplayed()
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithText("09").performTouchInput { click() }
+        var frames = 0
+        while (compose.onAllNodes(hasText("09") and isSelected()).fetchSemanticsNodes().isEmpty() && frames++ < 120) {
+            compose.mainClock.advanceTimeByFrame()
+            compose.waitForIdle()
+        }
+        compose.onNode(hasText("09") and isSelected()).assertIsDisplayed()
+        compose.onNodeWithText("确定").performClick()
+        compose.mainClock.autoAdvance = true
+        compose.onNodeWithText("时间：09:30").assertIsDisplayed()
+    }
+
+    @Test fun cancellingTimeChangesKeepsTheOriginalTime() {
+        runBlocking {
+            AppDatabase.get(context).todoDao().upsert(TodoEntity(title = "取消回归", time = "23:59"))
+        }
+        compose.setContent { BeikeScheduleTheme { TodoScreen() } }
+        awaitText("取消回归")
+        compose.onAllNodesWithText("取消回归").onFirst().performClick()
+        compose.onNodeWithText("时间：23:59").performScrollTo().performClick()
+        compose.onAllNodes(hasScrollToIndexAction()).onFirst().performScrollToIndex(0)
+        compose.onAllNodesWithText("取消").onLast().performClick()
+        compose.onNodeWithText("时间：23:59").assertIsDisplayed()
+    }
+
+    @Test fun reminderBoundsAreConfirmedAndSavedWithoutAnIndexOffset() {
+        runBlocking {
+            AppDatabase.get(context).todoDao().upsert(TodoEntity(title = "提醒边界", time = "08:30", remindMinutes = 45))
+        }
+        compose.setContent { BeikeScheduleTheme { TodoScreen() } }
+        awaitText("提醒边界")
+        compose.onAllNodesWithText("提醒边界").onFirst().performClick()
+        compose.onNodeWithText("提前 45 分钟").performScrollTo().performClick()
+        compose.onAllNodes(hasScrollToIndexAction()).onLast().performScrollToIndex(119)
+        compose.onNodeWithText("确定").performClick()
+        compose.onNodeWithText("提前 120 分钟").assertIsDisplayed().performClick()
+        compose.onNodeWithText("确定").performClick()
+        compose.onNodeWithText("提前 120 分钟").assertIsDisplayed().performClick()
+        compose.onAllNodes(hasScrollToIndexAction()).onLast().performScrollToIndex(0)
+        compose.onNodeWithText("确定").performClick()
+        compose.onNodeWithText("提前 1 分钟").assertIsDisplayed()
+        compose.onNodeWithText("保存").performScrollTo().performClick()
+        awaitText("每天 · 已保存")
+        val saved = runBlocking { AppDatabase.get(context).todoDao().observeAll().first().single() }
+        org.junit.Assert.assertEquals("08:30", saved.time)
+        org.junit.Assert.assertEquals(1, saved.remindMinutes)
     }
 }
