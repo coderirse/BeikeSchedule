@@ -68,7 +68,9 @@ class PetInteractionTest {
         compose.onNodeWithText("自定义称呼，最多 20 字").performTextClearance()
         compose.onNodeWithText("自定义称呼，最多 20 字").performTextInput("小贝")
         compose.onNodeWithText("确定").performClick()
-        compose.onNodeWithText("小贝").assertIsDisplayed()
+        // DataStore 异步回写；弹窗/键盘收起后列表位置也可能变化。
+        compose.waitUntil(5000) { compose.onAllNodesWithText("小贝").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("小贝").performScrollTo().assertIsDisplayed()
         compose.onNode(hasText("课表") and hasClickAction()).performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("schedule-pet").assertDoesNotExist()
