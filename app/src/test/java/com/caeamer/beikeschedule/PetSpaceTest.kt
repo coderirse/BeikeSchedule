@@ -94,6 +94,15 @@ class PetSpaceTest {
         val p = PetSpace.bubble(Rect(100f, 400f, 164f, 464f), Size(180f, 100f), 350f, 500f, 0f, e)
         assertTrue(p.rect.left >= 150)
     }
+    @Test fun `distant blank space cannot detach speech from pet`() {
+        val e = PetEnvironment(listOf(PetObstacle(Rect(0f, 0f, 300f, 500f), 2f),
+            PetObstacle(Rect(300f, 350f, 700f, 500f), 2f)))
+        val pet = Rect(100f, 580f, 164f, 644f)
+        val p = PetSpace.bubble(pet, Size(300f, 220f), 700f, 700f, 80f, e)
+        val gap = Offset(maxOf(0f, p.rect.left - pet.right, pet.left - p.rect.right),
+            maxOf(0f, p.rect.top - pet.bottom, pet.top - p.rect.bottom)).getDistance()
+        assertTrue(gap <= 64 * 0.6f)
+    }
     @Test fun `entry greeting defaults and interval boundaries`() {
         assertEquals(PetWelcomePolicy.EVERY_ENTRY, PetPreferences().welcomePolicy)
         assertTrue(PetWelcomePolicy.EVERY_ENTRY.shouldWelcome(100, 100))

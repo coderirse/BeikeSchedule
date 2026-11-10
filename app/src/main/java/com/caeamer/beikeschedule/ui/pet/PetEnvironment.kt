@@ -144,6 +144,11 @@ internal object PetSpace {
         for (x in 0..6) for (y in 0..10) points += Offset((width - w) * x / 6, (height - h) * y / 10)
         val blocks = protected(width, height, clearance, env)
         val rect = points.map { Rect(Offset(it.x.coerceIn(0f, (width - w).coerceAtLeast(0f)), it.y.coerceIn(0f, (height - h).coerceAtLeast(0f))), Size(w, h)) }
+            // 保持漫画气泡与角色的联系；密集课表宁可在附近选最少遮挡处，也不能飞到半屏之外。
+            .filter { r ->
+                val gap = Offset(maxOf(0f, r.left - pet.right, pet.left - r.right), maxOf(0f, r.top - pet.bottom, pet.top - r.bottom)).getDistance()
+                gap <= maxOf(pet.width, pet.height) * 0.6f
+            }
             .minBy { r -> score(r, env) * 20 + blocks.sumOf { (overlap(r, it) * 1000).toDouble() }.toFloat() + overlap(r, pet) * 30 + (r.center - pet.center).getDistance() }
         val delta = pet.center - rect.center
         val side = if (abs(delta.x) / w > abs(delta.y) / h) { if (delta.x < 0) PetTailSide.LEFT else PetTailSide.RIGHT }
