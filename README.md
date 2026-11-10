@@ -5,6 +5,7 @@
 ## 功能
 
 **课表**
+- **v2.0.1 课表小宠物**：默认开启，可在“我的 → 课表小宠物”关闭。“大肥鱼 · deepseek酱”可自由拖动、随机走动，点击说话；新增同形象趴边、坐靠动作，可在今日课程顶部、底部导航上沿和边缘停靠。自动走动优先空白区域，路线和气泡尽量避开色块，尤其今天与临近的课程。默认打开或切回课表时打招呼，支持每次、间隔 1/5/30 分钟或关闭；久别有专门欢迎词。60 条离线闲聊，安静/适中/活泼三档频率，默认称呼“同学”可自定义；课程、考试、闲聊与欢迎独立设置。切页、弹层、翻周和退后台暂停，不改变系统通知
 - **一次扫码跑完三件事**：内置 WebView 完成统一身份认证登录（App 不接触学号密码）后，**同一次扫码**自动导入学期课表 + 抓取成绩/考试/学业进度 + 登录云账号；课表抓完直接入库（保留隐藏状态与自定义课），末尾给出逐项结果与失败项重试。教务会话还在时连扫码都不需要——进入即静默跑完
 - **官方教学周日历**：导入时同步教务校历，教学周↔日期精确映射——国庆等长假周不占教学周序号（第 4 周 = 10/5，而非 9/28）；假期中自动提示并定位到假期后第一个教学周
 - **假期与调休补课**：教务校历的**天级**放假标记随导入生效——放假日（如国庆 10/5-10/7、中秋）课表整列清空标「休」、顶栏「假期中」、假期里不排上课提醒、「下一节课」图钉隐藏；调休补课日（如「10月10日补周三的课」）教务系统查不到，口径随版本内置（`SchoolAdjustments`），补课列按生效星期渲染并带「补周X」角标，提醒照排，隐藏周末时周末补课列仍显示
@@ -43,9 +44,11 @@
 
 ## 下载
 
-当前版本 **1.5.8（versionCode 63）**。[最新 Release](https://github.com/coderirse/BeikeSchedule/releases/tag/v1.5.8) 提供正式签名 APK，可直接覆盖安装升级；也可在 App 内“我的 → 检查更新”获取。v1.0.14 及更早版本因包名变更需卸载重装。
+当前版本 **2.0.2（versionCode 66）**。[最新 Release](https://github.com/coderirse/BeikeSchedule/releases/tag/v2.0.2) 提供正式签名 APK，可直接覆盖安装升级；也可在 App 内“我的 → 检查更新”获取。v1.0.14 及更早版本因包名变更需卸载重装。
 
-本次主干版本汇总已验证的交互改进：日程查看与按日期打卡、页面状态保留、成绩/考试按页刷新，以及日程时间滚轮一致性修复。升级前已经保存为错误时间的日程，需要重新选择正确时间并保存一次。
+本次将宠物功能分支及其气泡、可见性修复合入 `main`，作为后续开发的统一基线：包含趴边/坐靠姿态、课程避让、进入欢迎策略和离线闲聊。原有日程、页面状态、刷新和滚轮规则继续保留；无需迁移数据库。
+
+下一阶段在 `codex/pet-llm-integration` 分支准备宠物大模型接入；当前发布版仍使用离线文案。
 
 App 内「我的 → 检查更新」走自有更新源（`/api/bs/app/latest`）：响应带 **Ed25519 签名**、并覆盖安装包 **SHA-256**，验签不通过则整体忽略该源（不拿未验签的强更或下载链接），装包前再核对一次摘要。
 
@@ -83,7 +86,7 @@ node --test app/src/test/js/*.test.cjs # 成绩/考试脚本：请求范围、�
 交互回归覆盖滚轮初始化、拖动与快速确定、保存重开、提醒边界、日程查看与打卡、页面状态及刷新返回。需启动模拟器或连接 Android 设备：
 
 ```bash
-./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.WheelPickerInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest
+./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.PetBubbleTouchTest,com.caeamer.beikeschedule.PetInteractionTest,com.caeamer.beikeschedule.PetWelcomeInteractionTest,com.caeamer.beikeschedule.PetPoseRenderTest,com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.WheelPickerInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest
 ```
 
 更多技术细节见 [docs/TECH_DESIGN.md](docs/TECH_DESIGN.md) 与 [docs/JWXT_API.md](docs/JWXT_API.md)。

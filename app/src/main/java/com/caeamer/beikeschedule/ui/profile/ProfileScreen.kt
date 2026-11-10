@@ -83,6 +83,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.R
+import com.caeamer.beikeschedule.ui.pet.PetSettingsSection
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.import.clearJwSession
 import com.caeamer.beikeschedule.ui.settings.SettingsViewModel
@@ -463,6 +464,8 @@ fun ProfileScreen(
                 toggleRole = true,
                 toggleValue = hideInactiveCourses,
             )
+
+            PetSettingsSection()
 
             // —— 主题 ——
             Text(
