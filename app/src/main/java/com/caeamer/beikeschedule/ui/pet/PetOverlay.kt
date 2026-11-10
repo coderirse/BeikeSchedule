@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -18,11 +19,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -44,6 +48,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import java.time.LocalDateTime
 import kotlin.math.roundToInt
 import kotlin.random.Random
@@ -59,17 +65,24 @@ internal fun safePetPosition(point: Offset, width: Float, height: Float, size: F
 }
 
 @Composable
-fun SchedulePetHost(paused: Boolean, interactionEpoch: Int, viewModel: PetViewModel = viewModel()) {
+fun SchedulePetHost(paused: Boolean, interactionEpoch: Int, environment: PetEnvironment = PetEnvironment(), suppressWelcome: Boolean = paused, viewModel: PetViewModel = viewModel()) {
     val positions = rememberSaveableStateHolder()
     val prefs by viewModel.preferences.collectAsStateWithLifecycle()
     val owner = LocalLifecycleOwner.current
-    var resumed by remember(owner) { mutableStateOf(owner.lifecycle.currentState == Lifecycle.State.RESUMED) }
-    DisposableEffect(owner) {
-        val observer = LifecycleEventObserver { _, _ -> resumed = owner.lifecycle.currentState == Lifecycle.State.RESUMED }
-        owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer) }
-    }
     val settings = prefs ?: return
+    var resumed by remember(owner) { mutableStateOf(owner.lifecycle.currentState == Lifecycle.State.RESUMED) }
+    DisposableEffect(owner, settings.enabled) {
+        viewModel.visibility(settings.enabled && owner.lifecycle.currentState == Lifecycle.State.RESUMED)
+        val observer = LifecycleEventObserver { _, _ ->
+            resumed = owner.lifecycle.currentState == Lifecycle.State.RESUMED
+            // 快速 STARTED → RESUMED 也必须记录，不能等重组后才观察最终状态。
+            viewModel.visibility(settings.enabled && resumed)
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer); viewModel.visibility(false) }
+    }
+    // 翻周只暂缓显示；弹层才取消招呼，防止关弹层时重复欢迎。
+    SideEffect { viewModel.interactionPaused = suppressWelcome; if (suppressWelcome) viewModel.welcome.value = null }
     if (!settings.enabled || paused || !resumed) return
     val context = LocalContext.current.applicationContext
     val appearance = PetAppearances.available.first()
@@ -80,14 +93,20 @@ fun SchedulePetHost(paused: Boolean, interactionEpoch: Int, viewModel: PetViewMo
         catch (_: OutOfMemoryError) { Log.w("SchedulePet", "内存不足，已跳过宠物素材") }
     }
     val image = atlas ?: return
+    val poses by produceState<PetPoseAtlas?>(null, appearance.id) {
+        try { value = PetAtlasCache.loadPoses(context) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { Log.w("SchedulePet", "新姿态暂不可用，使用原动作", e) }
+        catch (_: OutOfMemoryError) { Log.w("SchedulePet", "已跳过新姿态素材") }
+    }
     val facts by viewModel.facts.collectAsStateWithLifecycle()
     positions.SaveableStateProvider(appearance.id) {
-        PetScene(image, appearance, settings, facts, interactionEpoch, viewModel)
+        PetScene(image, poses, appearance, settings, facts, environment, interactionEpoch, viewModel)
     }
 }
 
 @Composable
-private fun PetScene(atlas: ImageBitmap, appearance: PetAppearance, prefs: PetPreferences, facts: PetFacts?, interactionEpoch: Int, vm: PetViewModel) {
+private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAppearance, prefs: PetPreferences, facts: PetFacts?, environment: PetEnvironment, interactionEpoch: Int, vm: PetViewModel) {
     val density = LocalDensity.current
     val currentFacts by rememberUpdatedState(facts)
     var bubble by remember { mutableStateOf<PetMessage?>(null) }
@@ -95,10 +114,14 @@ private fun PetScene(atlas: ImageBitmap, appearance: PetAppearance, prefs: PetPr
     var dragging by remember { mutableStateOf(false) }
     var walking by remember { mutableStateOf(false) }
     var facingLeft by remember { mutableStateOf(false) }
+    var posture by rememberSaveable { mutableStateOf(PetPosture.STANDING) }
+    var placed by rememberSaveable { mutableStateOf(false) }
+    var manuallyPlaced by rememberSaveable { mutableStateOf(false) }
     var quietUntil by remember { mutableLongStateOf(0L) }
     var normalizedX by rememberSaveable { mutableFloatStateOf(0.16f) }
     var normalizedY by rememberSaveable { mutableFloatStateOf(0.80f) }
     var nextCasual by remember { mutableLongStateOf(SystemClock.elapsedRealtime() + prefs.frequency.delayMillis()) }
+    val welcome by vm.welcome.collectAsStateWithLifecycle()
 
     suspend fun casual(): PetMessage {
         val line = try {
@@ -119,14 +142,18 @@ private fun PetScene(atlas: ImageBitmap, appearance: PetAppearance, prefs: PetPr
             nextCasual = SystemClock.elapsedRealtime() + prefs.frequency.delayMillis()
         }
     }
+    LaunchedEffect(welcome?.id) {
+        val visit = welcome ?: return@LaunchedEffect
+        delay(600)
+        if (!dragging && bubble == null) {
+            val important = currentFacts?.let { PetHints.resolve(it, LocalDateTime.now(), prefs) }?.firstOrNull { it.id !in vm.seenHints }
+            bubble = important ?: PetWelcomeLines.message(prefs.address, visit, LocalDateTime.now().hour)
+            important?.let { vm.rememberHint(it.id) }
+        }
+        vm.consumeWelcome(visit.id)
+    }
     LaunchedEffect(prefs) {
         nextCasual = SystemClock.elapsedRealtime() + prefs.frequency.delayMillis()
-        bubble = null
-        delay(2000)
-        if (!vm.greeted && prefs.chatter && currentFacts != null && bubble == null && SystemClock.elapsedRealtime() >= quietUntil) {
-            vm.greeted = true
-            bubble = PetMessage("hello", "${prefs.address.takeIf(String::isNotBlank)?.let { "$it，" }.orEmpty()}我来陪你看课表啦！点点我可以说话，拖一拖就能搬家～")
-        }
         while (isActive) {
             val tick = SystemClock.elapsedRealtime()
             if (!dragging && tick >= quietUntil) {
@@ -158,52 +185,80 @@ private fun PetScene(atlas: ImageBitmap, appearance: PetAppearance, prefs: PetPr
             normalizedX = p.x / maxX
             normalizedY = p.y / maxY
         }
-        LaunchedEffect(width, height, dragging, bubble, interactionEpoch) {
+        LaunchedEffect(environment, width, height) {
+            if (!placed || (!manuallyPlaced && !PetSpace.free(currentPosition(), width, height, petSize, clearance, environment, posture))) {
+                val stop = withContext(Dispatchers.Default) { PetSpace.choose(width, height, petSize, clearance, environment) }
+                move(stop.position); posture = stop.posture; placed = true
+            }
+        }
+        LaunchedEffect(width, height, dragging, bubble, interactionEpoch, environment) {
             walking = false
             if (dragging || bubble != null) return@LaunchedEffect
             try {
                 while (isActive) {
-                    delay(Random.nextLong(6000, 15000))
+                    delay(Random.nextLong(10000, 22000))
                     if (SystemClock.elapsedRealtime() < quietUntil) continue
                     val start = currentPosition()
-                    val target = safePetPosition(Offset(Random.nextFloat() * maxX, Random.nextFloat() * maxY), width, height, petSize, clearance)
+                    val stop = withContext(Dispatchers.Default) { PetSpace.choose(width, height, petSize, clearance, environment) }
+                    val path = withContext(Dispatchers.Default) { PetSpace.route(start, stop.position, width, height, petSize, clearance, environment) }
+                    if (path.isEmpty()) continue
+                    val target = stop.position
                     facingLeft = target.x < start.x
                     walking = true
-                    Animatable(0f).animateTo(1f, tween(4000, easing = LinearEasing)) {
-                        move(Offset(start.x + (target.x - start.x) * value, start.y + (target.y - start.y) * value))
+                    posture = PetPosture.STANDING
+                    for (point in path) {
+                        val from = currentPosition()
+                        val duration = ((point - from).getDistance() / petSize * 1000).toInt().coerceIn(100, 2200)
+                        facingLeft = point.x < from.x
+                        Animatable(0f).animateTo(1f, tween(duration, easing = LinearEasing)) {
+                            move(from + (point - from) * value)
+                        }
                     }
                     walking = false
+                    move(target); posture = stop.posture; manuallyPlaced = false
                 }
             } finally { walking = false }
         }
+        val resting = !dragging && !walking && posture != PetPosture.STANDING && poses != null
+        val bodyHeight = if (resting && posture == PetPosture.PERCH) petSize * 0.7f else petSize
         val row = when { dragging -> 4; walking -> if (facingLeft) 2 else 1; bubble != null -> 3; else -> 0 }
-        PetSprite(atlas, row, appearance, Modifier
-            .offset { val p = currentPosition(); IntOffset(p.x.roundToInt(), p.y.roundToInt()) }
-            .size(with(density) { petSize.toDp() })
+        val petModifier = Modifier
+            .offset { val p = currentPosition(); IntOffset(p.x.roundToInt(), (p.y + petSize - bodyHeight).roundToInt()) }
+            .size(with(density) { petSize.toDp() }, with(density) { bodyHeight.toDp() })
             .testTag("schedule-pet")
             .semantics { contentDescription = "课表小宠物大肥鱼，点击说话，拖动移动" }
-            .pointerInput(width, height) {
+            .pointerInput(width, height, environment) {
                 detectDragGestures(
-                    onDragStart = { dragging = true; bubble = null },
-                    onDragEnd = { dragging = false; quietUntil = SystemClock.elapsedRealtime() + 6000 },
+                    onDragStart = { dragging = true; bubble = null; posture = PetPosture.STANDING },
+                    onDragEnd = {
+                        dragging = false; manuallyPlaced = true; quietUntil = SystemClock.elapsedRealtime() + 10000
+                        val stop = PetSpace.destinations(width, height, petSize, clearance, environment)
+                            .filter { it.posture != PetPosture.STANDING }.minByOrNull { (it.position - currentPosition()).getDistance() }
+                        if (stop != null && (stop.position - currentPosition()).getDistance() < petSize / 3) {
+                            move(stop.position); posture = stop.posture
+                        }
+                    },
                     onDragCancel = { dragging = false },
                 ) { change, delta -> change.consume(); move(currentPosition() + delta) }
             }
-            .clickable { request++ },
-        )
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { request++ }
+        // 手势挂在稳定的父节点；站起/趴下换画布时不能中途丢掉本次拖动。
+        Box(petModifier) {
+            if (resting) PetRestSprite(poses!!, posture, Modifier.fillMaxSize())
+            else PetSprite(atlas, row, appearance, Modifier.fillMaxSize())
+        }
         bubble?.let { message ->
             var measuredHeight by remember { mutableIntStateOf(with(density) { 150.dp.roundToPx() }) }
-            val bubbleWidth = with(density) { 236.dp.toPx() }.coerceAtMost(width)
-            val gap = with(density) { 4.dp.toPx() }
+            val bubbleWidth = with(density) { 208.dp.toPx() }.coerceAtMost(width)
             val p = currentPosition()
-            val below = p.y < measuredHeight + gap
-            val bubbleX = (p.x + petSize / 2 - bubbleWidth / 2).coerceIn(0f, (width - bubbleWidth).coerceAtLeast(0f))
-            val bubbleY = (if (below) p.y + petSize + gap else p.y - measuredHeight - gap)
-                .coerceIn(0f, (height - measuredHeight).coerceAtLeast(0f))
-            PetBubble(message, below, (p.x + petSize / 2 - bubbleX) / bubbleWidth,
-                Modifier.offset { IntOffset(bubbleX.roundToInt(), bubbleY.roundToInt()) }
+            val placement = remember(environment, p, bodyHeight, measuredHeight, bubbleWidth, width, height) {
+                PetSpace.bubble(Rect(p.x, p.y + petSize - bodyHeight, p.x + petSize, p.y + petSize),
+                    Size(bubbleWidth, measuredHeight.toFloat()), width, height, clearance, environment)
+            }
+            PetBubble(message, placement.side == PetTailSide.TOP, placement.anchor,
+                Modifier.offset { IntOffset(placement.rect.left.roundToInt(), placement.rect.top.roundToInt()) }
                     .width(with(density) { bubbleWidth.toDp() }).onSizeChanged { measuredHeight = it.height },
-                onDismiss = { bubble = null },
+                onDismiss = { bubble = null }, tailSide = placement.side,
             )
         }
     }
@@ -232,24 +287,55 @@ private fun PetSprite(atlas: ImageBitmap, row: Int, appearance: PetAppearance, m
 }
 
 @Composable
-internal fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modifier: Modifier, onDismiss: () -> Unit) {
+internal fun PetRestSprite(atlas: PetPoseAtlas, posture: PetPosture, modifier: Modifier) {
+    var frame by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (isActive) { delay(if (frame == 0) 2800L else 160L); frame = 1 - frame }
+    }
+    Canvas(modifier) {
+        val row = if (posture == PetPosture.PERCH) 0 else 1
+        val region = atlas.regions[row]
+        val scale = minOf(size.width / region.width, size.height / region.height)
+        val drawn = IntSize((region.width * scale).roundToInt(), (region.height * scale).roundToInt())
+        val x = if (posture == PetPosture.PERCH) (size.width - drawn.width) / 2 else 0f
+        withTransform({ if (posture == PetPosture.LEAN_RIGHT) scale(-1f, 1f, center) }) {
+            drawImage(atlas.image, srcOffset = IntOffset(frame * atlas.cellWidth + region.left, row * atlas.cellHeight + region.top),
+                srcSize = IntSize(region.width, region.height), dstSize = drawn,
+                dstOffset = IntOffset(x.roundToInt(), (size.height - drawn.height).roundToInt()), filterQuality = FilterQuality.Medium)
+        }
+    }
+}
+
+@Composable
+internal fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modifier: Modifier, onDismiss: () -> Unit, tailSide: PetTailSide = if (below) PetTailSide.TOP else PetTailSide.BOTTOM) {
     val color = MaterialTheme.colorScheme.secondaryContainer
-    @Composable fun Tail() {
-        Canvas(Modifier.fillMaxWidth().height(9.dp)) {
-            val x = (size.width * anchor).coerceIn(12.dp.toPx(), (size.width - 12.dp.toPx()).coerceAtLeast(12.dp.toPx()))
+    Box(modifier.testTag("pet-bubble")) {
+        Canvas(Modifier.matchParentSize()) {
+            val gutter = 9.dp.toPx()
+            val half = 8.dp.toPx()
+            val horizontal = tailSide == PetTailSide.TOP || tailSide == PetTailSide.BOTTOM
+            val edge = if (horizontal) size.width else size.height
+            val a = (edge * anchor).coerceIn(half, (edge - half).coerceAtLeast(half))
             val path = Path().apply {
-                moveTo(x, if (below) 0f else size.height)
-                lineTo(x - 8.dp.toPx(), if (below) size.height else 0f)
-                lineTo(x + 8.dp.toPx(), if (below) size.height else 0f); close()
+                when (tailSide) {
+                    PetTailSide.TOP -> { moveTo(a, 0f); lineTo(a - half, gutter); lineTo(a + half, gutter) }
+                    PetTailSide.BOTTOM -> { moveTo(a, size.height); lineTo(a - half, size.height - gutter); lineTo(a + half, size.height - gutter) }
+                    PetTailSide.LEFT -> { moveTo(0f, a); lineTo(gutter, a - half); lineTo(gutter, a + half) }
+                    PetTailSide.RIGHT -> { moveTo(size.width, a); lineTo(size.width - gutter, a - half); lineTo(size.width - gutter, a + half) }
+                }
+                close()
             }
             drawPath(path, color)
         }
-    }
-    Column(modifier.testTag("pet-bubble")) {
-        if (below) Tail()
+        val gutter = when (tailSide) {
+            PetTailSide.TOP -> PaddingValues(top = 9.dp)
+            PetTailSide.BOTTOM -> PaddingValues(bottom = 9.dp)
+            PetTailSide.LEFT -> PaddingValues(start = 9.dp)
+            PetTailSide.RIGHT -> PaddingValues(end = 9.dp)
+        }
         // Material Surface 即使无 onClick 也有拦截命中的 pointerInput；浮动气泡必须仅绘制。
         CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSecondaryContainer) {
-        Box(Modifier.shadow(3.dp, MaterialTheme.shapes.large).background(color, MaterialTheme.shapes.large)
+        Box(Modifier.padding(gutter).shadow(3.dp, MaterialTheme.shapes.large).background(color, MaterialTheme.shapes.large)
             .clip(MaterialTheme.shapes.large)) {
             Column(Modifier.padding(start = 14.dp, end = 10.dp, bottom = 12.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -264,6 +350,5 @@ internal fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modif
             }
         }
         }
-        if (!below) Tail()
     }
 }

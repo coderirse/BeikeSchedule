@@ -7,6 +7,7 @@ import androidx.test.espresso.Espresso.pressBack
 import androidx.test.platform.app.InstrumentationRegistry
 import com.caeamer.beikeschedule.ui.pet.PetPreferencesStore
 import com.caeamer.beikeschedule.ui.pet.PetFrequency
+import com.caeamer.beikeschedule.ui.pet.PetWelcomePolicy
 import kotlinx.coroutines.runBlocking
 import org.junit.Before
 import org.junit.Rule
@@ -18,6 +19,7 @@ class PetInteractionTest {
     private val store get() = PetPreferencesStore(InstrumentationRegistry.getInstrumentation().targetContext)
     @Before fun resetPet() = runBlocking {
         store.setEnabled(true); store.setAddress("同学"); store.setFrequency(PetFrequency.QUIET)
+        store.setWelcome(PetWelcomePolicy.EVERY_ENTRY)
     }
     private fun awaitPet() {
         compose.waitUntil(15_000) { compose.onAllNodesWithTag("schedule-pet").fetchSemanticsNodes().isNotEmpty() }

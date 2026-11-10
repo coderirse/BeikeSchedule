@@ -63,6 +63,8 @@
 - 顶层 Tab 与教务分区分别使用 `SaveableStateHolder` 保留浏览位置；实际换楼栋才重置教室列表。返回顺序是弹层优先、教务/我的回课表、课表再退出。
 - 当前 ViewModel 主要由 Activity 持有；Composable 离开不等于 ViewModel 销毁。处理重复进入同步页的旧终态和取消，不假设重新进入一定是新对象。
 - 宠物只在课表页 RESUMED 且无弹层时运行；气泡提醒只读数据，不调用通知调度器。全屏触摸观察器只能放在课表共同父节点且不消费事件，不能放在覆盖页面的兄弟浮层；宠物仅自身矩形接收拖动/点击。气泡主体用纯绘制 Box，不能换回会挡下层命中的 Material Surface；关闭按钮独立处理触摸。保留位置恢复、触摸穿透、按钮避让、开关与故障隔离。
+- 宠物环境矩形复用 `WeekLayout` / `CourseVisibility` 和 Pager 实测布局；隐藏、调休及冲突分列须与实际卡片一致。停靠仅允许今日真实课程，身体放在上沿之外；自动路径和气泡优先空白处，不能只保证终点安全却穿过卡片。站起/趴下时保留同一个手势父节点，避免拖动中断。
+- 欢迎频率与自动闲聊分开。可见性由课表进入/退出及前后台驱动，不能把素材重载或弹层关闭当作重新进入；独立 DataStore 保存访问/欢迎时间，历史写入不应重启整个宠物场景。
 
 ### 同步、数据与提醒
 
@@ -99,10 +101,10 @@ node --test app/src/test/js/*.test.cjs
 - 新增或修复逻辑，跑相关测试；影响持久数据、同步或提醒时补有意义的回归。只改文档时检查内容、路径和 diff 即可。
 - UI 行为不能只靠 JVM 测试证明。涉及点击/滚轮时，至少覆盖实际触摸、初始化、快速确定、保存重开及取消；语义 `performClick` 通过不代表手指点击一定有效。
 - 不在同一工作目录同时启动多份 Gradle 构建。遇到本机配置缓存/并行问题，可加 `--no-configuration-cache --max-workers=4`；只停止本次任务启动的进程。
-- 当前交互设备回归共 5 个测试类，需已启动的模拟器或连接的设备：
+- 当前交互设备回归共 7 个测试类，需已启动的模拟器或连接的设备：
 
 ```bash
-./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.PetBubbleTouchTest,com.caeamer.beikeschedule.PetInteractionTest,com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.WheelPickerInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest --console=plain
+./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.PetBubbleTouchTest,com.caeamer.beikeschedule.PetInteractionTest,com.caeamer.beikeschedule.PetWelcomeInteractionTest,com.caeamer.beikeschedule.PetPoseRenderTest,com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.WheelPickerInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest --console=plain
 ```
 
 - JVM 样本在 `app/src/test/resources/`，JS 测试在 `app/src/test/js/`，设备测试在 `app/src/androidTest/`。
@@ -140,13 +142,13 @@ python tools/sign_update.py --key keystore/update_signing_private.pem --version-
 10. 更新声明由服务启动时载入，需要重启 `beike`。核对 `/health` 返回服务和数据库正常，再核对公网 `/api/bs/app/latest`，完整下载 APK 比较大小与 SHA-256，核对 GitHub Release 附件。部署脚本部分检查会容忍失败，不能只凭“部署完成”字样判断上线成功。
 11. 公网 Python 默认 UA 曾被 Cloudflare 返回 403；可按真实客户端 `User-Agent: okhttp/5.5.0`（以当前依赖为准）复核，不为排查探针问题关闭安全校验。发布结束报告版本、提交、Release 链接、更新源验证及当前分支。
 
-## 7. 当前接手快照（2026-11-09）
+## 7. 当前接手快照（2026-11-10）
 
-- 最近合并的主干基线：`v1.5.8` / `versionCode 63`，主干提交 `76399bb`。当前功能分支发布目标为 `v2.0.0` / 64；实际线上版本查更新声明和 Release，进入新任务仍应重新查 Git 状态。
-- 当前开发分支：`codex/playful-experience`，从上述主干创建并推送，目标 `v2.0.0` / 64。已确认宠物形象、自由拖动/走动、离线气泡、独立提示、三档频率与自定义称呼，见 `docs/plans/2026-11-09-schedule-pet-design.md`；本版不接模型和热点搜索。
+- 最近合并的主干基线：`v1.5.8` / `versionCode 63`，主干提交 `76399bb`。宠物版本沿用功能分支发布，未自动合并主干；实际线上版本查更新声明和 Release，进入新任务仍应重新查 Git 状态。
+- 当前开发分支：`codex/playful-experience`，v2.0.0 / 64 已发布，用户反馈效果不错。本轮版本 `v2.0.1` / 65，含同形象趴边/坐靠、布局避让、进入欢迎策略与扩充离线文案，见 `docs/plans/2026-11-10-pet-surfaces-design.md`；继续不接模型和热点搜索。
 - 已合并的关键修复：按日期隐藏课程与考试独立刷新、日程全部入口与日期打卡、导航状态保留、成绩独立刷新、云版本判断，以及时间/提醒滚轮显示与保存一致性。
 - 这条基线验证过 430 项 JVM、15 项 JS、18 项设备交互测试；主干 CI 通过，用户已反馈滚轮修复实测正常。这是历史验证记录，不代表未来修改无需再测。
-- v2 宠物版本本地验证：441 项 JVM、15 项 JS、24 项设备交互通过，包含气泡触摸穿透、关闭按钮、前后台暂停、位置恢复、关闭与设置、原有课程/日程/导航回归；用户选择直接发布，但宠物版本尚待用户手机实测。
-- 后续趣味性改动应保留课程/地点可读性、时间与提醒准确性、现有隐私及同步规则，不顺带改动核心数据口径。新增宠物测试类为 `PetInteractionTest`，运行交互回归时与原有三类一起检查。
+- v2.0.1 本地 456 项 JVM、15 项 JS、28 项设备交互/渲染通过，详情见本轮设计文档；模拟器回归不能代替用户手机实测。低内存模拟器可能在冷启动/安装时结束 instrumentation，需区分系统杀进程与应用异常，并保留日志。
+- 后续趣味性改动应保留课程/地点可读性、时间与提醒准确性、现有隐私及同步规则，不顺带改动核心数据口径。运行交互回归时连同欢迎、气泡和姿态测试检查。
 
 维护本文件时优先保留准确入口和关键约束；新修复只记录可复用的原因与回归点。已过期的版本/分支信息标注日期或更新，不把它扩成另一份巨型历史报告。

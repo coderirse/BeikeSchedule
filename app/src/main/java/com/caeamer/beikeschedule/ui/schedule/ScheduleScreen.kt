@@ -67,6 +67,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.testTag
 import com.caeamer.beikeschedule.ui.pet.SchedulePetHost
+import com.caeamer.beikeschedule.ui.pet.petEnvironment
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -213,6 +218,13 @@ fun ScheduleScreen(
         initialPage = (state.selectedWeek - 1).coerceIn(0, (totalWeeks - 1).coerceAtLeast(0)),
         pageCount = { totalWeeks },
     )
+    var petGrid by remember { mutableStateOf(Rect.Zero) }
+    val density = LocalDensity.current
+    val petEnvironment = remember(state.scheduledCourses, state.semester, state.selectedWeek, visibleDays,
+        hideInactiveCourses, petGrid, density, state.sectionTimes, now) {
+        with(density) { petEnvironment(state.scheduledCourses, state.semester, state.selectedWeek, visibleDays,
+            hideInactiveCourses, petGrid, 36.dp.toPx(), FAB_CLEARANCE.toPx(), 1.dp.toPx(), state.sectionTimes, now) }
+    }
 
     // Pager 滑动 → 同步选中周
     LaunchedEffect(pagerState) {
@@ -389,7 +401,10 @@ fun ScheduleScreen(
                 }
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier.weight(1f).testTag("schedule-weeks"),
+                    modifier = Modifier.weight(1f).testTag("schedule-weeks").onGloballyPositioned {
+                        val bounds = it.boundsInParent()
+                        if (petGrid != bounds) petGrid = bounds
+                    },
                 ) { page ->
                     WeekGrid(
                         week = page + 1,
@@ -421,8 +436,10 @@ fun ScheduleScreen(
             }
         }
         SchedulePetHost(
-            paused = showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null,
+            paused = showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null || pagerState.isScrollInProgress,
             interactionEpoch = petInteractionEpoch,
+            environment = petEnvironment,
+            suppressWelcome = showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null,
         )
         }
     }

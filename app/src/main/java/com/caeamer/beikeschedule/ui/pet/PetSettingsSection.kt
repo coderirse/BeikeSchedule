@@ -25,6 +25,14 @@ fun PetSettingsSection(viewModel: PetViewModel = viewModel()) {
         Column(Modifier.padding(vertical = 4.dp)) {
             PetToggle("显示课表小宠物", "大肥鱼 · deepseek酱，自由拖动、随机走动", prefs.enabled, viewModel::enabled)
             HorizontalDivider()
+            Text("回来时的招呼", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 16.dp, top = 12.dp))
+            FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PetWelcomePolicy.entries.forEach { policy ->
+                    FilterChip(selected = prefs.welcomePolicy == policy, onClick = { viewModel.welcomePolicy(policy) }, label = { Text(policy.label) })
+                }
+            }
+            Text("打开或切回课表时打招呼；久别会换欢迎词。与自动闲聊间隔分开设置。",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 16.dp))
             Text("自动闲聊频率", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 16.dp, top = 12.dp))
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PetFrequency.entries.forEach { f ->
