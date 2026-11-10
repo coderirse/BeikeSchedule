@@ -149,7 +149,7 @@ internal object PetSpace {
                 val gap = Offset(maxOf(0f, r.left - pet.right, pet.left - r.right), maxOf(0f, r.top - pet.bottom, pet.top - r.bottom)).getDistance()
                 gap <= maxOf(pet.width, pet.height) * 0.6f
             }
-            .minBy { r -> score(r, env) * 20 + blocks.sumOf { (overlap(r, it) * 1000).toDouble() }.toFloat() + overlap(r, pet) * 30 + (r.center - pet.center).getDistance() }
+            .minBy { r -> score(r, env) * 20 + blocks.sumOf { (overlap(r, it) * 1000).toDouble() }.toFloat() + overlap(r, pet) * 100_000 + (r.center - pet.center).getDistance() }
         val delta = pet.center - rect.center
         val side = if (abs(delta.x) / w > abs(delta.y) / h) { if (delta.x < 0) PetTailSide.LEFT else PetTailSide.RIGHT }
             else if (delta.y < 0) PetTailSide.TOP else PetTailSide.BOTTOM

@@ -327,12 +327,8 @@ internal fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modif
             }
             drawPath(path, color)
         }
-        val gutter = when (tailSide) {
-            PetTailSide.TOP -> PaddingValues(top = 9.dp)
-            PetTailSide.BOTTOM -> PaddingValues(bottom = 9.dp)
-            PetTailSide.LEFT -> PaddingValues(start = 9.dp)
-            PetTailSide.RIGHT -> PaddingValues(end = 9.dp)
-        }
+        // 四边留白一致，换尾巴方向不改变文本宽高，避免尺寸回传与方位选择互相抖动。
+        val gutter = PaddingValues(9.dp)
         // Material Surface 即使无 onClick 也有拦截命中的 pointerInput；浮动气泡必须仅绘制。
         CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSecondaryContainer) {
         Box(Modifier.padding(gutter).shadow(3.dp, MaterialTheme.shapes.large).background(color, MaterialTheme.shapes.large)

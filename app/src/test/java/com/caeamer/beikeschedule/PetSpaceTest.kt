@@ -103,6 +103,12 @@ class PetSpaceTest {
             maxOf(0f, p.rect.top - pet.bottom, pet.top - p.rect.bottom)).getDistance()
         assertTrue(gap <= 64 * 0.6f)
     }
+    @Test fun `crowded cards cannot force speech to cover the character`() {
+        val e = PetEnvironment(listOf(PetObstacle(Rect(0f, 300f, 700f, 580f), 2f)))
+        val pet = Rect(200f, 600f, 264f, 644f)
+        val p = PetSpace.bubble(pet, Size(300f, 220f), 700f, 700f, 80f, e)
+        assertFalse(p.rect.overlaps(pet))
+    }
     @Test fun `entry greeting defaults and interval boundaries`() {
         assertEquals(PetWelcomePolicy.EVERY_ENTRY, PetPreferences().welcomePolicy)
         assertTrue(PetWelcomePolicy.EVERY_ENTRY.shouldWelcome(100, 100))
