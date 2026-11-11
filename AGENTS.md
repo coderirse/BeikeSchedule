@@ -105,6 +105,7 @@ node --test app/src/test/js/*.test.cjs
 - UI 行为不能只靠 JVM 测试证明。涉及点击/滚轮时，至少覆盖实际触摸、初始化、快速确定、保存重开及取消；语义 `performClick` 通过不代表手指点击一定有效。
 - 设备测试检查 DataStore 设置保存时，等待新值回写后再断言；弹窗/键盘收起可能改变列表可视区，需要滚动到目标行后检查显示，不能把异步保存或列表位置当成同步不变。
 - 不在同一工作目录同时启动多份 Gradle 构建。遇到本机配置缓存/并行问题，可加 `--no-configuration-cache --max-workers=4`；只停止本次任务启动的进程。
+- 本机内存紧张时模拟器与构建并行会互相挤掉（Gradle daemon 和模拟器都可能被系统杀掉）；可给模拟器 `-memory 2048`、构建降 `--max-workers=2`，崩溃后先查进程和内存再重试。
 - 当前功能分支交互设备回归共 9 个测试类，需已启动的模拟器或连接的设备：
 
 ```bash
@@ -148,8 +149,9 @@ python tools/sign_update.py --key keystore/update_signing_private.pem --version-
 
 ## 7. 当前接手快照（2026-11-11）
 
-- 主干发布基线：`v2.0.2` / `versionCode 66`，将 `codex/playful-experience` 截至 `38c1032` 的宠物功能及气泡/可见性修复合入 `main`。此前主干为 `v1.5.8` / 63；v2.0.0、v2.0.1 曾从功能分支发布。实际线上版本仍以更新声明和 Release 为准。
-- 当前开发及发布分支：`codex/pet-llm-integration`，从 v2.0.2 发布后的主干建立；当前正式发布 `v2.1.0 / 67`，支持宠物 AI。主干仍为 v2.0.2 基线，后续手机测试继续在当前分支。宠物原有交互设计见 `docs/plans/2026-11-10-pet-surfaces-design.md`。
+- 主干基线：`v2.1.0` / `versionCode 67`（2026-11-11 将 `codex/pet-llm-integration` 合入 `main`，合并提交 `af26115`，main CI 通过）。此前主干为 `v2.0.2` / 66；v2.0.0、v2.0.1 曾从功能分支发布。实际线上版本仍以更新声明和 Release 为准。
+- 当前优化分支：`codex/pet-ai-polish`，从 v2.1.0 合并后的主干建立，处理宠物 AI 小修批次（气泡句末截断、记忆显式意图、多主题热点缓存、历史总量预算、工具超限错误类型）；发布分支 `codex/pet-llm-integration` 保留。宠物原有交互设计见 `docs/plans/2026-11-10-pet-surfaces-design.md`。
+- 2026-11-11 小修批次本地验证：484 项 JVM、15 项 JS、9 类共 37 项模拟器交互通过，Lint 0 errors / 46 warnings，debug 与 release R8 构建通过；按用户要求只本地提交、未推送。真实供应商 Key 与用户手机实测仍未完成。
 - 2026-11-11 用户已逐项确认 AI 首发范围并授权实现，随后明确授权直接发布供手机测试：MiMo、DeepSeek、自定义 OpenAI 兼容供应商，独立搜索来源，分项授权与只读学习分析，自定义人格、本机聊天和可管理长期记忆，点击进入可展开的半屏聊天，自动请求仅课表可见时运行。设计、实施及发布记录见 `docs/plans/2026-11-11-pet-ai-design.md` 与 `docs/plans/2026-11-11-pet-ai.md`。
 - 本轮本地 477 项 JVM、15 项 JS、9 类共 37 项模拟器交互通过，Lint 0 errors / 46 warnings，debug 与 release R8 构建通过。AI 联网流程通过模拟供应商响应验证，未使用真实供应商 Key、用户真机或真实教务登录；不能将其表述为真实模型联调完成。
 - v2.1.0 发布重跑 477 项 JVM、15 项 JS、Lint 和正式签名 release 构建通过；正式包在模拟器覆盖安装、冷启动、加密设置保存重开及半屏聊天通过，证书延续 v2.0.2，更新声明已用 App 内公钥验签。真实模型及用户手机测试尚未完成；CI 和公网下载校验以发布交付记录为准。

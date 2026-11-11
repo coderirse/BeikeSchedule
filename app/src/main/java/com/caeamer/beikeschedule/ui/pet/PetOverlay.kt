@@ -136,7 +136,7 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
                 val prompt = if (welcoming) "用户刚打开或切回课表，请对${prefs.address}自然地打个招呼。可按需看近期安排；不要每次都查新闻。" else
                     "对${prefs.address}主动说一句。按需选择已授权的近期安排、学习建议或公开热点；没有相关数据就自然闲聊。避免与本机聊天记录重复。"
                 val answer = ai.bubble(prompt)
-                PetMessage("ai:${SystemClock.elapsedRealtime()}", answer.text.take(180) + if (answer.sources.isNotEmpty()) "（来源见聊天）" else "")
+                PetMessage("ai:${SystemClock.elapsedRealtime()}", bubbleTrim(answer.text, 180) + if (answer.sources.isNotEmpty()) "（来源见聊天）" else "")
             } else withTimeoutOrNull(1500) { vm.dialogue.next(PetDialogueRequest(prefs.address, vm.recentLines.toSet())) }
         } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         val result = line ?: PetMessage("fallback", "今天也给你加油呀，慢慢来就好～")

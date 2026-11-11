@@ -10,13 +10,31 @@ import java.time.LocalDateTime
 
 data class AiAnswer(val text: String, val sources: List<AiSource>, val scopes: Set<LearningScope>, val tokens: Int)
 
+/** 只有用户本人表达偏好或下达记住/称呼约定才算显式意图；“你喜欢什么”这类问句不算。 */
+internal fun explicitPreference(question: String): Boolean =
+    listOf("记住", "记一下", "叫我", "以后", "约定").any { it in question } ||
+        Regex("我(喜欢|不喜欢|习惯|不习惯|希望|不希望|讨厌|偏好)").containsMatchIn(question)
+
+/** 历史从最新往回按整条保留在总预算内，避免超出小窗口模型；单条仍按发送时的 6000 字上限计。 */
+internal fun budgetHistory(rows: List<AiMessage>, limit: Int = 24_000): List<AiMessage> {
+    val kept = mutableListOf<AiMessage>()
+    var used = 0
+    for (row in rows.asReversed()) {
+        val cost = row.text.length.coerceAtMost(6000)
+        if (used + cost > limit && kept.isNotEmpty()) break
+        kept += row; used += cost
+    }
+    return kept.asReversed()
+}
+
 class PetAiEngine(
     private val store: PetAiStore, private val context: PetLearningContext,
     private val client: PetAiClient = PetAiClient(),
     private val address: suspend () -> String = { "同学" },
 ) {
     private val gate = Mutex()
-    private var cachedNews: Triple<String, Long, Pair<String, List<AiSource>>>? = null
+    // 只在 gate 内读写；按 provider:topic:mode 缓存，切换主题不再立即重查。
+    private val cachedNews = LinkedHashMap<String, Pair<Long, Pair<String, List<AiSource>>>>()
     private var cachedMiMo: Pair<Long, List<AiSource>>? = null
     private val topics = setOf("综合", "科技", "教育", "校园", "体育", "文化", "生活")
 
@@ -71,7 +89,7 @@ class PetAiEngine(
             val history = if (proactive) state.history().takeLast(6) else state.history().let { rows ->
                 if (rows.lastOrNull()?.let { it.role == "user" && it.text == question } == true) rows.dropLast(1) else rows
             }.takeLast(20)
-            history.forEach { messages += AiProtocol.message(it.role, it.text.take(6000)) }
+            budgetHistory(history).forEach { messages += AiProtocol.message(it.role, it.text.take(6000)) }
             messages += AiProtocol.message("user", question.take(6000))
             val scopes = (history.flatMap { it.scopes } + state.allowedMemories().flatMap { it.scopes }).toMutableSet()
             val sources = mutableListOf<AiSource>()
@@ -127,9 +145,12 @@ class PetAiEngine(
                                 val key = if (state.searchMode == SearchMode.PROVIDER && provider.vendor == AiVendor.DEEPSEEK) provider.apiKey else state.searchKey
                                 if (key.isBlank()) "请在 API 与联网设置中配置独立搜索 Key。" else {
                                     val cacheId = "${provider.id}:$topic:${state.searchMode}"
-                                    val cached = cachedNews?.takeIf { it.first == cacheId && System.currentTimeMillis() - it.second in 0..state.hotspotMinutes * 60_000L }
+                                    val cached = cachedNews[cacheId]?.takeIf { System.currentTimeMillis() - it.first in 0..state.hotspotMinutes * 60_000L }
                                     try {
-                                        val found = cached?.third ?: client.search(key, "${LocalDate.now()} $topic 热点 新闻").also { cachedNews = Triple(cacheId, System.currentTimeMillis(), it) }
+                                        val found = cached?.second ?: client.search(key, "${LocalDate.now()} $topic 热点 新闻").also {
+                                            cachedNews[cacheId] = System.currentTimeMillis() to it
+                                            if (cachedNews.size > 7) cachedNews.remove(cachedNews.keys.first())
+                                        }
                                         guard(); sources += found.second; found.first
                                     } catch (e: CancellationException) { throw e } catch (_: Exception) { "联网查询失败，本次没有实时搜索结果。请告知用户，不得编造热点；可继续分析已有学习数据。" }
                                 }
@@ -137,7 +158,7 @@ class PetAiEngine(
                         }
                         "remember_preference" -> {
                             val text = args["text"]?.jsonPrimitive?.contentOrNull.orEmpty().trim().take(300)
-                            val explicit = listOf("记住", "喜欢", "习惯", "希望", "叫我", "偏好", "以后", "约定").any { it in question }
+                            val explicit = explicitPreference(question)
                             if ((store.state.value?.memories?.size ?: 0) >= 100) "长期记忆已满，请用户在设置中清理后再保存。"
                             else if (!state.memoryEnabled || !explicit || scopes.isNotEmpty() || text.isBlank() || Regex("sk-|tp-|token|password|密码|cookie|session|学号", RegexOption.IGNORE_CASE).containsMatchIn(text)) {
                                 "本次不保存长期记忆，只能记住用户明确表达的长期偏好或约定。"

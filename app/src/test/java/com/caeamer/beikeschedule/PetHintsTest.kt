@@ -78,4 +78,12 @@ class PetHintsTest {
         assertFalse(p.x + 64 > 220 && p.y + 64 > 420)
         assertEquals(Offset.Zero, safePetPosition(Offset(-10f, -20f), 300f, 500f, 64f, 80f))
     }
+    @Test fun `bubble trim keeps whole sentences and marks hard cuts`() {
+        assertEquals("今天也要加油呀", bubbleTrim("今天也要加油呀", 20))
+        assertEquals("今天先把作业写完再说。", bubbleTrim("今天先把作业写完再说。然后去操场跑步顺便看看晚霞", 20))
+        assertEquals("这个问题问得好？", bubbleTrim("这个问题问得好？后面还有话", 12))
+        val early = "好。" + "后面是一整段没有标点的长话".repeat(4)
+        assertEquals(early.take(20) + "…", bubbleTrim(early, 20))
+        assertEquals("无标点".repeat(7) + "…", bubbleTrim("无标点".repeat(10), 21))
+    }
 }

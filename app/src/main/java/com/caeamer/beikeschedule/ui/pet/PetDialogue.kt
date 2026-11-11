@@ -16,6 +16,15 @@ import kotlin.random.Random
 
 enum class PetMessageKind { COURSE, EXAM, CASUAL }
 data class PetMessage(val id: String, val text: String, val kind: PetMessageKind = PetMessageKind.CASUAL, val priority: Int = 9)
+
+/** 超限时优先收在句末；句末出现得太早或没有句末才硬截，避免气泡留着半句话。 */
+fun bubbleTrim(text: String, limit: Int): String {
+    if (text.length <= limit) return text
+    val window = text.substring(0, limit)
+    val end = window.indexOfLast { it in "。！？!?…" }
+    return if (end >= limit / 2) window.substring(0, end + 1) else window + "…"
+}
+
 data class PetFacts(
     val courses: List<CourseEntity>, val sections: List<SectionTimeEntity>,
     val semester: SettingsStore.SemesterConfig, val exams: List<ExamEntity>, val courseLeadMinutes: Int,

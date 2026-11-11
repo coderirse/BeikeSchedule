@@ -88,7 +88,7 @@ class AiStreamDecoder {
         (delta["tool_calls"] as? JsonArray)?.forEach { raw ->
             val call = raw.jsonObject
             val index = call["index"]?.jsonPrimitive?.intOrNull ?: calls.size
-            require(index in 0..15) { "Too many tool calls" }
+            if (index !in 0..15) throw PetAiException("工具调用数量超出限制，已停止生成")
             val tool = calls.getOrPut(index) { Tool() }
             call["id"]?.jsonPrimitive?.contentOrNull?.let { tool.id = it }
             (call["function"] as? JsonObject)?.let { fn ->

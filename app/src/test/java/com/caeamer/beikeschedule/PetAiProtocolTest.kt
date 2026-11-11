@@ -40,6 +40,12 @@ class PetAiProtocolTest {
         assertThrows(PetAiException::class.java) { stream.result() }
         assertThrows(PetAiException::class.java) { stream.accept("""{"choices":[{"delta":{},"finish_reason":"length"}]}""") }
     }
+    @Test fun excessiveToolCallIndexStopsWithTypedError() {
+        val stream = AiStreamDecoder()
+        assertThrows(PetAiException::class.java) {
+            stream.accept("""{"choices":[{"delta":{"tool_calls":[{"index":16,"id":"call_x","function":{"name":"f","arguments":"{}"}}]}}]}""")
+        }
+    }
     @Test fun unknownResponseOrHtmlFailsWithoutEchoingSecrets() {
         assertThrows(PetAiException::class.java) { AiProtocol.obj("<html>secret-token</html>") }
         assertFalse(AiProtocol.error(401).contains("secret"))
