@@ -149,9 +149,10 @@ python tools/sign_update.py --key keystore/update_signing_private.pem --version-
 
 ## 7. 当前接手快照（2026-11-11）
 
-- 主干基线：`v2.1.0` / `versionCode 67`（2026-11-11 将 `codex/pet-llm-integration` 合入 `main`，合并提交 `af26115`，main CI 通过）。此前主干为 `v2.0.2` / 66；v2.0.0、v2.0.1 曾从功能分支发布。实际线上版本仍以更新声明和 Release 为准。
-- 当前优化分支：`codex/pet-ai-polish`，从 v2.1.0 合并后的主干建立，处理宠物 AI 小修批次（气泡句末截断、记忆显式意图、多主题热点缓存、历史总量预算、工具超限错误类型）；发布分支 `codex/pet-llm-integration` 保留。宠物原有交互设计见 `docs/plans/2026-11-10-pet-surfaces-design.md`。
-- 2026-11-11 小修批次本地验证：484 项 JVM、15 项 JS、9 类共 37 项模拟器交互通过，Lint 0 errors / 46 warnings，debug 与 release R8 构建通过；按用户要求只本地提交、未推送。真实供应商 Key 与用户手机实测仍未完成。
+- 主干基线：`v2.1.1` / `versionCode 68`（2026-11-11 小修批次直接从 main 发布）。此前 `v2.1.0` / 67 于同日将 `codex/pet-llm-integration` 合入 main（合并提交 `af26115`）；更早主干为 `v2.0.2` / 66。实际线上版本仍以更新声明和 Release 为准。
+- `codex/pet-ai-polish` 小修批次（气泡句末截断、记忆显式意图、多主题热点缓存、历史总量预算、工具超限错误类型）已快进合入 main 并随 v2.1.1 发布；发布分支 `codex/pet-llm-integration` 保留。宠物原有交互设计见 `docs/plans/2026-11-10-pet-surfaces-design.md`。
+- 2026-11-11 小修批次验证：484 项 JVM、15 项 JS、9 类共 37 项模拟器交互通过，Lint 0 errors / 46 warnings，debug 与 release R8 构建通过；随后经用户授权推送并发布。真实供应商 Key 与用户手机实测仍未完成。
+- v2.1.1 发布重跑 484 项 JVM、15 项 JS、Lint 和正式签名 release 构建通过；证书延续 v2.1.0（SHA-256 `53acb30e…`），更新声明已用 App 内公钥验签。CI、GitHub 附件与公网下载校验以本次交付记录为准。
 - 2026-11-11 用户已逐项确认 AI 首发范围并授权实现，随后明确授权直接发布供手机测试：MiMo、DeepSeek、自定义 OpenAI 兼容供应商，独立搜索来源，分项授权与只读学习分析，自定义人格、本机聊天和可管理长期记忆，点击进入可展开的半屏聊天，自动请求仅课表可见时运行。设计、实施及发布记录见 `docs/plans/2026-11-11-pet-ai-design.md` 与 `docs/plans/2026-11-11-pet-ai.md`。
 - 本轮本地 477 项 JVM、15 项 JS、9 类共 37 项模拟器交互通过，Lint 0 errors / 46 warnings，debug 与 release R8 构建通过。AI 联网流程通过模拟供应商响应验证，未使用真实供应商 Key、用户真机或真实教务登录；不能将其表述为真实模型联调完成。
 - v2.1.0 发布重跑 477 项 JVM、15 项 JS、Lint 和正式签名 release 构建通过；正式包在模拟器覆盖安装、冷启动、加密设置保存重开及半屏聊天通过，证书延续 v2.0.2，更新声明已用 App 内公钥验签。真实模型及用户手机测试尚未完成；CI 和公网下载校验以发布交付记录为准。

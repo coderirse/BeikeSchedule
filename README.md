@@ -45,11 +45,11 @@
 
 ## 下载
 
-当前版本 **2.1.0（versionCode 67）**。[最新 Release](https://github.com/coderirse/BeikeSchedule/releases/tag/v2.1.0) 提供正式签名 APK，可直接覆盖安装升级；也可在 App 内“我的 → 检查更新”获取。v1.0.14 及更早版本因包名变更需卸载重装。
+当前版本 **2.1.1（versionCode 68）**。[最新 Release](https://github.com/coderirse/BeikeSchedule/releases/tag/v2.1.1) 提供正式签名 APK，可直接覆盖安装升级；也可在 App 内“我的 → 检查更新”获取。v1.0.14 及更早版本因包名变更需卸载重装。
 
-本次发布宠物 AI：支持 MiMo、DeepSeek、自定义 OpenAI 兼容 API、联网热点、分项授权的只读学习分析、自定义人格和本机记忆；宠物设置收进独立页面，点击进入可展开的半屏聊天。原有课程、日程、提醒和同步规则继续保留，无需迁移数据库。
+本次发布宠物 AI 小修：气泡按整句收边不再半句截断；长期记忆只保存明确表达的偏好；热点缓存支持多主题、切换更省额度；长聊天上下文加总量预算更稳定；错误提示更明确。v2.1.0 的 AI 首发功能（MiMo/DeepSeek/自定义 API、联网热点、分项授权只读分析、人格与本机记忆、半屏聊天）延续保留，无需迁移数据库。
 
-本版从 `codex/pet-llm-integration` 分支发布，后续手机测试继续在此分支进行。
+本版从合并后的 `main` 发布（`codex/pet-ai-polish` 小修批次）。
 
 ### 宠物 AI 使用
 
