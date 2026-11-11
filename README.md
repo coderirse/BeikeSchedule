@@ -5,6 +5,7 @@
 ## 功能
 
 **课表**
+- **v2.1.0 AI 小宠物**：支持 MiMo、DeepSeek、自定义 OpenAI 兼容 API；点击宠物打开可展开的半屏聊天，可联网聊热点、按分项授权分析课表/考试/成绩/日程等信息，自定义人格并管理本机长期记忆。设置统一收进“我的 → 课表小宠物”；API Key 与记录独立加密保存。
 - **v2.0.1 课表小宠物**：默认开启，可在“我的 → 课表小宠物”关闭。“大肥鱼 · deepseek酱”可自由拖动、随机走动，点击说话；新增同形象趴边、坐靠动作，可在今日课程顶部、底部导航上沿和边缘停靠。自动走动优先空白区域，路线和气泡尽量避开色块，尤其今天与临近的课程。默认打开或切回课表时打招呼，支持每次、间隔 1/5/30 分钟或关闭；久别有专门欢迎词。60 条离线闲聊，安静/适中/活泼三档频率，默认称呼“同学”可自定义；课程、考试、闲聊与欢迎独立设置。切页、弹层、翻周和退后台暂停，不改变系统通知
 - **一次扫码跑完三件事**：内置 WebView 完成统一身份认证登录（App 不接触学号密码）后，**同一次扫码**自动导入学期课表 + 抓取成绩/考试/学业进度 + 登录云账号；课表抓完直接入库（保留隐藏状态与自定义课），末尾给出逐项结果与失败项重试。教务会话还在时连扫码都不需要——进入即静默跑完
 - **官方教学周日历**：导入时同步教务校历，教学周↔日期精确映射——国庆等长假周不占教学周序号（第 4 周 = 10/5，而非 9/28）；假期中自动提示并定位到假期后第一个教学周
@@ -44,11 +45,26 @@
 
 ## 下载
 
-当前版本 **2.0.2（versionCode 66）**。[最新 Release](https://github.com/coderirse/BeikeSchedule/releases/tag/v2.0.2) 提供正式签名 APK，可直接覆盖安装升级；也可在 App 内“我的 → 检查更新”获取。v1.0.14 及更早版本因包名变更需卸载重装。
+当前版本 **2.1.0（versionCode 67）**。[最新 Release](https://github.com/coderirse/BeikeSchedule/releases/tag/v2.1.0) 提供正式签名 APK，可直接覆盖安装升级；也可在 App 内“我的 → 检查更新”获取。v1.0.14 及更早版本因包名变更需卸载重装。
 
-本次将宠物功能分支及其气泡、可见性修复合入 `main`，作为后续开发的统一基线：包含趴边/坐靠姿态、课程避让、进入欢迎策略和离线闲聊。原有日程、页面状态、刷新和滚轮规则继续保留；无需迁移数据库。
+本次发布宠物 AI：支持 MiMo、DeepSeek、自定义 OpenAI 兼容 API、联网热点、分项授权的只读学习分析、自定义人格和本机记忆；宠物设置收进独立页面，点击进入可展开的半屏聊天。原有课程、日程、提醒和同步规则继续保留，无需迁移数据库。
 
-下一阶段在 `codex/pet-llm-integration` 分支准备宠物大模型接入；当前发布版仍使用离线文案。
+本版从 `codex/pet-llm-integration` 分支发布，后续手机测试继续在此分支进行。
+
+### 宠物 AI 使用
+
+在“我的 → 课表小宠物 → 模型与联网”填写 Key 并选择搜索来源，再到“记忆与数据”打开需要的数据授权：
+
+- “我的 → 课表小宠物”是统一入口，详细设置分为互动与外观、模型与联网、人格与称呼、记忆与数据。
+- 内置小米 MiMo、DeepSeek 预设，填 API Key 即可使用；自定义 OpenAI 兼容供应商可填写 HTTPS 服务地址、Key 和模型名，也可读取模型列表并测试连接。手机直接连接所选供应商，模型和联网消耗用户自己的供应商额度。
+- 点击宠物进入半屏连续聊天，可展开全屏；支持自定义名字、人设、称呼、本机聊天历史，以及可查看、修改、删除和关闭的长期记忆。未配置 API 或请求失败时保留离线陪伴。
+- 课表、考试、日程、成绩、学分进度、学籍分别授权，默认全部关闭，按问题需要读取。只做分析和建议，不修改学习数据；日期、隐藏课程、打卡和统计沿用原业务口径。
+- MiMo 使用其官方联网插件（需先在控制台开通），DeepSeek 使用官方 Search；也可给其他聊天模型单独配置 DeepSeek 搜索 Key。热点保留来源与时间，查询失败不生成虚假的“实时结果”。
+- 自动搭话只在课表前台可见且没有弹层时运行，切页、后台、翻周和弹层会停止主动请求；搭话间隔与热点刷新频率独立设置。
+
+API Key、人格、聊天和记忆使用独立 AndroidKeyStore 密钥加密，原子存入本机 `noBackupFilesDir`，不参与云备份或系统备份；加密失败不会改存明文。只向所选供应商发送当前问题所需的已授权内容，不读取或发送学校密码、学校登录会话、云账号凭证。更换授权会开启新会话，旧记录只留在本机历史中，带已撤销数据来源标记的回复和记忆不再进入后续请求。
+
+设计与实施记录见 [宠物 AI 设计](docs/plans/2026-11-11-pet-ai-design.md) 和 [实施计划](docs/plans/2026-11-11-pet-ai.md)。
 
 App 内「我的 → 检查更新」走自有更新源（`/api/bs/app/latest`）：响应带 **Ed25519 签名**、并覆盖安装包 **SHA-256**，验签不通过则整体忽略该源（不拿未验签的强更或下载链接），装包前再核对一次摘要。
 
@@ -86,7 +102,7 @@ node --test app/src/test/js/*.test.cjs # 成绩/考试脚本：请求范围、�
 交互回归覆盖滚轮初始化、拖动与快速确定、保存重开、提醒边界、日程查看与打卡、页面状态及刷新返回。需启动模拟器或连接 Android 设备：
 
 ```bash
-./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.PetBubbleTouchTest,com.caeamer.beikeschedule.PetInteractionTest,com.caeamer.beikeschedule.PetWelcomeInteractionTest,com.caeamer.beikeschedule.PetPoseRenderTest,com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.WheelPickerInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest
+./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.PetBubbleTouchTest,com.caeamer.beikeschedule.PetInteractionTest,com.caeamer.beikeschedule.PetWelcomeInteractionTest,com.caeamer.beikeschedule.PetPoseRenderTest,com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.WheelPickerInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest,com.caeamer.beikeschedule.PetAiSettingsInteractionTest,com.caeamer.beikeschedule.PetAiChatInteractionTest
 ```
 
 更多技术细节见 [docs/TECH_DESIGN.md](docs/TECH_DESIGN.md) 与 [docs/JWXT_API.md](docs/JWXT_API.md)。

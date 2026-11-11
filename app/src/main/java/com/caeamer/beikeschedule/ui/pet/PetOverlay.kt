@@ -50,6 +50,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import com.caeamer.beikeschedule.ui.pet.ai.PetAiViewModel
 import java.time.LocalDateTime
 import kotlin.math.roundToInt
 import kotlin.random.Random
@@ -65,7 +68,7 @@ internal fun safePetPosition(point: Offset, width: Float, height: Float, size: F
 }
 
 @Composable
-fun SchedulePetHost(paused: Boolean, interactionEpoch: Int, environment: PetEnvironment = PetEnvironment(), suppressWelcome: Boolean = paused, viewModel: PetViewModel = viewModel()) {
+fun SchedulePetHost(paused: Boolean, interactionEpoch: Int, environment: PetEnvironment = PetEnvironment(), suppressWelcome: Boolean = paused, viewModel: PetViewModel = viewModel(), onChat: (() -> Unit)? = null) {
     val positions = rememberSaveableStateHolder()
     val prefs by viewModel.preferences.collectAsStateWithLifecycle()
     val owner = LocalLifecycleOwner.current
@@ -101,12 +104,12 @@ fun SchedulePetHost(paused: Boolean, interactionEpoch: Int, environment: PetEnvi
     }
     val facts by viewModel.facts.collectAsStateWithLifecycle()
     positions.SaveableStateProvider(appearance.id) {
-        PetScene(image, poses, appearance, settings, facts, environment, interactionEpoch, viewModel)
+        PetScene(image, poses, appearance, settings, facts, environment, interactionEpoch, viewModel, onChat)
     }
 }
 
 @Composable
-private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAppearance, prefs: PetPreferences, facts: PetFacts?, environment: PetEnvironment, interactionEpoch: Int, vm: PetViewModel) {
+private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAppearance, prefs: PetPreferences, facts: PetFacts?, environment: PetEnvironment, interactionEpoch: Int, vm: PetViewModel, onChat: (() -> Unit)?, ai: PetAiViewModel = viewModel()) {
     val density = LocalDensity.current
     val currentFacts by rememberUpdatedState(facts)
     var bubble by remember { mutableStateOf<PetMessage?>(null) }
@@ -122,10 +125,19 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
     var normalizedY by rememberSaveable { mutableFloatStateOf(0.80f) }
     var nextCasual by remember { mutableLongStateOf(SystemClock.elapsedRealtime() + prefs.frequency.delayMillis()) }
     val welcome by vm.welcome.collectAsStateWithLifecycle()
+    val aiState by ai.state.collectAsStateWithLifecycle()
+    val aiConfig = aiState?.requestConfig()
+    val currentInteraction by rememberUpdatedState(interactionEpoch)
+    fun casualDelay() = if (aiState?.configured == true) aiState!!.proactiveMinutes * 60_000L else prefs.frequency.delayMillis()
 
-    suspend fun casual(): PetMessage {
+    suspend fun casual(welcoming: Boolean = false): PetMessage {
         val line = try {
-            withTimeoutOrNull(1500) { vm.dialogue.next(PetDialogueRequest(prefs.address, vm.recentLines.toSet())) }
+            if (aiState?.configured == true) {
+                val prompt = if (welcoming) "用户刚打开或切回课表，请对${prefs.address}自然地打个招呼。可按需看近期安排；不要每次都查新闻。" else
+                    "对${prefs.address}主动说一句。按需选择已授权的近期安排、学习建议或公开热点；没有相关数据就自然闲聊。避免与本机聊天记录重复。"
+                val answer = ai.bubble(prompt)
+                PetMessage("ai:${SystemClock.elapsedRealtime()}", answer.text.take(180) + if (answer.sources.isNotEmpty()) "（来源见聊天）" else "")
+            } else withTimeoutOrNull(1500) { vm.dialogue.next(PetDialogueRequest(prefs.address, vm.recentLines.toSet())) }
         } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         val result = line ?: PetMessage("fallback", "今天也给你加油呀，慢慢来就好～")
         vm.rememberLine(result.id)
@@ -136,10 +148,10 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
         quietUntil = SystemClock.elapsedRealtime() + 1500
     }
     LaunchedEffect(bubble) { if (bubble != null) { delay(8000); bubble = null } }
-    LaunchedEffect(request) {
+    LaunchedEffect(request, aiConfig) {
         if (request > 0) {
             bubble = casual()
-            nextCasual = SystemClock.elapsedRealtime() + prefs.frequency.delayMillis()
+            nextCasual = SystemClock.elapsedRealtime() + casualDelay()
         }
     }
     LaunchedEffect(welcome?.id) {
@@ -147,13 +159,19 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
         delay(600)
         if (!dragging && bubble == null) {
             val important = currentFacts?.let { PetHints.resolve(it, LocalDateTime.now(), prefs) }?.firstOrNull { it.id !in vm.seenHints }
-            bubble = important ?: PetWelcomeLines.message(prefs.address, visit, LocalDateTime.now().hour)
+            if (important != null) bubble = important
+            else {
+                val epoch = currentInteraction
+                val greeting = if (aiState?.configured == true) casual(welcoming = true) else PetWelcomeLines.message(prefs.address, visit, LocalDateTime.now().hour)
+                if (!dragging && bubble == null && epoch == currentInteraction) bubble = greeting
+            }
             important?.let { vm.rememberHint(it.id) }
         }
         vm.consumeWelcome(visit.id)
     }
-    LaunchedEffect(prefs) {
-        nextCasual = SystemClock.elapsedRealtime() + prefs.frequency.delayMillis()
+    LaunchedEffect(prefs, aiConfig) {
+        var casualJob: Job? = null
+        nextCasual = SystemClock.elapsedRealtime() + casualDelay()
         while (isActive) {
             val tick = SystemClock.elapsedRealtime()
             if (!dragging && tick >= quietUntil) {
@@ -162,9 +180,13 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
                 if (important != null && (bubble == null || bubble?.kind == PetMessageKind.CASUAL)) {
                     vm.rememberHint(important.id)
                     bubble = important
-                } else if (bubble == null && prefs.chatter && tick >= nextCasual) {
-                    bubble = casual()
-                    nextCasual = tick + prefs.frequency.delayMillis()
+                } else if (bubble == null && prefs.chatter && tick >= nextCasual && casualJob?.isActive != true) {
+                    val epoch = currentInteraction
+                    casualJob = launch {
+                        val message = casual()
+                        if (bubble == null && !dragging && epoch == currentInteraction) bubble = message
+                        nextCasual = SystemClock.elapsedRealtime() + casualDelay()
+                    }
                 }
             }
             delay(5000)
@@ -241,7 +263,7 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
                     onDragCancel = { dragging = false },
                 ) { change, delta -> change.consume(); move(currentPosition() + delta) }
             }
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { request++ }
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { if (onChat != null) onChat() else request++ }
         // 手势挂在稳定的父节点；站起/趴下换画布时不能中途丢掉本次拖动。
         Box(petModifier) {
             if (resting) PetRestSprite(poses!!, posture, Modifier.fillMaxSize())
@@ -258,7 +280,7 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
             PetBubble(message, placement.side == PetTailSide.TOP, placement.anchor,
                 Modifier.offset { IntOffset(placement.rect.left.roundToInt(), placement.rect.top.roundToInt()) }
                     .width(with(density) { bubbleWidth.toDp() }).onSizeChanged { measuredHeight = it.height },
-                onDismiss = { bubble = null }, tailSide = placement.side,
+                onDismiss = { bubble = null }, tailSide = placement.side, speaker = aiState?.petName ?: "大肥鱼",
             )
         }
     }
@@ -307,7 +329,7 @@ internal fun PetRestSprite(atlas: PetPoseAtlas, posture: PetPosture, modifier: M
 }
 
 @Composable
-internal fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modifier: Modifier, onDismiss: () -> Unit, tailSide: PetTailSide = if (below) PetTailSide.TOP else PetTailSide.BOTTOM) {
+internal fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modifier: Modifier, onDismiss: () -> Unit, tailSide: PetTailSide = if (below) PetTailSide.TOP else PetTailSide.BOTTOM, speaker: String = "大肥鱼") {
     val color = MaterialTheme.colorScheme.secondaryContainer
     Box(modifier.testTag("pet-bubble")) {
         Canvas(Modifier.matchParentSize()) {
@@ -335,7 +357,7 @@ internal fun PetBubble(message: PetMessage, below: Boolean, anchor: Float, modif
             .clip(MaterialTheme.shapes.large)) {
             Column(Modifier.padding(start = 14.dp, end = 10.dp, bottom = 12.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(when (message.kind) { PetMessageKind.COURSE -> "课前小提醒"; PetMessageKind.EXAM -> "考前加油站"; else -> "大肥鱼说" },
+                    Text(when (message.kind) { PetMessageKind.COURSE -> "课前小提醒"; PetMessageKind.EXAM -> "考前加油站"; else -> "${speaker}说" },
                         style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
                         Icon(Icons.Default.Close, "关闭宠物气泡", Modifier.size(16.dp))

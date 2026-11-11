@@ -27,8 +27,9 @@ class PetInteractionTest {
     @Test fun petSpeaksAndMovesWithinContent() {
         awaitPet()
         compose.onNodeWithTag("schedule-pet").performClick()
-        compose.waitUntil(5000) { compose.onAllNodesWithTag("pet-bubble").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithTag("pet-bubble").assertIsDisplayed()
+        compose.onNodeWithTag("pet-chat").assertIsDisplayed()
+        compose.onNodeWithContentDescription("关闭聊天").performTouchInput { click() }
+        awaitPet()
         val before = compose.onNodeWithTag("schedule-pet").fetchSemanticsNode().boundsInRoot
         compose.onNodeWithTag("schedule-pet").performTouchInput { swipe(center, center + Offset(100f, -100f), 500) }
         val after = compose.onNodeWithTag("schedule-pet").fetchSemanticsNode().boundsInRoot
@@ -61,6 +62,8 @@ class PetInteractionTest {
     @Test fun disablePetAndConfigureFrequencyAndAddress() {
         awaitPet()
         compose.onNode(hasText("我的") and hasClickAction()).performClick()
+        compose.onNodeWithText("课表小宠物").performScrollTo().performClick()
+        compose.onNodeWithText("互动与外观").performClick()
         compose.onNodeWithText("显示课表小宠物").performScrollTo().performClick()
         compose.onNodeWithText("活泼").performScrollTo().performClick()
         compose.onNodeWithText("活泼").assertIsSelected()
@@ -71,6 +74,8 @@ class PetInteractionTest {
         // DataStore 异步回写；弹窗/键盘收起后列表位置也可能变化。
         compose.waitUntil(5000) { compose.onAllNodesWithText("小贝").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("小贝").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("返回").performTouchInput { click() }
+        compose.onNodeWithContentDescription("返回").performTouchInput { click() }
         compose.onNode(hasText("课表") and hasClickAction()).performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("schedule-pet").assertDoesNotExist()
