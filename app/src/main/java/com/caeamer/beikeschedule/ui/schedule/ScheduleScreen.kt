@@ -138,6 +138,7 @@ fun ScheduleScreen(
     onImportClick: () -> Unit = {},
     /** 点顶栏学期名 → 打开学期设置全屏页（由 MainActivity 承载，与同步页同模式）。 */
     onOpenSettings: () -> Unit = {},
+    onOpenPetSettings: () -> Unit = {},
     viewModel: ScheduleViewModel = viewModel(),
 ) {
     // withLifecycle：退到后台停止收集（WhileSubscribed 才能在后台真正停流）
@@ -165,6 +166,7 @@ fun ScheduleScreen(
     var pendingSlot by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     // 无固定时间课程弹层
     var showUnscheduledSheet by rememberSaveable { mutableStateOf(false) }
+    var showPetChat by rememberSaveable { mutableStateOf(false) }
     // "下一节课"图钉：每分钟重算一次，跨过上课点后自动前移（无需重进页面）。
     // 只在 RESUMED 走时钟，且唤醒点对齐整分钟（见 rememberNow 注释）。
     val now = rememberNow()
@@ -436,14 +438,19 @@ fun ScheduleScreen(
             }
         }
         SchedulePetHost(
-            paused = showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null || pagerState.isScrollInProgress,
+            paused = showPetChat || showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null || pagerState.isScrollInProgress,
             interactionEpoch = petInteractionEpoch,
             environment = petEnvironment,
-            suppressWelcome = showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null,
+            suppressWelcome = showPetChat || showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null,
+            onChat = { showPetChat = true },
         )
         }
     }
 
+    if (showPetChat) com.caeamer.beikeschedule.ui.pet.ai.PetChatSheet(
+        onDismiss = { showPetChat = false },
+        onSettings = { showPetChat = false; onOpenPetSettings() },
+    )
     detailCourse?.let { course ->
         val occurrence = detailDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
         val plan = occurrence?.let { WeekResolver.daySchedule(state.semester, it) }

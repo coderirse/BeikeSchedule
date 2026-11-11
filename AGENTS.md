@@ -31,6 +31,7 @@
 | 教务分区、成绩与考试 | `ui/grades/GradesScreen.kt`、`GradesViewModel.kt`；`GradesScreen` 实际承载整个“教务”Tab |
 | 个人日程与滚轮 | `ui/todo/TodoScreen.kt`、`TodoViewModel.kt`、`WheelPicker.kt`、`model/TodoPlanner.kt` |
 | 课表小宠物 | `ui/pet/`；素材在 `app/src/main/assets/pets/`；独立 `schedule_pet` DataStore，不改变核心设置/云快照 |
+| 宠物 AI | `ui/pet/ai/`：`PetAiClient`、`PetAiEngine`、`PetLearningContext`、`PetAiStore`、`PetAiViewModel`；独立设置页 `ui/pet/PetSettingsPage.kt` |
 | 无课教室 | `ui/freeroom/`、`data/repo/FreeRoomRepository.kt`、`data/remote/SmartClass*` |
 | 登录与同步编排 | `ui/sync/SyncPlan.kt`、`UnifiedSyncViewModel.kt`、`UnifiedSyncScreen.kt` |
 | WebView、桥与解析 | `import/JwWebView.kt`、`import/*Bridge.kt`、`import/parser/`；脚本在 `app/src/main/assets/import/` |
@@ -65,6 +66,8 @@
 - 宠物只在课表页 RESUMED 且无弹层时运行；气泡提醒只读数据，不调用通知调度器。全屏触摸观察器只能放在课表共同父节点且不消费事件，不能放在覆盖页面的兄弟浮层；宠物仅自身矩形接收拖动/点击。气泡主体用纯绘制 Box，不能换回会挡下层命中的 Material Surface；关闭按钮独立处理触摸。保留位置恢复、触摸穿透、按钮避让、开关与故障隔离。
 - 宠物环境矩形复用 `WeekLayout` / `CourseVisibility` 和 Pager 实测布局；隐藏、调休及冲突分列须与实际卡片一致。停靠仅允许今日真实课程，身体放在上沿之外；自动路径和气泡优先空白处，不能只保证终点安全却穿过卡片。站起/趴下时保留同一个手势父节点，避免拖动中断。
 - 欢迎频率与自动闲聊分开。可见性由课表进入/退出及前后台驱动，不能把素材重载或弹层关闭当作重新进入；独立 DataStore 保存访问/欢迎时间，历史写入不应重启整个宠物场景。
+- AI 设置、Key、聊天和记忆独立加密保存在 `noBackupFilesDir`，不进入核心设置、云快照或日志；加密失败不能退回明文。模型通过只读工具按需访问分项授权的学习数据，密码、学校会话和云凭证不进入上下文。权限/供应商变更取消旧请求，派生回复和记忆保留数据来源标记，撤权后不得通过历史重新发送。
+- 宠物自动联网仅在原前台可见条件下运行，不能新增后台轮询或系统通知；主动网络请求不能阻塞本地课前/考试提示。聊天关闭、退后台或用户停止须取消底层网络请求，不能把取消当普通错误后继续生成。搜索查询只使用公开主题，来源与获取时间保留，失败不冒充实时新闻。核心学习数据首发只读。
 
 ### 同步、数据与提醒
 
@@ -102,10 +105,10 @@ node --test app/src/test/js/*.test.cjs
 - UI 行为不能只靠 JVM 测试证明。涉及点击/滚轮时，至少覆盖实际触摸、初始化、快速确定、保存重开及取消；语义 `performClick` 通过不代表手指点击一定有效。
 - 设备测试检查 DataStore 设置保存时，等待新值回写后再断言；弹窗/键盘收起可能改变列表可视区，需要滚动到目标行后检查显示，不能把异步保存或列表位置当成同步不变。
 - 不在同一工作目录同时启动多份 Gradle 构建。遇到本机配置缓存/并行问题，可加 `--no-configuration-cache --max-workers=4`；只停止本次任务启动的进程。
-- 当前交互设备回归共 7 个测试类，需已启动的模拟器或连接的设备：
+- 当前功能分支交互设备回归共 9 个测试类，需已启动的模拟器或连接的设备：
 
 ```bash
-./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.PetBubbleTouchTest,com.caeamer.beikeschedule.PetInteractionTest,com.caeamer.beikeschedule.PetWelcomeInteractionTest,com.caeamer.beikeschedule.PetPoseRenderTest,com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.WheelPickerInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest --console=plain
+./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.caeamer.beikeschedule.PetBubbleTouchTest,com.caeamer.beikeschedule.PetInteractionTest,com.caeamer.beikeschedule.PetWelcomeInteractionTest,com.caeamer.beikeschedule.PetPoseRenderTest,com.caeamer.beikeschedule.TodoInteractionTest,com.caeamer.beikeschedule.WheelPickerInteractionTest,com.caeamer.beikeschedule.NavigationInteractionTest,com.caeamer.beikeschedule.PetAiSettingsInteractionTest,com.caeamer.beikeschedule.PetAiChatInteractionTest --console=plain
 ```
 
 - JVM 样本在 `app/src/test/resources/`，JS 测试在 `app/src/test/js/`，设备测试在 `app/src/androidTest/`。
@@ -143,10 +146,13 @@ python tools/sign_update.py --key keystore/update_signing_private.pem --version-
 10. 更新声明由服务启动时载入，需要重启 `beike`。核对 `/health` 返回服务和数据库正常，再核对公网 `/api/bs/app/latest`，完整下载 APK 比较大小与 SHA-256，核对 GitHub Release 附件。部署脚本部分检查会容忍失败，不能只凭“部署完成”字样判断上线成功。
 11. 公网 Python 默认 UA 曾被 Cloudflare 返回 403；可按真实客户端 `User-Agent: okhttp/5.5.0`（以当前依赖为准）复核，不为排查探针问题关闭安全校验。发布结束报告版本、提交、Release 链接、更新源验证及当前分支。
 
-## 7. 当前接手快照（2026-11-10）
+## 7. 当前接手快照（2026-11-11）
 
 - 主干发布基线：`v2.0.2` / `versionCode 66`，将 `codex/playful-experience` 截至 `38c1032` 的宠物功能及气泡/可见性修复合入 `main`。此前主干为 `v1.5.8` / 63；v2.0.0、v2.0.1 曾从功能分支发布。实际线上版本仍以更新声明和 Release 为准。
-- 下一阶段分支：`codex/pet-llm-integration`，从 v2.0.2 发布后的主干建立，用于准备宠物大模型接入。当前发布版仍为离线文案；服务商、模型、鉴权、发送上下文与隐私边界待下一阶段设计确认，不把旧方案“不接模型”的阶段性取舍当作永久限制。宠物现有实现见 `docs/plans/2026-11-10-pet-surfaces-design.md`。
+- 当前开发及发布分支：`codex/pet-llm-integration`，从 v2.0.2 发布后的主干建立；当前正式发布 `v2.1.0 / 67`，支持宠物 AI。主干仍为 v2.0.2 基线，后续手机测试继续在当前分支。宠物原有交互设计见 `docs/plans/2026-11-10-pet-surfaces-design.md`。
+- 2026-11-11 用户已逐项确认 AI 首发范围并授权实现，随后明确授权直接发布供手机测试：MiMo、DeepSeek、自定义 OpenAI 兼容供应商，独立搜索来源，分项授权与只读学习分析，自定义人格、本机聊天和可管理长期记忆，点击进入可展开的半屏聊天，自动请求仅课表可见时运行。设计、实施及发布记录见 `docs/plans/2026-11-11-pet-ai-design.md` 与 `docs/plans/2026-11-11-pet-ai.md`。
+- 本轮本地 477 项 JVM、15 项 JS、9 类共 37 项模拟器交互通过，Lint 0 errors / 46 warnings，debug 与 release R8 构建通过。AI 联网流程通过模拟供应商响应验证，未使用真实供应商 Key、用户真机或真实教务登录；不能将其表述为真实模型联调完成。
+- v2.1.0 发布重跑 477 项 JVM、15 项 JS、Lint 和正式签名 release 构建通过；正式包在模拟器覆盖安装、冷启动、加密设置保存重开及半屏聊天通过，证书延续 v2.0.2，更新声明已用 App 内公钥验签。真实模型及用户手机测试尚未完成；CI 和公网下载校验以发布交付记录为准。
 - 已合并的关键修复：按日期隐藏课程与考试独立刷新、日程全部入口与日期打卡、导航状态保留、成绩独立刷新、云版本判断，以及时间/提醒滚轮显示与保存一致性。
 - v1.5.8 历史基线验证过 430 项 JVM、15 项 JS、18 项设备交互测试；当时主干 CI 通过，用户已反馈滚轮修复实测正常。这是历史验证记录，不代表未来修改无需再测。
 - v2.0.2 合并发布重新通过 458 项 JVM、15 项 JS、Lint（0 errors、46 warnings）、debug、正式签名 release/R8 构建；APK 证书与 v2.0.1 一致，更新声明已用 App 内公钥验签。发布后的 CI、模拟器及公网下载验证以本次交付记录为准。

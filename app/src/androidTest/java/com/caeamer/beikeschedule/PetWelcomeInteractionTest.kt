@@ -52,18 +52,25 @@ class PetWelcomeInteractionTest {
     @Test fun welcomeSettingCanDisableOrThrottleEntryIndependently() {
         awaitBubble(); dismiss()
         compose.onNode(hasText("我的") and hasClickAction()).performClick()
+        compose.onNodeWithText("课表小宠物").performScrollTo().performClick()
+        compose.onNodeWithText("互动与外观").performClick()
         compose.onNodeWithText("间隔 5 分钟").performScrollTo().performTouchInput { click() }
         compose.onNodeWithText("间隔 5 分钟").assertIsSelected()
+        pressBack(); pressBack()
         compose.onNode(hasText("课表") and hasClickAction()).performClick()
         compose.mainClock.advanceTimeBy(1500); compose.waitForIdle()
         compose.onNodeWithTag("pet-bubble").assertDoesNotExist()
         compose.onNode(hasText("我的") and hasClickAction()).performClick()
+        compose.onNodeWithText("课表小宠物").performScrollTo().performClick()
+        compose.onNodeWithText("互动与外观").performClick()
         compose.onNodeWithText("关闭欢迎").performScrollTo().performTouchInput { click() }
         compose.onNodeWithText("关闭欢迎").assertIsSelected()
+        pressBack(); pressBack()
         compose.onNode(hasText("课表") and hasClickAction()).performClick()
         compose.mainClock.advanceTimeBy(1500); compose.waitForIdle()
         compose.onNodeWithTag("pet-bubble").assertDoesNotExist()
         compose.onNodeWithTag("schedule-pet").performTouchInput { click() }
-        awaitBubble()
+        compose.onNodeWithTag("pet-chat").assertIsDisplayed()
+        compose.onNodeWithContentDescription("关闭聊天").performTouchInput { click() }
     }
 }

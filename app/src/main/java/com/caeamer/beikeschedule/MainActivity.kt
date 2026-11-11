@@ -60,6 +60,7 @@ import com.caeamer.beikeschedule.ui.sync.UnifiedSyncScreen
 import com.caeamer.beikeschedule.ui.sync.SyncScope
 import com.caeamer.beikeschedule.ui.grades.GradesScreen
 import com.caeamer.beikeschedule.ui.profile.ProfileScreen
+import com.caeamer.beikeschedule.ui.pet.PetSettingsPage
 import com.caeamer.beikeschedule.ui.schedule.ScheduleScreen
 import com.caeamer.beikeschedule.ui.schedule.SemesterSettingsPage
 import com.caeamer.beikeschedule.ui.theme.BeikeScheduleTheme
@@ -190,9 +191,10 @@ class MainActivity : ComponentActivity() {
                 }
                 // 学期设置全屏页：同模式，替换掉底部 Tab 框架（替代旧的全屏弹窗）
                 var showSemesterSettings by rememberSaveable { mutableStateOf(false) }
+                var showPetSettings by rememberSaveable { mutableStateOf(false) }
                 // 同步页的 WebView 展示的是浅底教务页面，需要临时切成深色状态栏图标
                 var syncLightPage by remember { mutableStateOf(false) }
-                BackHandler(enabled = !showSync && !showSemesterSettings && tab != "schedule") {
+                BackHandler(enabled = !showSync && !showSemesterSettings && !showPetSettings && tab != "schedule") {
                     tab = "schedule"
                 }
 
@@ -216,6 +218,8 @@ class MainActivity : ComponentActivity() {
                         onLightBackgroundVisible = { syncLightPage = it },
                         onRefreshComplete = { Toast.makeText(this, it, Toast.LENGTH_LONG).show() },
                     )
+                } else if (showPetSettings) {
+                    PetSettingsPage(onBack = { showPetSettings = false })
                 } else if (showSemesterSettings) {
                     // 学期设置：viewModel() 拿到的是与课表页同一个 Activity 级 ViewModel，
                     // 改动即时生效，返回后课表页直接看到最新状态
@@ -272,10 +276,11 @@ class MainActivity : ComponentActivity() {
                                             onResync = { openSync(SyncScope.GRADES_ONLY) },
                                             onRefreshExams = { openSync(SyncScope.EXAMS_ONLY) },
                                         )
-                                        "mine" -> ProfileScreen(onCloudLoginClick = { openSync() })
+                                        "mine" -> ProfileScreen(onCloudLoginClick = { openSync() }, onPetSettingsClick = { showPetSettings = true })
                                         else -> ScheduleScreen(
                                             onImportClick = { openSync() },
                                             onOpenSettings = { showSemesterSettings = true },
+                                            onOpenPetSettings = { showPetSettings = true },
                                         )
                                     }
                                 }

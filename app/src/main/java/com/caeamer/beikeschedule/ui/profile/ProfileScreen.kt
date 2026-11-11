@@ -83,7 +83,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caeamer.beikeschedule.R
-import com.caeamer.beikeschedule.ui.pet.PetSettingsSection
+import androidx.compose.material.icons.filled.Pets
 import com.caeamer.beikeschedule.data.pref.SettingsStore
 import com.caeamer.beikeschedule.import.clearJwSession
 import com.caeamer.beikeschedule.ui.settings.SettingsViewModel
@@ -97,6 +97,7 @@ fun ProfileScreen(
     viewModel: SettingsViewModel = viewModel(),
     /** 未登录时点「云同步」→ 打开全屏教务登录页（由宿主 MainActivity 承载）。 */
     onCloudLoginClick: () -> Unit = {},
+    onPetSettingsClick: () -> Unit = {},
 ) {
     // withLifecycle：退到后台停止收集
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -465,7 +466,13 @@ fun ProfileScreen(
                 toggleValue = hideInactiveCourses,
             )
 
-            PetSettingsSection()
+            SettingsItemRow(
+                icon = { Icon(Icons.Default.Pets, null, Modifier.size(20.dp)) },
+                title = "课表小宠物",
+                value = "互动、AI 模型、人格与记忆",
+                trailing = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                onClick = onPetSettingsClick,
+            )
 
             // —— 主题 ——
             Text(
