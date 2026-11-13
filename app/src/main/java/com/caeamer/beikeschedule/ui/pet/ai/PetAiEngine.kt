@@ -27,6 +27,10 @@ internal fun budgetHistory(rows: List<AiMessage>, limit: Int = 24_000): List<AiM
     return kept.asReversed()
 }
 
+/** 主动气泡的显式禁说清单：只取最近几条 assistant 文本，不引入新数据。 */
+internal fun recentBubbleLines(history: List<AiMessage>, limit: Int = 6): List<String> =
+    history.filter { it.role == "assistant" && it.text.isNotBlank() }.takeLast(limit).map { it.text.take(200) }
+
 class PetAiEngine(
     private val store: PetAiStore, private val context: PetLearningContext,
     private val client: PetAiClient = PetAiClient(),
@@ -90,7 +94,10 @@ class PetAiEngine(
                 if (rows.lastOrNull()?.let { it.role == "user" && it.text == question } == true) rows.dropLast(1) else rows
             }.takeLast(20)
             budgetHistory(history).forEach { messages += AiProtocol.message(it.role, it.text.take(6000)) }
-            messages += AiProtocol.message("user", question.take(6000))
+            val avoid = if (proactive) recentBubbleLines(state.history()) else emptyList()
+            val userText = question.take(6000) +
+                if (avoid.isEmpty()) "" else "\n最近已说过（禁止重复内容或相似句式）：\n" + avoid.joinToString("\n") { "- $it" }
+            messages += AiProtocol.message("user", userText)
             val scopes = (history.flatMap { it.scopes } + state.allowedMemories().flatMap { it.scopes }).toMutableSet()
             val sources = mutableListOf<AiSource>()
             var tokens = 0

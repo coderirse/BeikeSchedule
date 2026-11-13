@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.FilterQuality
@@ -53,7 +54,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import com.caeamer.beikeschedule.ui.pet.ai.PetAiViewModel
+import com.caeamer.beikeschedule.ui.pet.ai.hotspotAvailable
 import java.time.LocalDateTime
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -67,8 +70,11 @@ internal fun safePetPosition(point: Offset, width: Float, height: Float, size: F
     return Offset(x, y)
 }
 
+/** 翻周进出动画状态；弹层/退后台仍走整体卸载，不经过这里。 */
+internal enum class PetPresence { VISIBLE, EXITING, AWAY, ENTERING }
+
 @Composable
-fun SchedulePetHost(paused: Boolean, interactionEpoch: Int, environment: PetEnvironment = PetEnvironment(), suppressWelcome: Boolean = paused, viewModel: PetViewModel = viewModel(), onChat: (() -> Unit)? = null) {
+fun SchedulePetHost(paused: Boolean, pageTurning: Boolean = false, interactionEpoch: Int, environment: PetEnvironment = PetEnvironment(), suppressWelcome: Boolean = paused, viewModel: PetViewModel = viewModel(), onChat: (() -> Unit)? = null) {
     val positions = rememberSaveableStateHolder()
     val prefs by viewModel.preferences.collectAsStateWithLifecycle()
     val owner = LocalLifecycleOwner.current
@@ -104,12 +110,12 @@ fun SchedulePetHost(paused: Boolean, interactionEpoch: Int, environment: PetEnvi
     }
     val facts by viewModel.facts.collectAsStateWithLifecycle()
     positions.SaveableStateProvider(appearance.id) {
-        PetScene(image, poses, appearance, settings, facts, environment, interactionEpoch, viewModel, onChat)
+        PetScene(image, poses, appearance, settings, facts, environment, interactionEpoch, pageTurning, viewModel, onChat)
     }
 }
 
 @Composable
-private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAppearance, prefs: PetPreferences, facts: PetFacts?, environment: PetEnvironment, interactionEpoch: Int, vm: PetViewModel, onChat: (() -> Unit)?, ai: PetAiViewModel = viewModel()) {
+private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAppearance, prefs: PetPreferences, facts: PetFacts?, environment: PetEnvironment, interactionEpoch: Int, pageTurning: Boolean, vm: PetViewModel, onChat: (() -> Unit)?, ai: PetAiViewModel = viewModel()) {
     val density = LocalDensity.current
     val currentFacts by rememberUpdatedState(facts)
     var bubble by remember { mutableStateOf<PetMessage?>(null) }
@@ -124,22 +130,41 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
     var normalizedX by rememberSaveable { mutableFloatStateOf(0.16f) }
     var normalizedY by rememberSaveable { mutableFloatStateOf(0.80f) }
     var nextCasual by remember { mutableLongStateOf(SystemClock.elapsedRealtime() + prefs.frequency.delayMillis()) }
+    var nextHotspot by remember { mutableLongStateOf(SystemClock.elapsedRealtime() + Random.nextLong(90_000, 180_001)) }
+    var lastTopic by remember { mutableStateOf<String?>(null) }
+    var presence by remember { mutableStateOf(PetPresence.VISIBLE) }
+    var animOffset by remember { mutableStateOf<Offset?>(null) }
+    var animAlpha by remember { mutableFloatStateOf(1f) }
     val welcome by vm.welcome.collectAsStateWithLifecycle()
     val aiState by ai.state.collectAsStateWithLifecycle()
     val aiConfig = aiState?.requestConfig()
     val currentInteraction by rememberUpdatedState(interactionEpoch)
+    val currentAiState by rememberUpdatedState(aiState)
     fun casualDelay() = if (aiState?.configured == true) aiState!!.proactiveMinutes * 60_000L else prefs.frequency.delayMillis()
 
-    suspend fun casual(welcoming: Boolean = false): PetMessage {
+    suspend fun casual(welcoming: Boolean = false, hotspot: Boolean = false): PetMessage {
         val line = try {
             if (aiState?.configured == true) {
-                val prompt = if (welcoming) "用户刚打开或切回课表，请对${prefs.address}自然地打个招呼。可按需看近期安排；不要每次都查新闻。" else
-                    "对${prefs.address}主动说一句。按需选择已授权的近期安排、学习建议或公开热点；没有相关数据就自然闲聊。避免与本机聊天记录重复。"
-                val answer = ai.bubble(prompt)
-                PetMessage("ai:${SystemClock.elapsedRealtime()}", bubbleTrim(answer.text, 180) + if (answer.sources.isNotEmpty()) "（来源见聊天）" else "")
+                val state = aiState!!
+                val topic = when {
+                    welcoming -> "welcome"
+                    hotspot -> "hotspot"
+                    else -> proactiveTopic(lastTopic, hotspotAvailable(state), state.grants.isNotEmpty(), state.allowedMemories().isNotEmpty()).also { lastTopic = it }
+                }
+                val prompt = if (welcoming) "用户刚打开或切回课表，请对${prefs.address}自然地打个招呼。可按需看近期安排；不要每次都查新闻。" else proactivePrompt(topic, prefs.address)
+                val recent = state.history().filter { it.role == "assistant" }.takeLast(6).map { it.text }
+                var answer = withTimeoutOrNull(25_000) { ai.bubble(prompt) }
+                if (answer != null && recent.any { tooSimilar(bubbleTrim(answer!!.text, 180), it) }) {
+                    val retry = withTimeoutOrNull(25_000) { ai.bubble(prompt + "\n换完全不同的内容和说法，不要与最近说过的相似。") }
+                    answer = if (retry != null && !recent.any { tooSimilar(bubbleTrim(retry.text, 180), it) } &&
+                        !tooSimilar(bubbleTrim(retry.text, 180), bubbleTrim(answer!!.text, 180))) retry else null
+                }
+                answer?.let { PetMessage("ai:${SystemClock.elapsedRealtime()}", bubbleTrim(it.text, 180) + if (it.sources.isNotEmpty()) "（来源见聊天）" else "") }
             } else withTimeoutOrNull(1500) { vm.dialogue.next(PetDialogueRequest(prefs.address, vm.recentLines.toSet())) }
         } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
-        val result = line ?: PetMessage("fallback", "今天也给你加油呀，慢慢来就好～")
+        val result = line
+            ?: withTimeoutOrNull(1500) { vm.dialogue.next(PetDialogueRequest(prefs.address, vm.recentLines.toSet())) }
+            ?: PetMessage("fallback", "今天也给你加油呀，慢慢来就好～")
         vm.rememberLine(result.id)
         return result
     }
@@ -157,12 +182,13 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
     LaunchedEffect(welcome?.id) {
         val visit = welcome ?: return@LaunchedEffect
         delay(600)
-        if (!dragging && bubble == null) {
+        if (!dragging && bubble == null && presence == PetPresence.VISIBLE) {
             val important = currentFacts?.let { PetHints.resolve(it, LocalDateTime.now(), prefs) }?.firstOrNull { it.id !in vm.seenHints }
             if (important != null) bubble = important
             else {
                 val epoch = currentInteraction
-                val greeting = if (aiState?.configured == true) casual(welcoming = true) else PetWelcomeLines.message(prefs.address, visit, LocalDateTime.now().hour)
+                val greeting = if (aiState?.configured == true) casual(welcoming = true)
+                    else PetWelcomeLines.message(prefs.address, visit, LocalDateTime.now().hour, vm.recentLines.toSet()).also { vm.rememberLine(it.id) }
                 if (!dragging && bubble == null && epoch == currentInteraction) bubble = greeting
             }
             important?.let { vm.rememberHint(it.id) }
@@ -174,18 +200,24 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
         nextCasual = SystemClock.elapsedRealtime() + casualDelay()
         while (isActive) {
             val tick = SystemClock.elapsedRealtime()
-            if (!dragging && tick >= quietUntil) {
+            if (!dragging && tick >= quietUntil && presence == PetPresence.VISIBLE) {
                 val important = currentFacts?.let { PetHints.resolve(it, LocalDateTime.now(), prefs) }
                     ?.firstOrNull { it.id !in vm.seenHints }
                 if (important != null && (bubble == null || bubble?.kind == PetMessageKind.CASUAL)) {
                     vm.rememberHint(important.id)
                     bubble = important
-                } else if (bubble == null && prefs.chatter && tick >= nextCasual && casualJob?.isActive != true) {
-                    val epoch = currentInteraction
-                    casualJob = launch {
-                        val message = casual()
-                        if (bubble == null && !dragging && epoch == currentInteraction) bubble = message
-                        nextCasual = SystemClock.elapsedRealtime() + casualDelay()
+                } else if (bubble == null && prefs.chatter && casualJob?.isActive != true) {
+                    val ai = currentAiState
+                    val hotspotDue = ai != null && ai.configured && hotspotAvailable(ai) && tick >= nextHotspot
+                    if (hotspotDue || tick >= nextCasual) {
+                        val epoch = currentInteraction
+                        casualJob = launch {
+                            val message = casual(hotspot = hotspotDue)
+                            if (bubble == null && !dragging && epoch == currentInteraction) bubble = message
+                            val now = SystemClock.elapsedRealtime()
+                            nextCasual = now + casualDelay()
+                            if (hotspotDue) nextHotspot = now + ai!!.hotspotMinutes.coerceIn(5, 1440) * 60_000L
+                        }
                     }
                 }
             }
@@ -207,51 +239,156 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
             normalizedX = p.x / maxX
             normalizedY = p.y / maxY
         }
+        val currentBubble by rememberUpdatedState(bubble)
+        val currentQuietUntil by rememberUpdatedState(quietUntil)
+        val currentPresence by rememberUpdatedState(presence)
         LaunchedEffect(environment, width, height) {
+            if (presence != PetPresence.VISIBLE) return@LaunchedEffect
             if (!placed || (!manuallyPlaced && !PetSpace.free(currentPosition(), width, height, petSize, clearance, environment, posture))) {
                 val stop = withContext(Dispatchers.Default) { PetSpace.choose(width, height, petSize, clearance, environment) }
                 move(stop.position); posture = stop.posture; placed = true
             }
         }
-        LaunchedEffect(width, height, dragging, bubble, interactionEpoch, environment) {
-            walking = false
-            if (dragging || bubble != null) return@LaunchedEffect
-            try {
-                while (isActive) {
-                    delay(Random.nextLong(10000, 22000))
-                    if (SystemClock.elapsedRealtime() < quietUntil) continue
-                    val start = currentPosition()
-                    val stop = withContext(Dispatchers.Default) { PetSpace.choose(width, height, petSize, clearance, environment) }
-                    val path = withContext(Dispatchers.Default) { PetSpace.route(start, stop.position, width, height, petSize, clearance, environment) }
-                    if (path.isEmpty()) continue
-                    val target = stop.position
-                    facingLeft = target.x < start.x
-                    walking = true
-                    posture = PetPosture.STANDING
+        // 翻周：滑出淡出 → 等新周环境 → 从分界线/屏幕外走入；入场段只穿越保护带，落点必须空闲。
+        LaunchedEffect(pageTurning, environment, width, height) {
+            if (pageTurning) {
+                if (presence == PetPresence.AWAY) return@LaunchedEffect
+                presence = PetPresence.EXITING
+                bubble = null
+                val from = animOffset ?: currentPosition()
+                val toEdge = if (from.x + petSize / 2 < width / 2) Offset(-petSize, from.y) else Offset(width, from.y)
+                facingLeft = toEdge.x < from.x
+                walking = true
+                Animatable(0f).animateTo(1f, tween(220, easing = LinearEasing)) {
+                    if (presence == PetPresence.EXITING && !dragging) {
+                        animOffset = from + (toEdge - from) * value
+                        animAlpha = 1f - value
+                    }
+                }
+                walking = false
+                if (presence != PetPresence.EXITING) return@LaunchedEffect
+                animOffset = toEdge; animAlpha = 0f; presence = PetPresence.AWAY
+            } else {
+                if (presence == PetPresence.VISIBLE) return@LaunchedEffect
+                presence = PetPresence.ENTERING
+                bubble = null
+                val stop = withContext(Dispatchers.Default) { PetSpace.choose(width, height, petSize, clearance, environment) }
+                val target = stop.position
+                fun landing(left: Boolean): Offset? {
+                    val x = if (left) environment.sectionWidth else maxX
+                    return (0..18).map { maxY * it / 18 }.sortedBy { abs(it - target.y) }
+                        .firstNotNullOfOrNull { y -> Offset(x, y).takeIf { PetSpace.free(it, width, height, petSize, clearance, environment) } }
+                }
+                var left = target.x + petSize / 2 < width / 2
+                var land = landing(left)
+                if (land == null) { left = !left; land = landing(left) }
+                if (land == null) {
+                    move(target); posture = stop.posture; placed = true; manuallyPlaced = false
+                    animOffset = null; animAlpha = 1f; presence = PetPresence.VISIBLE
+                    return@LaunchedEffect
+                }
+                val origin = if (left) Offset(environment.sectionWidth - petSize, land.y) else Offset(width, land.y)
+                val entryFrom = animOffset ?: origin
+                animOffset = entryFrom; animAlpha = 1f
+                facingLeft = land.x < entryFrom.x
+                walking = true
+                Animatable(0f).animateTo(1f, tween(240, easing = LinearEasing)) {
+                    if (presence == PetPresence.ENTERING && !dragging) animOffset = entryFrom + (land - entryFrom) * value
+                }
+                var reached = land
+                if (presence == PetPresence.ENTERING && !dragging) {
+                    val path = withContext(Dispatchers.Default) { PetSpace.route(land, target, width, height, petSize, clearance, environment) }
                     for (point in path) {
-                        val from = currentPosition()
+                        val from = animOffset ?: currentPosition()
                         val duration = ((point - from).getDistance() / petSize * 1000).toInt().coerceIn(100, 2200)
                         facingLeft = point.x < from.x
                         Animatable(0f).animateTo(1f, tween(duration, easing = LinearEasing)) {
-                            move(from + (point - from) * value)
+                            if (presence == PetPresence.ENTERING && !dragging) animOffset = from + (point - from) * value
                         }
+                        if (presence != PetPresence.ENTERING || dragging) break
+                        reached = point
                     }
-                    walking = false
-                    move(target); posture = stop.posture; manuallyPlaced = false
+                }
+                if (presence == PetPresence.ENTERING && !dragging) {
+                    move(reached)
+                    posture = if (reached == target) stop.posture else PetPosture.STANDING
+                    placed = true; manuallyPlaced = false
+                }
+                walking = false; animOffset = null; animAlpha = 1f; presence = PetPresence.VISIBLE
+            }
+        }
+        LaunchedEffect(width, height, environment, dragging) {
+            walking = false
+            if (dragging) return@LaunchedEffect
+            try {
+                while (isActive) {
+                    delay(Random.nextLong(6000, 14001))
+                    if (currentBubble != null || currentPresence != PetPresence.VISIBLE || SystemClock.elapsedRealtime() < currentQuietUntil) continue
+                    val here = currentPosition()
+                    // 约 1/3 概率原地微动作：换姿态或转向，不位移
+                    if (Random.nextInt(3) == 0) {
+                        val options = buildList {
+                            add(PetPosture.STANDING)
+                            if (PetSpace.free(here, width, height, petSize, clearance, environment, PetPosture.PERCH)) add(PetPosture.PERCH)
+                            if (here.x <= 0.5f && PetSpace.free(here, width, height, petSize, clearance, environment, PetPosture.LEAN_LEFT)) add(PetPosture.LEAN_LEFT)
+                            if (here.x >= maxX - 0.5f && PetSpace.free(here, width, height, petSize, clearance, environment, PetPosture.LEAN_RIGHT)) add(PetPosture.LEAN_RIGHT)
+                        }
+                        posture = options.random()
+                        if (Random.nextBoolean()) facingLeft = !facingLeft
+                        continue
+                    }
+                    var walked = false
+                    for (attempt in 0..1) {
+                        if (walked) break
+                        val start = currentPosition()
+                        val stop = withContext(Dispatchers.Default) { PetSpace.choose(width, height, petSize, clearance, environment) }
+                        val path = withContext(Dispatchers.Default) { PetSpace.route(start, stop.position, width, height, petSize, clearance, environment) }
+                        if (path.isEmpty()) continue
+                        facingLeft = stop.position.x < start.x
+                        walking = true
+                        posture = PetPosture.STANDING
+                        var reached = start
+                        for (point in path) {
+                            if (currentPresence != PetPresence.VISIBLE) break
+                            val from = currentPosition()
+                            val duration = ((point - from).getDistance() / petSize * 1000).toInt().coerceIn(100, 2200)
+                            facingLeft = point.x < from.x
+                            Animatable(0f).animateTo(1f, tween(duration, easing = LinearEasing)) {
+                                if (currentPresence == PetPresence.VISIBLE) move(from + (point - from) * value)
+                            }
+                            reached = point
+                        }
+                        walking = false
+                        if (currentPresence == PetPresence.VISIBLE) {
+                            move(reached)
+                            posture = if (reached == stop.position) stop.posture else PetPosture.STANDING
+                            manuallyPlaced = false
+                        }
+                        walked = true
+                    }
                 }
             } finally { walking = false }
         }
         val resting = !dragging && !walking && posture != PetPosture.STANDING && poses != null
         val bodyHeight = if (resting && posture == PetPosture.PERCH) petSize * 0.7f else petSize
         val row = when { dragging -> 4; walking -> if (facingLeft) 2 else 1; bubble != null -> 3; else -> 0 }
+        val renderPosition = animOffset ?: currentPosition()
         val petModifier = Modifier
-            .offset { val p = currentPosition(); IntOffset(p.x.roundToInt(), (p.y + petSize - bodyHeight).roundToInt()) }
+            .offset { IntOffset(renderPosition.x.roundToInt(), (renderPosition.y + petSize - bodyHeight).roundToInt()) }
             .size(with(density) { petSize.toDp() }, with(density) { bodyHeight.toDp() })
+            .alpha(animAlpha)
             .testTag("schedule-pet")
             .semantics { contentDescription = "课表小宠物大肥鱼，点击说话，拖动移动" }
             .pointerInput(width, height, environment) {
                 detectDragGestures(
-                    onDragStart = { dragging = true; bubble = null; posture = PetPosture.STANDING },
+                    onDragStart = {
+                        // 动画中途被抓住：立即落位接管，状态机协程随后自行收尾
+                        if (presence != PetPresence.VISIBLE) {
+                            animOffset?.let { move(it) }
+                            animOffset = null; animAlpha = 1f; presence = PetPresence.VISIBLE
+                        }
+                        dragging = true; bubble = null; posture = PetPosture.STANDING
+                    },
                     onDragEnd = {
                         dragging = false; manuallyPlaced = true; quietUntil = SystemClock.elapsedRealtime() + 10000
                         val stop = PetSpace.destinations(width, height, petSize, clearance, environment)

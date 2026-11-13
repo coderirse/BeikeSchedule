@@ -81,4 +81,11 @@ data class PetAiState(
 /** 权限变更后新会话不继承旧上下文；旧记录只保留在本机历史中。 */
 fun PetAiState.withGrants(value: Set<LearningScope>) = copy(grants = value, conversation = UUID.randomUUID().toString())
 
+/** 主动热点是否可用：CUSTOM 官方搜索是无效组合；独立搜索需要单独的 Key。 */
+fun hotspotAvailable(state: PetAiState): Boolean = state.configured && when (state.searchMode) {
+    SearchMode.OFF -> false
+    SearchMode.PROVIDER -> state.provider?.vendor != AiVendor.CUSTOM
+    SearchMode.DEEPSEEK -> state.searchKey.isNotBlank()
+}
+
 class PetAiException(message: String, val httpCode: Int? = null) : Exception(message)

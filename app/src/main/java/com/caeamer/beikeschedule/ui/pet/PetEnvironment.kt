@@ -91,6 +91,9 @@ internal object PetSpace {
     }
     fun choose(width: Float, height: Float, size: Float, clearance: Float, env: PetEnvironment, random: Random = Random.Default): PetStop {
         val all = destinations(width, height, size, clearance, env)
+        if (all.isEmpty()) return PetStop(safePetPosition(Offset(env.sectionWidth, height - size), width, height, size, clearance), PetPosture.PERCH)
+        // 约 1/3 概率全图随机落点，避免总贴着今日课程小范围活动
+        if (random.nextInt(3) == 0) return all.random(random)
         val rest = all.filter { it.posture != PetPosture.STANDING }
         val courseStops = rest.filter { stop -> env.cards.any { it.perchable && abs(stop.position.y + size - it.rect.top) < 1f } }
         val pool = when {
@@ -98,7 +101,6 @@ internal object PetSpace {
             rest.isNotEmpty() && random.nextInt(3) == 0 -> rest
             else -> all
         }
-        if (pool.isEmpty()) return PetStop(safePetPosition(Offset(env.sectionWidth, height - size), width, height, size, clearance), PetPosture.PERCH)
         val today = env.cards.filter { it.weight >= 8 }.map { it.rect.center }
         val ranked = pool.sortedBy { stop ->
             today.sumOf { (1f / ((stop.position - it).getDistance() / size + 1f)).toDouble() }

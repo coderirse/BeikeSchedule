@@ -63,12 +63,16 @@ class PetSpaceTest {
             assertEquals(0f, PetSpace.score(PetSpace.body(it, 64f), e))
         }
     }
-    @Test fun `ordinary automatic stops prefer distance from todays course`() {
+    @Test fun `automatic stops roam widely but mostly keep clear of todays course`() {
         val e = PetEnvironment(listOf(PetObstacle(Rect(100f, 100f, 200f, 300f), 14f)), 50f, 30f)
-        repeat(20) {
+        var far = 0
+        repeat(100) {
             val stop = PetSpace.choose(700f, 700f, 64f, 80f, e, Random(it))
-            assertTrue(stop.position.x > 350f || stop.position.y > 400f)
+            assertTrue(PetSpace.free(stop.position, 700f, 700f, 64f, 80f, e, stop.posture))
+            if (stop.position.x > 350f || stop.position.y > 400f) far++
         }
+        // 约 1/3 全图随机扩大活动范围，其余仍优先远离今日课程
+        assertTrue(far >= 70)
     }
     @Test fun `route travels around obstacle rather than through it`() {
         val e = PetEnvironment(listOf(PetObstacle(Rect(250f, 100f, 350f, 400f), 8f)))

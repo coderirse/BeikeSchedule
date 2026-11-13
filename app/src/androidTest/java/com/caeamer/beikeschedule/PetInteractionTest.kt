@@ -92,4 +92,31 @@ class PetInteractionTest {
         org.junit.Assert.assertEquals(before.left, after.left, 1f)
         org.junit.Assert.assertEquals(before.top, after.top, 1f)
     }
+    @Test fun weekFlipAnimatesPetBackIntoContent() {
+        awaitPet()
+        if (compose.onAllNodesWithText("载入示例课表").fetchSemanticsNodes().isNotEmpty()) {
+            compose.onNodeWithText("载入示例课表").performClick()
+        }
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("schedule-weeks").fetchSemanticsNodes().isNotEmpty() }
+        val header = compose.onNodeWithContentDescription("选择周次").fetchSemanticsNode()
+            .config[androidx.compose.ui.semantics.SemanticsProperties.Text].joinToString { it.text }
+        val week = Regex("第(\\d+)周").find(header)!!.groupValues[1].toInt()
+        compose.onNodeWithTag("schedule-weeks").performTouchInput { if (week == 1) swipeLeft() else swipeRight() }
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        // 入场动画结束后宠物必须完整回到屏幕内，不能停在屏幕外或分界线外
+        compose.waitUntil(15_000) {
+            val nodes = compose.onAllNodesWithTag("schedule-pet").fetchSemanticsNodes()
+            nodes.isNotEmpty() && nodes[0].boundsInRoot.let {
+                it.left >= 0f && it.top >= 0f && it.right <= root.right && it.bottom <= root.bottom
+            }
+        }
+    }
+    @Test fun petMovesOnItsOwnWithoutInteraction() {
+        awaitPet()
+        val before = compose.onNodeWithTag("schedule-pet").fetchSemanticsNode().boundsInRoot
+        compose.waitUntil(45_000) {
+            val now = compose.onAllNodesWithTag("schedule-pet").fetchSemanticsNodes().firstOrNull()?.boundsInRoot
+            now != null && (now.left != before.left || now.top != before.top)
+        }
+    }
 }

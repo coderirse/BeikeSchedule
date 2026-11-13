@@ -438,7 +438,8 @@ fun ScheduleScreen(
             }
         }
         SchedulePetHost(
-            paused = showPetChat || showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null || pagerState.isScrollInProgress,
+            paused = showPetChat || showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null,
+            pageTurning = pagerState.isScrollInProgress,
             interactionEpoch = petInteractionEpoch,
             environment = petEnvironment,
             suppressWelcome = showPetChat || showEditDialog || detailCourse != null || weekMenuExpanded || showUnscheduledSheet || pendingSlot != null,

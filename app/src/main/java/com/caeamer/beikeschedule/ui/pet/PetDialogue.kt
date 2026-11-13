@@ -76,7 +76,7 @@ data class PetDialogueRequest(val address: String, val recentIds: Set<String>)
 fun interface PetDialogueProvider { suspend fun next(request: PetDialogueRequest): PetMessage }
 
 object PetWelcomeLines {
-    fun message(address: String, visit: PetViewModel.Welcome, hour: Int): PetMessage {
+    fun message(address: String, visit: PetViewModel.Welcome, hour: Int, recentIds: Set<String> = emptySet()): PetMessage {
         val pool = when {
             visit.firstVisit -> listOf("初次站岗！我是你的课表小搭子，点点我就能说话，拖一拖还能换位置哦～")
             visit.absenceMillis >= 86_400_000 -> listOf(
@@ -90,9 +90,47 @@ object PetWelcomeLines {
             hour in 14..18 -> listOf("下午好呀！给今天的后半场加点糖～", "我在课表边上坐好啦，陪你一点点往前走～", "欢迎回来！今天的小进步也值得一朵小红花～")
             else -> listOf("回来啦～忙了一天，也给自己留一点休息时间哦。", "晚间陪伴模式启动！我会轻轻地给你加油～", "夜色温柔，今天的努力也很闪亮呀～")
         }
+        val indices = pool.indices.filter { "welcome-line:$it" !in recentIds }.ifEmpty { pool.indices.toList() }
+        val index = indices.random()
         val prefix = address.takeIf(String::isNotBlank)?.let { "$it，" }.orEmpty()
-        return PetMessage("welcome:${visit.id}", prefix + pool.random())
+        return PetMessage("welcome-line:$index", prefix + pool[index])
     }
+}
+
+/** 主动气泡主题轮换：不连续重复同一主题；无授权数据/联网/记忆时对应主题不参选。 */
+fun proactiveTopic(last: String?, searchEnabled: Boolean, hasLearning: Boolean, hasMemories: Boolean, random: Random = Random.Default): String {
+    val weights = buildList {
+        if (hasLearning) { add("arrangement" to 3); add("study" to 2) }
+        if (searchEnabled) add("hotspot" to 2)
+        add("casual" to if (hasLearning) 3 else 8)
+        if (hasMemories) add("memory" to 1)
+    }.filter { it.first != last }
+    var roll = random.nextInt(weights.sumOf { it.second })
+    for ((topic, weight) in weights) { roll -= weight; if (roll < 0) return topic }
+    return weights.last().first
+}
+
+fun hotspotPrompt(address: String): String =
+    "请调用搜索工具获取一条公开热点，再用一两句话讲给${address}听。必须基于工具返回的来源，不能编造；搜索失败就坦白说这次没查到，转一句轻松闲聊。"
+
+fun proactivePrompt(topic: String, address: String): String = when (topic) {
+    "arrangement" -> "从已授权的近期安排里挑一项，结合今天或明天的实际情况对${address}自然说一句，不要罗列整张课表。"
+    "study" -> "结合已授权的学习数据，给${address}一条具体可行的小建议，简短、不说教。"
+    "hotspot" -> hotspotPrompt(address)
+    "memory" -> "自然提起一条用户的长期记忆，和${address}聊一句相关的；不要逐字暴露记忆清单。"
+    else -> "对${address}轻松搭一句话，可以结合人格和长期记忆，不要重复口号。"
+}
+
+/** 去标点空白后按字符 bigram Jaccard ≥ 0.6 判相似，给主动气泡做生成后兜底。 */
+fun tooSimilar(a: String, b: String): Boolean {
+    fun grams(text: String): Set<String> {
+        val clean = text.filter { it.isLetterOrDigit() }
+        return if (clean.length < 2) emptySet() else (0 until clean.length - 1).map { clean.substring(it, it + 2) }.toSet()
+    }
+    val x = grams(a); val y = grams(b)
+    if (x.isEmpty() || y.isEmpty()) return false
+    val inter = x.count { it in y }.toFloat()
+    return inter / (x.size + y.size - inter) >= 0.6f
 }
 
 class LocalPetDialogueProvider(private val random: Random = Random.Default) : PetDialogueProvider {
