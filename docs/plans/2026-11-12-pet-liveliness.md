@@ -54,6 +54,16 @@
 - 模拟器回归不能代替真机；入场动画的视觉节奏（220/240ms）建议用户手机实测后按需微调。
 - 未改：服务端、更新声明、数据库、核心设置/云快照、提醒调度、宠物素材、加密存储格式；未新增设置项。
 
-## 5. 后续
+## 5. 发布交付（2026-11-13，用户授权）
 
-等用户指令再合并/推送/发版。发版时按 AGENTS §6 走完整流程并递增版本。
+- 快进合入 main 并推送；发布提交 `ceafe0a`（v2.1.2 / versionCode 69），tag `v2.1.2`。
+- 发布重跑：490 项 JVM、15 项 JS、Lint 0 errors / 46 warnings、正式签名 assembleRelease 通过；aapt2 核对包名/版本，apksigner 证书延续 v2.1.1（SHA-256 `53acb30e…`）。
+- APK 8,336,361 字节，SHA-256 `3443515d9be331c0807926310c55e9ad7ae26ce5698ccfaec4e77771345e8aeb`；更新声明 596 字节，App 内公钥验签通过。
+- GitHub Release：https://github.com/coderirse/BeikeSchedule/releases/tag/v2.1.2 （同一份 APK）。
+- 服务器：APK 与声明经 Workbench 上传，服务器端 SHA-256 与本地一致；旧声明备份 `/opt/beike/bs-app-version.v2.1.1.bak.json`；beike 重启后 active、/health db:true。
+- 公网：`/api/bs/app/latest`（okhttp UA）与本地声明逐字段一致；公网 APK 完整下载大小与 SHA-256 一致。
+- 未验证：真实供应商 Key、真实搜索接口与用户手机实测。
+
+## 6. 后续
+
+发版已完成。后续改动按 AGENTS §6 走完整流程并递增版本。

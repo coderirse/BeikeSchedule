@@ -149,8 +149,9 @@ python tools/sign_update.py --key keystore/update_signing_private.pem --version-
 
 ## 7. 当前接手快照（2026-11-12）
 
-- 主干基线：`v2.1.1` / `versionCode 68`（2026-11-11 小修批次直接从 main 发布）。此前 `v2.1.0` / 67 于同日将 `codex/pet-llm-integration` 合入 main（合并提交 `af26115`）；更早主干为 `v2.0.2` / 66。实际线上版本仍以更新声明和 Release 为准。
-- `codex/pet-liveliness`（2026-11-12，自 v2.1.1 建）：宠物活力三项优化——主动话语主题轮换+禁说清单+相似度兜底+欢迎去重；热点专用计时触发（hotspotAvailable，首播 90–180s，之后 hotspotMinutes）与 AI 气泡 25s 超时；走动循环不再被气泡/触摸重启（6–14s + 原地微动作 + 1/3 随机漫游），翻周改 PetPresence 进出动画（paused 与 pageTurning 拆分）。本地 490 项 JVM、15 项 JS、9 类共 39 项模拟器交互通过；未合并/推送/发版，等用户指令。设计与实施记录见 `docs/plans/2026-11-12-pet-liveliness-design.md`、`docs/plans/2026-11-12-pet-liveliness.md`。
+- 主干基线：`v2.1.2` / `versionCode 69`（2026-11-13 宠物活力优化从 main 发布，发布提交 `ceafe0a`）。此前 `v2.1.1` / 68（2026-11-11 小修批次）、`v2.1.0` / 67（合并提交 `af26115`）；更早主干为 `v2.0.2` / 66。实际线上版本仍以更新声明和 Release 为准。
+- `codex/pet-liveliness`（2026-11-12，自 v2.1.1 建）：宠物活力三项优化——主动话语主题轮换+禁说清单+相似度兜底+欢迎去重；热点专用计时触发（hotspotAvailable，首播 90–180s，之后 hotspotMinutes）与 AI 气泡 25s 超时；走动循环不再被气泡/触摸重启（6–14s + 原地微动作 + 1/3 随机漫游），翻周改 PetPresence 进出动画（paused 与 pageTurning 拆分）。已快进合入 main 并随 v2.1.2 发布；分支保留。设计与实施记录见 `docs/plans/2026-11-12-pet-liveliness-design.md`、`docs/plans/2026-11-12-pet-liveliness.md`。
+- v2.1.2 发布验证：490 项 JVM、15 项 JS、9 类共 39 项模拟器交互、Lint 0 errors / 46 warnings、debug 与正式签名 release/R8 构建通过；证书延续 v2.1.1（SHA-256 `53acb30e…`），更新声明已用 App 内公钥验签；公网声明逐字段一致、公网 APK 完整下载 SHA-256 一致（`3443515d…`）。真实供应商 Key 与用户手机实测仍未完成。
 - `codex/pet-ai-polish` 小修批次（气泡句末截断、记忆显式意图、多主题热点缓存、历史总量预算、工具超限错误类型）已快进合入 main 并随 v2.1.1 发布；发布分支 `codex/pet-llm-integration` 保留。宠物原有交互设计见 `docs/plans/2026-11-10-pet-surfaces-design.md`。
 - 2026-11-11 小修批次验证：484 项 JVM、15 项 JS、9 类共 37 项模拟器交互通过，Lint 0 errors / 46 warnings，debug 与 release R8 构建通过；随后经用户授权推送并发布。真实供应商 Key 与用户手机实测仍未完成。
 - v2.1.1 发布重跑 484 项 JVM、15 项 JS、Lint 和正式签名 release 构建通过；证书延续 v2.1.0（SHA-256 `53acb30e…`），更新声明已用 App 内公钥验签。CI、GitHub 附件与公网下载校验以本次交付记录为准。
