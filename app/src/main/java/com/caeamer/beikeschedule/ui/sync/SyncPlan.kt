@@ -63,6 +63,10 @@ internal object SyncPlanner {
     fun head(scope: SyncScope): List<SyncStep> =
         if (scope != SyncScope.ALL) listOf(SyncStep.IDENTITY) else head
 
+    /** 学号尚未校验，或切换失败后仍关联另一个账号时，不允许完整同步写本机。 */
+    fun canImportForAccount(schoolId: String?, cloudId: String): Boolean =
+        !schoolId.isNullOrBlank() && (cloudId.isBlank() || cloudId == schoolId)
+
     fun steps(mode: CloudMode, scope: SyncScope = SyncScope.ALL): List<SyncStep> = head(scope) + tail(mode, scope)
 
     /**

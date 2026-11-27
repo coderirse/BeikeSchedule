@@ -74,6 +74,19 @@ class PetSpaceTest {
         // 约 1/3 全图随机扩大活动范围，其余仍优先远离今日课程
         assertTrue(far >= 70)
     }
+    @Test fun `blocked preferred side starts the entry on the side of the safe landing`() {
+        val width = 500f
+        val height = 600f
+        val size = 64f
+        val obstacle = PetObstacle(Rect(48f, 0f, 140f, height), weight = 8f)
+        val environment = PetEnvironment(listOf(obstacle), sectionWidth = 48f)
+        val entry = requireNotNull(PetSpace.entry(Offset(160f, 250f), width, height, size, 80f, environment))
+
+        assertEquals(width - size, entry.landing.x)
+        assertEquals(Offset(width, entry.landing.y), entry.origin)
+        assertTrue(PetSpace.free(entry.landing, width, height, size, 80f, environment))
+    }
+
     @Test fun `route travels around obstacle rather than through it`() {
         val e = PetEnvironment(listOf(PetObstacle(Rect(250f, 100f, 350f, 400f), 8f)))
         var from = Offset(100f, 200f)

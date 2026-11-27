@@ -2,6 +2,7 @@ package com.caeamer.beikeschedule.data.pref
 
 import android.content.Context
 import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
@@ -18,7 +19,7 @@ import kotlinx.coroutines.flow.map
  * 默认实现会抛 CorruptionException 进入 collectAsState/stateIn 的收集协程 → 每次启动都崩且无法自愈，
  * 用户只能清应用数据。兜底重置为默认配置：成绩库与课表库是独立的 Room 数据库，不受影响。
  */
-private val Context.dataStore by preferencesDataStore(
+internal val Context.dataStore by preferencesDataStore(
     name = "settings",
     corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
 )
@@ -109,6 +110,8 @@ class SettingsStore(private val context: Context) {
         val CLOUD_TOKEN = stringPreferencesKey("cloud_token")
         val CLOUD_ENABLED = booleanPreferencesKey("cloud_sync_enabled")
         val CLOUD_DIRTY = booleanPreferencesKey("cloud_dirty")
+        val CLOUD_CHANGE_GENERATION = longPreferencesKey("cloud_change_generation")
+        val CLOUD_AUTO_BACKUP_PAUSED = booleanPreferencesKey("cloud_auto_backup_paused")
         val CLOUD_LAST_BACKUP_AT = longPreferencesKey("cloud_last_backup_at")
     }
 
@@ -126,7 +129,6 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun saveSemester(config: SemesterConfig) {
-        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.XN] = config.xn
             p[Keys.XQ] = config.xq
@@ -137,6 +139,7 @@ class SettingsStore(private val context: Context) {
             p[Keys.HOLIDAYS] = config.holidays.joinToString(",")
             p[Keys.MAKEUPS] = config.makeups.joinToString(",")
         }
+        noteCloudDirty()
     }
 
     val reminderEnabled: Flow<Boolean> =
@@ -146,11 +149,11 @@ class SettingsStore(private val context: Context) {
         context.dataStore.data.map { it[Keys.REMINDER_MINUTES] ?: 15 }
 
     suspend fun setReminder(enabled: Boolean, minutesBefore: Int) {
-        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.REMINDER_ENABLED] = enabled
             p[Keys.REMINDER_MINUTES] = minutesBefore
         }
+        noteCloudDirty()
     }
 
     /** 已排课程提醒闹钟（requestCode + 触发时刻），用于精确取消与"已到点不动它"的判定。 */
@@ -182,11 +185,11 @@ class SettingsStore(private val context: Context) {
     val bxkqkJson: Flow<String> = context.dataStore.data.map { p -> p[Keys.BXKQK_JSON] ?: "" }
 
     suspend fun saveCreditMeta(xflbyqJson: String, bxkqkJson: String) {
-        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.XFLBYQ_JSON] = xflbyqJson
             p[Keys.BXKQK_JSON] = bxkqkJson
         }
+        noteCloudDirty()
     }
 
     val themeMode: Flow<ThemeMode> = context.dataStore.data.map { p ->
@@ -194,8 +197,8 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun setThemeMode(mode: ThemeMode) {
-        noteCloudDirty()
         context.dataStore.edit { p -> p[Keys.THEME_MODE] = mode.name }
+        noteCloudDirty()
     }
 
     /** GPA 概览缓存（getgpa 原始 JSON）与成绩刷新时间（epoch 毫秒，0=从未抓取）。 */
@@ -207,12 +210,11 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun saveExamsFetchedAt(fetchedAt: Long) {
-        noteCloudDirty()
         context.dataStore.edit { p -> p[Keys.EXAMS_FETCHED_AT] = fetchedAt }
+        noteCloudDirty()
     }
 
     suspend fun saveGradesMeta(gpaJson: String, fetchedAt: Long) {
-        noteCloudDirty()
         context.dataStore.edit { p ->
             // 首次写入新版成绩时固定旧考试时间，避免此后成绩刷新失败/成功改变考试更新时间。
             if (p[Keys.EXAMS_FETCHED_AT] == null) {
@@ -221,6 +223,7 @@ class SettingsStore(private val context: Context) {
             p[Keys.GPA_CACHE] = gpaJson
             p[Keys.GRADES_FETCHED_AT] = fetchedAt
         }
+        noteCloudDirty()
     }
 
     /** 学籍快照缓存（教务 Tab 抓成绩时顺手抓的 user/me 关键字段）。 */
@@ -238,7 +241,6 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun saveStudentProfile(profile: StudentProfile) {
-        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.SP_XM] = profile.xm
             p[Keys.SP_XH] = profile.xh
@@ -249,6 +251,7 @@ class SettingsStore(private val context: Context) {
             p[Keys.SP_XJSFZX] = profile.xjsfzx
             p[Keys.SP_XJSFZC] = profile.xjsfzc
         }
+        noteCloudDirty()
     }
 
     /** 加权成绩用户自定义：学期筛选（空=全部学期）与手动排除的课程 kcdm 集合。 */
@@ -261,19 +264,19 @@ class SettingsStore(private val context: Context) {
         }
 
     suspend fun saveWeightedFilter(semester: String, excluded: Set<String>) {
-        noteCloudDirty()
         context.dataStore.edit { p ->
             p[Keys.WEIGHT_SEMESTER] = semester
             p[Keys.WEIGHT_EXCLUDED] = excluded.joinToString(",")
         }
+        noteCloudDirty()
     }
 
     /** 课表是否隐藏周六周日列（周末无课时收窄网格）。 */
     val hideWeekend: Flow<Boolean> = context.dataStore.data.map { it[Keys.HIDE_WEEKEND] ?: false }
 
     suspend fun setHideWeekend(hidden: Boolean) {
-        noteCloudDirty()
         context.dataStore.edit { p -> p[Keys.HIDE_WEEKEND] = hidden }
+        noteCloudDirty()
     }
 
     /**
@@ -285,8 +288,8 @@ class SettingsStore(private val context: Context) {
         context.dataStore.data.map { it[Keys.HIDE_INACTIVE_COURSES] ?: false }
 
     suspend fun setHideInactiveCourses(hidden: Boolean) {
-        noteCloudDirty()
         context.dataStore.edit { p -> p[Keys.HIDE_INACTIVE_COURSES] = hidden }
+        noteCloudDirty()
     }
 
     // —— 无课教室 ——
@@ -337,6 +340,9 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { p ->
             if (p[Keys.CLOUD_XH] != account.xh) {
                 p[Keys.CLOUD_LAST_BACKUP_AT] = 0L
+                p[Keys.CLOUD_DIRTY] = false
+                p[Keys.CLOUD_AUTO_BACKUP_PAUSED] = true
+                p[Keys.CLOUD_CHANGE_GENERATION] = (p[Keys.CLOUD_CHANGE_GENERATION] ?: 0L) + 1
             }
             p[Keys.CLOUD_XH] = account.xh
             p[Keys.CLOUD_NAME] = account.name
@@ -360,31 +366,67 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { it[Keys.CLOUD_ENABLED] = enabled }
     }
 
-    /** 本机数据相对云端是否有未上传的改动（进程被杀后下次启动仍可补传）。 */
-    val cloudDirty: Flow<Boolean> =
-        context.dataStore.data.map { it[Keys.CLOUD_DIRTY] ?: false }
-
-    suspend fun markCloudDirty() {
-        context.dataStore.edit { it[Keys.CLOUD_DIRTY] = true }
+    internal data class CloudBackupState(
+        val accountId: String,
+        val enabled: Boolean,
+        val paused: Boolean,
+        val dirty: Boolean,
+        val generation: Long,
+    ) {
+        val automaticAllowed: Boolean get() = enabled && !paused
     }
 
-    suspend fun clearCloudDirty() {
-        context.dataStore.edit { it[Keys.CLOUD_DIRTY] = false }
+    private fun Preferences.backupState() = CloudBackupState(
+        accountId = this[Keys.CLOUD_XH].orEmpty(),
+        enabled = this[Keys.CLOUD_ENABLED] ?: false,
+        paused = this[Keys.CLOUD_AUTO_BACKUP_PAUSED] ?: false,
+        dirty = this[Keys.CLOUD_DIRTY] ?: false,
+        generation = this[Keys.CLOUD_CHANGE_GENERATION] ?: 0L,
+    )
+
+    internal val cloudBackupState = context.dataStore.data.map { it.backupState() }
+
+    val cloudAutoBackupPaused: Flow<Boolean> = cloudBackupState.map { it.paused }
+
+    /** 账号未确认备份方向时，暂停进程重启补传和自动上传。 */
+    internal suspend fun pauseCloudAutoBackup() {
+        context.dataStore.edit { it[Keys.CLOUD_AUTO_BACKUP_PAUSED] = true }
+    }
+
+    internal suspend fun markCloudDirty(): Boolean {
+        return context.dataStore.edit { p ->
+            if (!p.backupState().automaticAllowed) return@edit
+            p[Keys.CLOUD_DIRTY] = true
+            p[Keys.CLOUD_CHANGE_GENERATION] = (p[Keys.CLOUD_CHANGE_GENERATION] ?: 0L) + 1
+        }.backupState().let { it.automaticAllowed && it.accountId.isNotBlank() }
     }
 
     val cloudLastBackupAt: Flow<Long> =
         context.dataStore.data.map { it[Keys.CLOUD_LAST_BACKUP_AT] ?: 0L }
 
-    suspend fun setCloudLastBackupAt(at: Long) {
-        context.dataStore.edit { it[Keys.CLOUD_LAST_BACKUP_AT] = at }
-    }
+    /**
+     * 一次事务确认上传或恢复。上传期间写入的新一代本机数据继续保留脏标记。
+     * 恢复替换了本机数据，直接确认当前代。
+     */
+    internal suspend fun confirmCloudBackup(
+        accountId: String,
+        generation: Long?,
+        revision: Long,
+        resumeAutomatic: Boolean,
+    ): CloudBackupState = context.dataStore.edit { p ->
+        val current = p.backupState()
+        if (current.accountId != accountId) return@edit
+        if (generation == null || current.generation == generation) p[Keys.CLOUD_DIRTY] = false
+        p[Keys.CLOUD_LAST_BACKUP_AT] = revision
+        if (resumeAutomatic) p[Keys.CLOUD_AUTO_BACKUP_PAUSED] = false
+    }.backupState()
 
     /**
      * 进快照的内容型配置变更时打云同步脏标记（见 data/backup/CloudSync）。
      * 独立小函数而非直接调 CloudSync.markDirty：便于这里只依赖"通知"语义，
      * 也避免将来 DataStore 自身的云簿记键（脏标记/上次备份时间）误触发上传。
      */
-    private fun noteCloudDirty() = CloudSync.markDirty(context)
+    private suspend fun noteCloudDirty() = CloudSync.markDirty(context)
 
     private companion object {
         fun String?.toCommaList(): List<String> =

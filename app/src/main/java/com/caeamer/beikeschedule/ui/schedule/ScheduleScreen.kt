@@ -170,6 +170,7 @@ fun ScheduleScreen(
     // "下一节课"图钉：每分钟重算一次，跨过上课点后自动前移（无需重进页面）。
     // 只在 RESUMED 走时钟，且唤醒点对齐整分钟（见 rememberNow 注释）。
     val now = rememberNow()
+    LaunchedEffect(now.toLocalDate()) { viewModel.refreshToday() }
 
     val totalWeeks = state.semester.totalWeeks
     // 「隐藏周末」开启时，若所选教学周里有周末补课日（如 10/10 周六补周三的课），

@@ -66,14 +66,26 @@ class PetAiEngine(
             buildJsonObject { put("text", buildJsonObject { put("type", "string"); put("maxLength", 300) }) }, listOf("text")))
     }
 
-    suspend fun answer(question: String, proactive: Boolean = false, onText: (String) -> Unit = {}, onStatus: (String) -> Unit = {}): AiAnswer = gate.withLock {
+    suspend fun answer(
+        question: String,
+        proactive: Boolean = false,
+        conversation: String? = null,
+        onText: (String) -> Unit = {},
+        onStatus: (String) -> Unit = {},
+    ): AiAnswer = gate.withLock {
         withTimeout(150_000) {
             val state = store.state.value ?: throw PetAiException(store.error.value ?: "AI 设置正在加载")
             val provider = state.provider ?: throw PetAiException("请先在宠物设置中添加 API 供应商")
             if (!state.configured) throw PetAiException("请先填写 API Key 和模型名")
             if (state.searchMode == SearchMode.PROVIDER && provider.vendor == AiVendor.CUSTOM) throw PetAiException("自定义供应商请单独选择搜索来源，或关闭联网")
             val config = state.requestConfig()
-            fun guard() { if (store.state.value?.requestConfig() != config) throw CancellationException("AI 配置或授权已改变") }
+            fun guard() {
+                val current = store.state.value
+                if (current?.requestConfig() != config || (conversation != null && current?.conversation != conversation)) {
+                    throw CancellationException("会话、AI 配置或授权已改变")
+                }
+            }
+            guard()
             val cachedNative = proactive && state.searchMode == SearchMode.PROVIDER && provider.vendor == AiVendor.MIMO &&
                 cachedMiMo?.let { System.currentTimeMillis() - it.first in 0..state.hotspotMinutes * 60_000L } == true
             val system = """

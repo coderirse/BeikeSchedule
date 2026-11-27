@@ -267,24 +267,49 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
                 xm = ""
                 token = null
             }
-            // 两段式：先跑"身份 + 云账号"（后者包含云端探测与决策），再按**最终**方向取后续步骤。
-            // 重试同样分两段——首轮云账号失败时方向还没定，只有 head 跑完才知道该上传还是该恢复。
-            val head = if (retryOnlyFailed) SyncPlanner.retryHead(results, syncScope) else SyncPlanner.head(syncScope)
-            head.forEach { executeStep(it) }
-            val tail = if (retryOnlyFailed) SyncPlanner.retryTail(mode, results, syncScope) else SyncPlanner.tail(mode, syncScope)
-            tail.forEach { executeStep(it) }
-            if (mode == CloudMode.RESTORE) {
-                // 抓取按设计跳过：汇总里标出来，避免用户以为"这两步没跑"。
-                // 已成功的保持原样（那是上几轮真抓过的结果，改写成跳过等于篡改历史）。
-                listOf(SyncStep.TIMETABLE, SyncStep.GRADES)
-                    .filter { results[it]?.status != SyncStatus.OK }
-                    .forEach {
-                        results[it] = SyncStepResult(it, SyncStatus.SKIPPED, "已跳过（用云端数据）")
-                    }
+            try {
+                if (syncScope == SyncScope.ALL) {
+                    val refreshBackup = CloudSync.withoutDirtyMarking { runSteps(retryOnlyFailed) }
+                    if (refreshBackup) CloudSync.markDirty(getApplication())
+                } else {
+                    runSteps(retryOnlyFailed)
+                }
+                _state.value = UnifiedSyncUiState.Done(results.values.sortedBy { it.step.ordinal }, runNote)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _state.value = UnifiedSyncUiState.Failed("同步未完成，请检查本机设置存储后重试")
             }
-            // 按步骤固有顺序展示（RESTORE 模式下抓取两项被标记跳过，插在最后才自然）
-            _state.value = UnifiedSyncUiState.Done(results.values.sortedBy { it.step.ordinal }, runNote)
         }
+    }
+
+    private suspend fun runSteps(retryOnlyFailed: Boolean): Boolean {
+        val head = if (retryOnlyFailed) SyncPlanner.retryHead(results, syncScope) else SyncPlanner.head(syncScope)
+        head.forEach { executeStep(it) }
+        val accountSwitchCancelled = results[SyncStep.CLOUD_TOKEN]?.status == SyncStatus.SKIPPED
+        if (syncScope == SyncScope.ALL && (accountSwitchCancelled ||
+                !SyncPlanner.canImportForAccount(xh, settings.cloudBackupState.first().accountId))
+        ) {
+            runNote = "本次同步已停止，保留本机数据和原有云备份"
+            return false
+        }
+
+        val tail = if (retryOnlyFailed) SyncPlanner.retryTail(mode, results, syncScope) else SyncPlanner.tail(mode, syncScope)
+        val retryAfterBackup = mode == CloudMode.UPLOAD && results[SyncStep.BACKUP]?.status == SyncStatus.OK
+        val replacesLocalData = tail.any { it == SyncStep.TIMETABLE || it == SyncStep.GRADES || it == SyncStep.RESTORE }
+        if (syncScope == SyncScope.ALL && tail.isNotEmpty() && !retryAfterBackup &&
+            (mode == CloudMode.NO_UPLOAD || replacesLocalData)
+        ) {
+            // 整包内容即将变化。若取消、探测失败或选择暂不上传，重启后的补传也必须停住。
+            settings.pauseCloudAutoBackup()
+        }
+        tail.forEach { executeStep(it) }
+        if (mode == CloudMode.RESTORE && results[SyncStep.RESTORE]?.status == SyncStatus.OK) {
+            listOf(SyncStep.TIMETABLE, SyncStep.GRADES)
+                .filter { results[it]?.status != SyncStatus.OK }
+                .forEach { results[it] = SyncStepResult(it, SyncStatus.SKIPPED, "已跳过（用云端数据）") }
+        }
+        return retryAfterBackup && tail.any { results[it]?.status == SyncStatus.OK }
     }
 
     private suspend fun executeStep(step: SyncStep) {
@@ -340,12 +365,12 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
         val id = xh ?: return failed(SyncStep.CLOUD_TOKEN, "未取得学号，无法登录云账号")
 
         val account = settings.cloudAccount.first()
-        if (account.isLoggedIn && account.xh != id) {
+        if (account.xh.isNotBlank() && account.xh != id) {
             val title = "检测到不同学号"
             val text = "当前云账号是 ${account.xh}，这次登录的是 $id。" +
                 "继续将切换云账号，本机课表/成绩会被 $id 的数据替换；旧账号的云端备份不会被删除。"
             val confirmed = askSwitch(title, text)
-            if (!confirmed) return failed(SyncStep.CLOUD_TOKEN, "已取消切换云账号")
+            if (!confirmed) return SyncStepResult(SyncStep.CLOUD_TOKEN, SyncStatus.SKIPPED, "已取消切换云账号")
         }
 
         val login = try {
@@ -355,10 +380,8 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             return failed(SyncStep.CLOUD_TOKEN, e.message ?: "登录云账号失败")
         }
-        settings.saveCloudAccount(
-            SettingsStore.CloudAccount(xh = login.xh, name = login.name, token = login.token),
-        )
-        token = login.token
+
+        if (login.xh != id) return failed(SyncStep.CLOUD_TOKEN, "云账号与当前教务学号不一致")
 
         // 云端探测 + 方向决策
         val envelope = try {
@@ -376,7 +399,7 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
             localHasData = localHasData,
             knownBackupUnchanged = knownBackupUnchanged(
                 sameAccount = account.isLoggedIn && account.xh == id,
-                syncEnabled = settings.cloudSyncEnabled.first(),
+                syncEnabled = settings.cloudBackupState.first().automaticAllowed,
                 localRevision = settings.cloudLastBackupAt.first(),
                 remoteRevision = envelope?.updatedAt ?: 0L,
             ),
@@ -387,9 +410,17 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             initial
         }
-        if (mode == CloudMode.NO_UPLOAD && envelope == null) {
-            runNote = "云端状态未知（网络异常），本次未自动上传；可在「我的 → 云同步」手动备份"
+        if (mode == CloudMode.NO_UPLOAD) {
+            runNote = if (envelope == null) {
+                "云端状态未知，自动备份已暂缓；可重新同步或手动备份"
+            } else {
+                "仅导入本机，自动备份暂缓至重新确认或手动备份"
+            }
         }
+        settings.saveCloudAccount(
+            SettingsStore.CloudAccount(xh = login.xh, name = login.name, token = login.token),
+        )
+        token = login.token
         val tail = when (mode) {
             CloudMode.RESTORE -> " · 将用云端数据恢复本机"
             CloudMode.UPLOAD -> " · 将上传本机数据"
@@ -416,7 +447,7 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
             "云端已有这个学号的备份，本机也有课表/成绩。请选择本次以哪边为准：\n" +
                 "· 从云端恢复：用云端数据覆盖本机，并跳过本次抓取\n" +
                 "· 用本机覆盖云端：继续抓取课表/成绩，然后上传覆盖云端\n" +
-                "· 暂不上传：只抓取，不改动云端",
+                "· 暂不上传：只抓取，自动备份暂缓至重新确认或手动备份",
         )
         val choice = gate.await()
         cloudModeGate = null
@@ -586,7 +617,8 @@ class UnifiedSyncViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun stepBackup(): SyncStepResult {        token ?: return failed(SyncStep.BACKUP, "未登录云账号")
+    private suspend fun stepBackup(): SyncStepResult {
+        token ?: return failed(SyncStep.BACKUP, "未登录云账号")
         return try {
             settings.setCloudSyncEnabled(true)
             val result = withContext(Dispatchers.IO) { CloudSync.manualBackup(getApplication()) }

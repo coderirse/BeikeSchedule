@@ -110,6 +110,25 @@ class PetAiChatInteractionTest {
         compose.onNodeWithText("本次使用基础聊天", substring = true).assertIsDisplayed()
         assertTrue(store.state.value!!.memories.isEmpty())
     }
+    @Test fun newConversationClearsFailedReplyAndDraft() {
+        val previousId = store.state.value!!.conversation
+        show(PetAiClient(OkHttpClient.Builder().addInterceptor { chain ->
+            val partial = """data: {"choices":[{"delta":{"content":"旧会话的半截回复"}}]}"""
+            response(chain, "$partial\n\n", type = "text/event-stream")
+        }.build()))
+        compose.onNodeWithTag("pet-chat-input").performTextInput("留在旧会话的问题")
+        compose.onNodeWithText("发送").performTouchInput { click() }
+        compose.waitUntil(5000) { vm?.chat?.value?.error != null }
+        compose.onNodeWithText("旧会话的半截回复").assertIsDisplayed()
+        compose.onNodeWithTag("pet-chat-input").performTextInput("旧会话的草稿")
+        compose.onNodeWithContentDescription("新聊天").performTouchInput { click() }
+        compose.waitUntil(5000) { store.state.value?.conversation != previousId }
+        compose.onNodeWithText("旧会话的半截回复").assertDoesNotExist()
+        compose.onNodeWithText("旧会话的草稿").assertDoesNotExist()
+        compose.onNodeWithText("重试上一条").assertDoesNotExist()
+        assertEquals("留在旧会话的问题", store.state.value!!.messages.single().text)
+    }
+
     @Test fun openingLongConversationStartsAtLatestMessage() {
         val conversation = store.state.value!!.conversation
         runBlocking {

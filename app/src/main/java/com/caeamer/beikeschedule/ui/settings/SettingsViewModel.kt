@@ -79,6 +79,8 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsStore.CloudAccount())
     val cloudSyncEnabled: StateFlow<Boolean> = settings.cloudSyncEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val cloudAutoBackupPaused: StateFlow<Boolean> = settings.cloudAutoBackupPaused
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     val cloudLastBackupAt: StateFlow<Long> = settings.cloudLastBackupAt
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 

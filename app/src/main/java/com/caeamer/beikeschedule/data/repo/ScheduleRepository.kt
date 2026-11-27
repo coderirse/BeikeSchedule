@@ -30,7 +30,7 @@ class ScheduleRepository(private val context: Context) {
     val settings = SettingsStore(context)
 
     /** 云同步脏标记：所有用户数据变更点调用（CloudSync 内部判断是否真的需要上传）。 */
-    private fun markCloudDirty() = CloudSync.markDirty(context)
+    private suspend fun markCloudDirty() = CloudSync.markDirty(context)
 
     val courses: Flow<List<CourseEntity>> = courseDao.observeAll()
     val sectionTimes: Flow<List<SectionTimeEntity>> = sectionTimeDao.observeAll()

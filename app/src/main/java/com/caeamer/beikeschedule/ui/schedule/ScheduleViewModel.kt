@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -84,25 +85,23 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val selectedWeek = MutableStateFlow<Int?>(null)
 
-    /**
-     * 前台会话序号（镜像 [AppSession.epoch]）。
-     *
-     * 必须作为 uiState 的一个输入：`selectedWeek` 是 MutableStateFlow，**等值写入不发射**，
-     * 而"重新进入"时它本来就是 null（上次重进后没有手动选过周）——只写 null 不会让
-     * combine 重跑，`locateWeek(today)` 于是仍用上一次组合时的日期求值，
-     * 跨天/跨周重进会停在旧周（顶栏、日期行、网格全是旧的）。
-     * 会话序号变化必然带来一次重算，这才让"重进定位当前周"真正成立。
-     */
-    private val sessionEpoch = MutableStateFlow(AppSession.epoch.value)
+    private data class ScheduleDay(val sessionEpoch: Int, val date: LocalDate)
+
+    // 会话更新强制重新定位；前台日期变化则只推进今天，保留用户已选择的浏览周。
+    private val day = MutableStateFlow(ScheduleDay(AppSession.epoch.value, LocalDate.now()))
+
+    internal fun refreshToday(today: LocalDate = LocalDate.now()) {
+        day.update { it.copy(date = today) }
+    }
 
     val uiState: StateFlow<ScheduleUiState> = combine(
         repo.courses,
         repo.sectionTimes,
         repo.settings.semester,
         selectedWeek,
-        sessionEpoch,
-    ) { courses, sections, semester, week, _ ->
-        val location = WeekResolver.locateWeek(semester)
+        day,
+    ) { courses, sections, semester, week, (_, today) ->
+        val location = WeekResolver.locateWeek(semester, today)
         // 未选过时（首次启动 / 重新进入 App）按 WeekResolver.defaultWeek 落位，否则用用户的选择
         val resolved = week ?: WeekResolver.defaultWeek(location, semester.totalWeeks)
         ScheduleUiState(
@@ -114,7 +113,7 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
             selectedWeek = resolved.coerceIn(1, semester.totalWeeks.coerceAtLeast(1)),
             currentWeek = location.week,
             inHoliday = location.isHoliday,
-            todayHoliday = WeekResolver.daySchedule(semester, LocalDate.now()).holiday,
+            todayHoliday = WeekResolver.daySchedule(semester, today).holiday,
             nextWeekMonday = location.nextWeekMonday,
             beforeStart = location.beforeStart,
             afterEnd = location.afterEnd,
@@ -172,9 +171,7 @@ class ScheduleViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             AppSession.epoch.collect { epoch ->
                 selectedWeek.value = null
-                // 等值写入不发射（见 sessionEpoch 注释），这里显式推进会话序号，
-                // 保证 uiState 一定会重算一次"今天是第几周"
-                sessionEpoch.value = epoch
+                day.value = ScheduleDay(epoch, LocalDate.now())
             }
         }
         // 课程/节次/学期/提醒设置任一变化 → 全量重排上课提醒闹钟。

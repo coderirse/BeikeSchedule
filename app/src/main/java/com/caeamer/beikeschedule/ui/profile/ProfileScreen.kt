@@ -107,6 +107,7 @@ fun ProfileScreen(
     val appVersion by viewModel.appVersion.collectAsStateWithLifecycle()
     val cloudAccount by viewModel.cloudAccount.collectAsStateWithLifecycle()
     val cloudSyncEnabled by viewModel.cloudSyncEnabled.collectAsStateWithLifecycle()
+    val cloudAutoBackupPaused by viewModel.cloudAutoBackupPaused.collectAsStateWithLifecycle()
     val cloudLastBackupAt by viewModel.cloudLastBackupAt.collectAsStateWithLifecycle()
     val cloudBusy by viewModel.cloudBusy.collectAsStateWithLifecycle()
     // 自有更新源失败时的原因：失败会静默回退 GitHub，没有这行用户/排查都看不到真相
@@ -253,10 +254,10 @@ fun ProfileScreen(
                 SettingsItemRow(
                     icon = { Icon(Icons.Default.Cloud, null, Modifier.size(20.dp)) },
                     title = "云同步",
-                    value = if (cloudSyncEnabled) {
-                        "已登录 " + who + " · 课表/日程/成绩等数据自动备份到云端"
-                    } else {
-                        "已登录 " + who + " · 已关闭，开启后立即做一次全量备份"
+                    value = when {
+                        !cloudSyncEnabled -> "已登录 $who · 已关闭，开启后立即做一次全量备份"
+                        cloudAutoBackupPaused -> "已登录 $who · 自动备份已暂缓，重新同步或立即备份可恢复"
+                        else -> "已登录 $who · 课表/日程/成绩等数据自动备份到云端"
                     },
                     trailing = { Switch(checked = cloudSyncEnabled, onCheckedChange = null) },
                     onClick = { viewModel.setCloudSyncEnabled(!cloudSyncEnabled) },

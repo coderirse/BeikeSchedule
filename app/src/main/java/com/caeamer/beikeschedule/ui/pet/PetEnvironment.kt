@@ -75,6 +75,21 @@ internal object PetSpace {
         return (env.cards.map { it.rect } + protected(width, height, clearance, env)).none { overlap(rect, it) > 0.5f }
     }
     fun score(rect: Rect, env: PetEnvironment): Float = env.cards.sumOf { (overlap(rect, it.rect) * it.weight).toDouble() }.toFloat()
+    data class Entry(val origin: Offset, val landing: Offset)
+
+    /** 入场的起点随新落点同侧同高，经过的可见区域只是落点矩形的一部分。 */
+    fun entry(target: Offset, width: Float, height: Float, size: Float, clearance: Float, env: PetEnvironment): Entry? {
+        val preferLeft = target.x + size / 2 < width / 2
+        val maxY = (height - size).coerceAtLeast(0f)
+        val rows = (0..18).map { maxY * it / 18 }.sortedBy { abs(it - target.y) }
+        return listOf(preferLeft, !preferLeft).firstNotNullOfOrNull { left ->
+            val x = if (left) env.sectionWidth else width - size
+            val landing = rows.asSequence().map { Offset(x, it) }
+                .firstOrNull { free(it, width, height, size, clearance, env) }
+            landing?.let { Entry(Offset(if (left) env.sectionWidth - size else width, it.y), it) }
+        }
+    }
+
     fun destinations(width: Float, height: Float, size: Float, clearance: Float, env: PetEnvironment): List<PetStop> {
         val maxX = (width - size).coerceAtLeast(0f); val maxY = (height - size).coerceAtLeast(0f)
         val candidates = mutableListOf<PetStop>()

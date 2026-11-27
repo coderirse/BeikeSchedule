@@ -70,7 +70,7 @@ private val swallowSheetScroll = object : NestedScrollConnection {
 @Composable
 fun PetChatSheet(onDismiss: () -> Unit, onSettings: () -> Unit, vm: PetAiViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
-    val runtime by vm.chat.collectAsStateWithLifecycle()
+    val live by vm.chat.collectAsStateWithLifecycle()
     val storageError by vm.storageError.collectAsStateWithLifecycle()
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     val scope = rememberCoroutineScope()
@@ -80,10 +80,11 @@ fun PetChatSheet(onDismiss: () -> Unit, onSettings: () -> Unit, vm: PetAiViewMod
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer); vm.stop() }
     }
-    var input by rememberSaveable { mutableStateOf("") }
+    val conversation = state?.conversation
+    val runtime = live.takeIf { it.conversation == conversation } ?: AiChatRuntime()
+    var input by rememberSaveable(conversation) { mutableStateOf("") }
     var history by remember { mutableStateOf(false) }
     val list = rememberLazyListState()
-    val conversation = state?.conversation
     val messages = state?.messages?.filter { it.conversation == conversation }.orEmpty()
     // 用户主动翻旧消息后暂停跟随；松手回到底部或发送新消息时恢复
     var followBottom by remember(conversation) { mutableStateOf(true) }

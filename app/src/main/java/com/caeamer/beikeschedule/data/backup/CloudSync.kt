@@ -6,12 +6,16 @@ import com.caeamer.beikeschedule.data.remote.BackupSignature
 import com.caeamer.beikeschedule.data.remote.CloudApi
 import com.caeamer.beikeschedule.data.remote.CloudAuthException
 import java.io.File
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -26,7 +30,7 @@ import kotlinx.coroutines.withContext
  * 1. 改动点调 [markDirty]：云同步开启时落一个 DataStore 脏标记（进程被杀也不丢），
  *    已登录再排一个 8 秒去抖上传——连续编辑只会上传最后一次状态；
  * 2. App 启动时调 [uploadIfDirty]：补传上次进程死亡漏掉的上传；
- * 3. 「我的」页的"立即备份"/"从云端恢复"直接调 [backupNow] / [restore]。
+ * 3. 「我的」页的"立即备份"/"从云端恢复"直接调 [manualBackup] / [restore]。
  *
  * 冲突语义：整包快照，后写覆盖（谁备份谁生效），恢复前由 UI 弹窗明示"将覆盖本机数据"。
  *
@@ -43,132 +47,101 @@ object CloudSync {
 
     private var debounceJob: Job? = null
 
-    /** [withoutDirtyMarking] 期间为 true：块内的写入点不触发自动置脏。 */
-    @Volatile
-    private var suppressDirty = false
+    /** 同步和恢复内部可以显式备份，且它们自己的本机写入不触发自动上传。 */
+    private object LocalWrite : AbstractCoroutineContextElement(Key) {
+        object Key : CoroutineContext.Key<LocalWrite>
+    }
 
-    /** 数据变更点调用：云同步开启时落脏标记（已脏则不写）并排去抖上传；未开启直接返回。 */
-    fun markDirty(context: Context) {
-        if (suppressDirty) return
+    suspend fun markDirty(context: Context) {
+        if (currentCoroutineContext()[LocalWrite.Key] != null) return
         val app = context.applicationContext
         scope.launch {
             val settings = SettingsStore(app)
-            // 同步没开就不置脏也不解密 token：脏标记此时没有消费者（开启开关的每条路径
-            // 都会立刻强制全量备份），而 DataStore 写会让全部设置 Flow 重发射、
-            // AndroidKeyStore 解密是跨进程 IPC——写库是高频路径，不能白付这两笔钱。
-            if (!settings.cloudSyncEnabled.first()) return@launch
-            if (!settings.cloudDirty.first()) settings.markCloudDirty()
-            val account = settings.cloudAccount.first()
-            if (account.isLoggedIn) scheduleDebouncedUpload(app)
+            if (settings.cloudBackupState.first().automaticAllowed && settings.markCloudDirty()) {
+                scheduleDebouncedUpload(app)
+            }
         }
     }
 
-    /** App 启动时调用：把上次进程死亡漏掉的脏标记补传掉。 */
+    /** App 启动时补传已开启且未暂缓的待同步改动。 */
     fun uploadIfDirty(context: Context) {
         val app = context.applicationContext
-        scope.launch {
-            val settings = SettingsStore(app)
-            // 先查开关与脏标记再读账号（读账号 = 解密 token），没改动的启动不会白解密
-            if (settings.cloudSyncEnabled.first() && settings.cloudDirty.first() &&
-                settings.cloudAccount.first().isLoggedIn
-            ) {
-                runCatching { backupNow(app) }
-            }
-        }
+        scope.launch { runCatching { backupNow(app) } }
     }
 
     private fun scheduleDebouncedUpload(app: Context) {
         debounceJob?.cancel()
         debounceJob = scope.launch {
             delay(DEBOUNCE_MS)
+            // 只去抖排队中的任务。已经开始的上传用变更代数确认，不因用户再次编辑而丢失应答。
+            debounceJob = null
             runCatching { backupNow(app) }
         }
     }
 
-    /** 撤销在排的去抖上传（簿记线程上执行，与 [scheduleDebouncedUpload] 同一口径）。 */
-    private suspend fun cancelDebouncedUpload() {
+    /** 等正在执行的上传结束，再运行整段本机写入；写入期间不会有后台任务读取半成品。 */
+    suspend fun <T> withoutDirtyMarking(block: suspend () -> T): T = withUploadLock {
+        if (currentCoroutineContext()[LocalWrite.Key] != null) return@withUploadLock block()
         withContext(bookDispatcher) {
             debounceJob?.cancel()
             debounceJob = null
         }
+        withContext(LocalWrite) { block() }
     }
 
-    /**
-     * 写本机数据但不触发自动上传。
-     *
-     * 两类调用方：
-     * - **云恢复**：applyRestore 写十几个设置键，每个都会置脏，刚清掉的脏标记立刻又被打上，
-     *   白白触发一次整包上传；
-     * - **清除成绩缓存**：清掉的只是本机缓存（下次同步会重新抓回），若照常置脏，8 秒后就把
-     *   "成绩/考试/GPA 全空"整包传上去覆盖云端备份，之后从云端也恢复不回来。
-     *
-     * 进块前先撤掉已在排的去抖上传：那个上传可能是几秒前别的写入点排的，到点就会把块内
-     * 写到一半的状态一起带走。DataStore 里的脏标记**不动**——它代表"本机有未上传的改动"，
-     * 留给下次正常写入或 App 启动补传。
-     */
-    suspend fun <T> withoutDirtyMarking(block: suspend () -> T): T {
-        cancelDebouncedUpload()
-        suppressDirty = true
-        try {
-            return block()
-        } finally {
-            suppressDirty = false
-        }
-    }
+    private suspend fun <T> withUploadLock(block: suspend () -> T): T =
+        if (currentCoroutineContext()[LocalWrite.Key] != null) block() else uploadMutex.withLock { block() }
 
-    /**
-     * 自动整包备份（有脏标记才上传）。返回 null 表示本次没有上传（未登录 / 未开启 / 没有改动）。
-     */
-    suspend fun backupNow(context: Context): Result<Unit>? = uploadIfChanged(context, force = false)
+    private suspend fun backupNow(context: Context): Result<Unit>? = uploadIfChanged(context, force = false)
 
-    /** 手动"立即备份"：无论脏标记状态都构建并上传一次。 */
+    /** 显式备份可以上传暂缓的数据，成功后恢复按开关自动备份。 */
     suspend fun manualBackup(context: Context): Result<Unit> =
         uploadIfChanged(context, force = true) ?: Result.failure(IllegalStateException("未登录云账号"))
 
-    /**
-     * 构建快照 → 上传 → 清脏标记。
-     *
-     * **撕裂防护**：快照构建需要上百毫秒，期间若发生并发写入（成绩抓取落库、用户编辑日程），
-     * 本轮快照就不含最新改动。因此上传成功后复查脏标记：仍为脏说明构建期间有新写入，
-     * 重建再传（最多 3 轮；轮次耗尽仍脏则保留脏标记，交给下一个去抖周期补传，绝不
-     * 把"没包含最新改动"的状态标成已同步）。
-     */
-    private suspend fun uploadIfChanged(context: Context, force: Boolean): Result<Unit>? =
-        uploadMutex.withLock {
-            val app = context.applicationContext
-            val settings = SettingsStore(app)
-            val account = settings.cloudAccount.first()
-            if (!account.isLoggedIn) return@withLock null
-            // 手动备份绕过脏标记（用户要求刚才的改动立刻上云）；自动上传必须脏
-            if (!settings.cloudDirty.first() && !force) return@withLock null
+    internal suspend fun uploadIfChanged(
+        context: Context,
+        force: Boolean,
+        putBackup: suspend (String, String, Int) -> Long = CloudApi::putBackup,
+    ): Result<Unit>? = withUploadLock {
+        val app = context.applicationContext
+        val settings = SettingsStore(app)
+        val initial = settings.cloudBackupState.first()
+        if (!force && (!initial.automaticAllowed || !initial.dirty)) return@withUploadLock null
+        val account = settings.cloudAccount.first()
+        if (!account.isLoggedIn) return@withUploadLock null
 
-            var attempt = 0
-            while (true) {
-                attempt++
-                try {
-                    val snapshot = CloudSnapshotCodec.build(app)
-                    val encoded = CloudSnapshot.encode(snapshot)
-                    val revision = CloudApi.putBackup(account.token, encoded, appVersionCode(app))
-                    val stillDirty = settings.cloudDirty.first()
-                    if (!stillDirty || attempt >= MAX_REBUILD_ROUNDS) {
-                        // 轮次耗尽仍脏：不 clear（最新改动留给下个去抖周期），本次内容已上云
-                        if (!stillDirty) settings.clearCloudDirty()
-                        settings.setCloudLastBackupAt(revision)
-                        return@withLock Result.success(Unit)
-                    }
-                    // stillDirty：构建期间有新写入，重建再传
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // token 失效：清本地登录态，自动同步停下，避免静默反复失败
-                    if (e is CloudAuthException) {
-                        runCatching { settings.clearCloudAccount() }
-                    }
-                    return@withLock Result.failure(e)
+        var uploaded = false
+        repeat(MAX_REBUILD_ROUNDS) {
+            try {
+                val pending = settings.cloudBackupState.first()
+                val explicitlyRequested = force && !uploaded
+                if (pending.accountId != account.xh || (!explicitlyRequested && (!pending.automaticAllowed || !pending.dirty))) {
+                    return@withUploadLock if (uploaded) Result.success(Unit) else null
                 }
+
+                val snapshot = CloudSnapshotCodec.build(app)
+                val encoded = CloudSnapshot.encode(snapshot)
+                val latest = settings.cloudBackupState.first()
+                currentCoroutineContext().ensureActive()
+                if (latest.accountId != account.xh || (!explicitlyRequested && !latest.automaticAllowed)) {
+                    return@withUploadLock if (uploaded) Result.success(Unit) else null
+                }
+
+                val revision = putBackup(account.token, encoded, appVersionCode(app))
+                uploaded = true
+                val confirmed = settings.confirmCloudBackup(account.xh, pending.generation, revision, explicitlyRequested)
+                if (!confirmed.dirty || !confirmed.automaticAllowed) return@withUploadLock Result.success(Unit)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (e is CloudAuthException && settings.cloudBackupState.first().accountId == account.xh) {
+                    runCatching { settings.clearCloudAccount() }
+                }
+                return@withUploadLock Result.failure(e)
             }
-            error("unreachable") // while(true) 无正常出口，所有路径都在循环内 return
         }
+        Result.success(Unit)
+    }
 
     /**
      * 从云端整包恢复。成功返回快照，失败抛异常（未备份/网络/格式）由 UI 转文案。
@@ -180,7 +153,7 @@ object CloudSync {
      *
      * 恢复全程走 [withoutDirtyMarking]：写十几个设置键不该触发上传，恢复完成再清一次脏标记。
      */
-    suspend fun restore(context: Context): CloudSnapshot = uploadMutex.withLock {
+    suspend fun restore(context: Context): CloudSnapshot = withoutDirtyMarking {
         val app = context.applicationContext
         val settings = SettingsStore(app)
         val account = settings.cloudAccount.first()
@@ -201,11 +174,9 @@ object CloudSync {
             }
             val snapshot = CloudSnapshot.decode(snapshotText)
             saveRollbackPoint(app)
-            withoutDirtyMarking {
-                CloudSnapshotCodec.applyRestore(app, snapshot)
-                settings.clearCloudDirty()
-                settings.setCloudLastBackupAt(envelope.updatedAt)
-            }
+            settings.pauseCloudAutoBackup()
+            CloudSnapshotCodec.applyRestore(app, snapshot)
+            settings.confirmCloudBackup(account.xh, generation = null, revision = envelope.updatedAt, resumeAutomatic = true)
             snapshot
         } catch (e: CancellationException) {
             throw e

@@ -274,21 +274,18 @@ private fun PetScene(atlas: ImageBitmap, poses: PetPoseAtlas?, appearance: PetAp
                 bubble = null
                 val stop = withContext(Dispatchers.Default) { PetSpace.choose(width, height, petSize, clearance, environment) }
                 val target = stop.position
-                fun landing(left: Boolean): Offset? {
-                    val x = if (left) environment.sectionWidth else maxX
-                    return (0..18).map { maxY * it / 18 }.sortedBy { abs(it - target.y) }
-                        .firstNotNullOfOrNull { y -> Offset(x, y).takeIf { PetSpace.free(it, width, height, petSize, clearance, environment) } }
-                }
-                var left = target.x + petSize / 2 < width / 2
-                var land = landing(left)
-                if (land == null) { left = !left; land = landing(left) }
-                if (land == null) {
-                    move(target); posture = stop.posture; placed = true; manuallyPlaced = false
-                    animOffset = null; animAlpha = 1f; presence = PetPresence.VISIBLE
+                val entry = PetSpace.entry(target, width, height, petSize, clearance, environment)
+                if (entry == null) {
+                    if (PetSpace.free(target, width, height, petSize, clearance, environment, stop.posture)) {
+                        move(target); posture = stop.posture; placed = true; manuallyPlaced = false
+                        animOffset = null; animAlpha = 1f; presence = PetPresence.VISIBLE
+                    } else {
+                        animAlpha = 0f; presence = PetPresence.AWAY
+                    }
+                    walking = false
                     return@LaunchedEffect
                 }
-                val origin = if (left) Offset(environment.sectionWidth - petSize, land.y) else Offset(width, land.y)
-                val entryFrom = animOffset ?: origin
+                val (entryFrom, land) = entry
                 animOffset = entryFrom; animAlpha = 1f
                 facingLeft = land.x < entryFrom.x
                 walking = true
