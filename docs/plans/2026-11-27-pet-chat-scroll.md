@@ -34,8 +34,18 @@
 | 设备回归 9 类（Pixel_10_Pro AVD） | **41/41 通过**（39 基线 + 2 新增），0 失败 |
 | `minifyReleaseWithR8` | 通过（BUILD SUCCESSFUL） |
 
-## 5. 边界
+## 5. 发布交付（2026-11-27，用户授权）
+
+- 快进合入 main 并推送；发布提交 `f949f79`（v2.1.3 / versionCode 70），tag `v2.1.3`。
+- 发布重跑：490 项 JVM、15 项 JS、Lint 0 errors / 46 warnings、正式签名 assembleRelease 通过；aapt2 核对包名/版本，apksigner 证书延续（SHA-256 `53acb30e…`）。
+- APK 8,336,361 字节，SHA-256 `d40cc360be982dc8b9d92b5526aa0490d949cc2427c5aa5f1af618f884a114b7`；更新声明 530 字节，App 内公钥验签通过。
+- GitHub Release：https://github.com/coderirse/BeikeSchedule/releases/tag/v2.1.3 （同一份 APK）。
+- 服务器：APK 与声明经 Workbench 上传，服务器端 SHA-256 与本地一致；旧声明备份 `/opt/beike/bs-app-version.v2.1.2.bak.json`；beike 重启后 active、/health db:true。
+- 公网：`/api/bs/app/latest`（okhttp UA）与本地声明逐字段一致；公网 APK 完整下载大小与 SHA-256 一致。
+- 未验证：抖动修复的真机手感（快速连翻旧消息等），由用户手机实测确认。
+
+## 6. 边界
 
 - 未改消息存储、AI 请求、弹层高度逻辑与半屏/全屏切换；未新增依赖或设置。
 - 抖动修复针对"列表余速拖弹层"这条已验证过的回路；真机手感（尤其快速连续翻旧消息）仍需用户手机实测。
-- 本批仅本地提交到 `codex/pet-chat-scroll`，不推送/发版，等用户指令。
+- 本批已随 v2.1.3 发布。
