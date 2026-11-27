@@ -110,4 +110,34 @@ class PetAiChatInteractionTest {
         compose.onNodeWithText("本次使用基础聊天", substring = true).assertIsDisplayed()
         assertTrue(store.state.value!!.memories.isEmpty())
     }
+    @Test fun openingLongConversationStartsAtLatestMessage() {
+        val conversation = store.state.value!!.conversation
+        runBlocking {
+            store.update { it.copy(messages = (1..30).map { i ->
+                AiMessage(conversation = conversation, role = if (i % 2 == 1) "user" else "assistant",
+                    text = "历史第${i}条：" + "这是一段比较长的历史消息内容。".repeat(8))
+            }) }
+        }
+        show(PetAiClient())
+        // 打开即应停在最新一条；旧实现停在第 0 条，最新一条根本不会被组合显示
+        compose.waitUntil(5000) { compose.onAllNodesWithText("历史第30条", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("历史第30条", substring = true).assertIsDisplayed()
+    }
+    @Test fun streamedReplyTailStaysVisibleAtBottom() {
+        val tail = "结尾标记XYZ"
+        val longText = "开头：" + "这是一段很长的回复内容。".repeat(120) + tail
+        show(PetAiClient(OkHttpClient.Builder().addInterceptor { chain ->
+            response(chain, "data: {\"choices\":[{\"delta\":{\"content\":\"$longText\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", type = "text/event-stream")
+        }.build()))
+        compose.onNodeWithTag("pet-chat-input").performTextInput("讲个长的")
+        compose.onNodeWithText("发送").performClick()
+        compose.waitUntil(15000) { store.state.value!!.messages.any { it.role == "assistant" } }
+        // 长回复高于视口时，贴底应露出末尾而不是把顶部锚在视口上沿
+        compose.waitUntil(5000) {
+            val nodes = compose.onAllNodesWithText(tail, substring = true).fetchSemanticsNodes()
+            val viewport = compose.onAllNodesWithTag("pet-chat-messages").fetchSemanticsNodes()
+            nodes.isNotEmpty() && viewport.isNotEmpty() &&
+                nodes[0].boundsInRoot.bottom <= viewport[0].boundsInRoot.bottom + 1f
+        }
+    }
 }
